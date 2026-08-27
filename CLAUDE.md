@@ -90,3 +90,11 @@ runtime routing audit. This section covers what the tool calls when it runs.
 - If a future path needs more judgment than identification (grading, condition
   assessment, dispute handling), give it its own constant rather than raising
   `DEFAULT_MODEL`.
+
+### Design canvas
+
+- Marketplace pass on `webapp/templates/market.html`, plus the buy confirmation
+  the Design block requires:
+  https://claude.ai/code/artifact/c50363e5-6ee1-437d-ad67-49f2b96e5ff9
+  Adds controls (search, filters, sort), price provenance on every card, and
+  surfaces flagged pricing instead of hiding it. Structure and nav unchanged.
