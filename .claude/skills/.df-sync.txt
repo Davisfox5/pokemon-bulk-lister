@@ -1,0 +1,16 @@
+# Written by test-9 bash scripts/sync-skills.sh. Do not edit by hand.
+# Edit the skill in test-9 under shared/, then re-run the sync.
+code-review
+df-design
+df-model-routing
+df-ship-check
+df-writing
+domain-modeling
+grill-with-docs
+grilling
+handoff
+implement
+setup-matt-pocock-skills
+tdd
+to-spec
+to-tickets
