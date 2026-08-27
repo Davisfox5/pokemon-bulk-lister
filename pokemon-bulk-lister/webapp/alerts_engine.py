@@ -1,10 +1,14 @@
-"""Alert evaluation — runs after every scheduler refresh cycle.
+"""Alert evaluation: runs after every scheduler refresh cycle.
+
+Alert text follows the "marketplace listing" row in the df-writing skill
+(.claude/skills/df-writing): state the number and what it means, no hype, no
+advice the data does not support.
 
 Rule kinds (alert_rules.kind):
   price_above   fire when latest price >= threshold ($)
   price_below   fire when latest price <= threshold ($)
   pct_change    fire when |Δ%| over window_days >= threshold (%)
-  sell_signal   fire when Δ% over window_days >= +threshold (%) — the
+  sell_signal   fire when delta% over window_days >= +threshold (%), the
                 "you should consider selling" nudge every account gets.
 
 catalog_card_id NULL means the rule applies to every card in the user's
@@ -63,9 +67,9 @@ def _evaluate_rule(s: Session, rule: AlertRule, now) -> list[Alert]:
         msg = None
 
         if rule.kind == "price_above" and price >= rule.threshold:
-            msg = f"{label} is now ${price:.2f} (≥ your ${rule.threshold:.2f} target)."
+            msg = f"{label} is now ${price:.2f}, at or above your ${rule.threshold:.2f} target."
         elif rule.kind == "price_below" and price <= rule.threshold:
-            msg = f"{label} dropped to ${price:.2f} (≤ your ${rule.threshold:.2f} floor)."
+            msg = f"{label} dropped to ${price:.2f}, at or below your ${rule.threshold:.2f} floor."
         elif rule.kind in ("pct_change", "sell_signal"):
             base = price_at(s, ccid, now - timedelta(days=rule.window_days))
             if not base or base <= 0:
@@ -74,11 +78,10 @@ def _evaluate_rule(s: Session, rule: AlertRule, now) -> list[Alert]:
             if rule.kind == "pct_change" and abs(pct) >= rule.threshold:
                 direction = "up" if pct > 0 else "down"
                 msg = (f"{label} is {direction} {abs(pct):.0f}% over the last "
-                       f"{rule.window_days}d (${base:.2f} → ${price:.2f}).")
+                       f"{rule.window_days}d (${base:.2f} to ${price:.2f}).")
             elif rule.kind == "sell_signal" and pct >= rule.threshold:
                 msg = (f"Sell signal: {label} is up {pct:.0f}% over the last "
-                       f"{rule.window_days}d (${base:.2f} → ${price:.2f}) — "
-                       f"consider listing it while the market is hot.")
+                       f"{rule.window_days}d (${base:.2f} to ${price:.2f}).")
 
         if msg:
             alerts.append(Alert(

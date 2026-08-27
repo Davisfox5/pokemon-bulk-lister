@@ -38,9 +38,25 @@ Produce text that reads like Davis wrote it in a hurry and meant every word. Two
 | R3CRUIT3R coach-to-recruit templates | A coach talking to a 17-year-old and their parents. Warm, specific to the player, respectful of their time. | Mass-mail energy. Hype. Pressure. |
 | R3CRUIT3R in-app copy | Coach shorthand. Knows the recruiting calendar. | Explaining what a transfer portal is. |
 | Fox Home Services quotes and messages | A local guy who shows up on time. Price, scope, date, done. | Corporate. Upsell language. |
+| Pokemon Apocrypha NPC text | A Gen 4 in-game NPC. Present tense, plain diction, one thought per message box. Period-correct register: nothing an NPC in HGSS would not say. | Modern idiom ("no worries", "for real", "vibe", "okay so"). Internet cadence. Contractions the era avoided. Meta-humor. Anything past a message box without a break. |
+| Marketplace listing (pokemon-bulk-lister) | A seller who states the card and its condition and stops. Set, number, condition, notable flaws. Searchable words first. | Hype ("MINT!!", "RARE", "MUST SEE"). Emoji. Claims about grade or value the data does not support. Filler to pad a description. |
 | Davison Fox brand (LinkedIn, X, site) | A builder sharing what he learned. Concrete, no throat-clearing. | Thought-leader cadence. Hooks. |
 | Davis Fox coaching identity | Soccer coach, session-focused. | Business or software talk. |
 | Cover letters and applications | Strengths first, concrete results, confident. | Hedging. Explaining gaps. |
+
+### Row notes
+
+**Pokemon Apocrypha NPC text.** The hard limit is the message box, not a word
+count: a Gen 4 box fits roughly two short lines, and text that overruns is
+silently cut by the engine. Write each box as one complete thought and break
+between boxes on a sentence, never mid-clause. Check any world claim in the line
+against `DESIGN.md` first (`apoc-lore-check`); this row governs voice only.
+
+**Marketplace listing.** Titles are search surfaces before they are prose: put
+the card name, set, and number where a buyer's query will hit them. Condition
+language is a factual claim on a live marketplace, so it comes from the data,
+never from the model's impression of a photo. A listing that cannot support a
+condition claim omits it rather than softening it.
 
 ## Review mode
 

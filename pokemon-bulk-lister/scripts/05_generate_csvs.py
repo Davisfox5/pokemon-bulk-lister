@@ -1,12 +1,12 @@
-"""Step 5 — generate marketplace upload CSVs from cards_priced.json.
+"""Step 5: generate marketplace upload CSVs from cards_priced.json.
 
 Outputs:
-    output/csvs/tcgplayer_bulk.csv     — TCGPlayer staged-inventory bulk format
-    output/csvs/whatnot_seller_hub.csv — Whatnot US Seller Hub inventory import
-    output/csvs/ebay_bulk.csv          — eBay Seller Hub bulk listing CSV
+    output/csvs/tcgplayer_bulk.csv     TCGPlayer staged-inventory bulk format
+    output/csvs/whatnot_seller_hub.csv Whatnot US Seller Hub inventory import
+    output/csvs/ebay_bulk.csv          eBay Seller Hub bulk listing CSV
 
 Column orders match each platform's published template at time of writing
-(2026-05). Verify against the latest template before uploading — these are
+(2026-05). Verify against the latest template before uploading, these are
 documented as moving targets.
 """
 from __future__ import annotations
@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+
+# Listing text follows the "marketplace listing" row in the df-writing skill
+# (.claude/skills/df-writing): searchable words first, condition from the data,
+# no hype, no emoji, no em-dashes. These strings go on a live marketplace, so a
+# condition or rarity claim here is a factual claim about the item.
 
 
 def _condition_full(short: str) -> str:
@@ -159,8 +165,8 @@ def _lot_title(cards: list[dict], bundle: dict) -> str:
     n = len(cards)
     sets = sorted({c.get("set_name") for c in cards if c.get("set_name")})
     if len(sets) == 1:
-        return f"Pokemon TCG Lot — {n} cards from {sets[0]}"
-    return f"Pokemon TCG Lot — {n} cards (mixed sets)"
+        return f"Pokemon TCG Lot: {n} cards from {sets[0]}"
+    return f"Pokemon TCG Lot: {n} cards (mixed sets)"
 
 
 def _lot_description(cards: list[dict], bundle: dict) -> str:
@@ -169,9 +175,12 @@ def _lot_description(cards: list[dict], bundle: dict) -> str:
     holo_count = sum(1 for c in cards if c.get("is_holo"))
     rarities = sorted({c.get("rarity") for c in cards if c.get("rarity")})
 
-    lines = [f"Bulk lot of {n} Pokémon TCG cards — priced to move."]
+    lines = [f"Bulk lot of {n} Pokemon TCG cards."]
     if sets:
-        lines.append("Sets: " + ", ".join(sets[:8]) + ("…" if len(sets) > 8 else ""))
+        lines.append(
+            "Sets: " + ", ".join(sets[:8])
+            + (f", and {len(sets) - 8} more" if len(sets) > 8 else "")
+        )
     if rarities:
         lines.append("Rarities included: " + ", ".join(rarities))
     if holo_count:
@@ -292,7 +301,7 @@ def tcgplayer_lot_row(cards: list[dict], bundle: dict) -> dict:
         "Condition": _lot_condition(cards),
         "TCG Marketplace Price": f"{price:.2f}",
         "Add to Quantity": int(bundle.get("quantity") or 1),
-        "Notes": "Lot — TCGplayer Id required; this row needs manual entry before upload.",
+        "Notes": "Lot: TCGplayer Id required; this row needs manual entry before upload.",
     }
 
 
@@ -306,12 +315,12 @@ def _description(c: dict) -> str:
     if c.get("card_number"):
         bits.append(f"(#{c['card_number']})")
     if c.get("rarity"):
-        bits.append(f"— {c['rarity']}")
+        bits.append(str(c["rarity"]))
     if c.get("is_holo"):
         bits.append("Holo")
     bits.append(f"in {_condition_full(c.get('condition_guess', 'NM'))} condition.")
     if c.get("is_bulk"):
-        bits.append("English. Bulk lot — ships boxed, no sleeves.")
+        bits.append("English. Bulk lot, ships boxed, no sleeves.")
     else:
         bits.append("English. Ships in a hard case.")
     return " ".join(bits)
