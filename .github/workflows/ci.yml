@@ -21,10 +21,12 @@ jobs:
 
       - name: Install test dependencies
         # Lightweight slice of requirements.txt — enough to import the modules
-        # under test. cv2/cloudinary/playwright are deliberately omitted: the
+        # under test. cloudinary/playwright are deliberately omitted: the
         # publish logic imports them lazily (or we stub Playwright in conftest),
-        # so CI stays fast and doesn't pull a browser.
-        run: pip install requests "Flask>=3.0" python-dotenv "pandas>=2.2" pytest
+        # so CI stays fast and doesn't pull a browser. cv2 became a hard test
+        # dependency when tests/test_art_match.py landed (top-level import), so
+        # we install the headless build — same API, no GUI libs on the runner.
+        run: pip install requests "Flask>=3.0" python-dotenv "pandas>=2.2" pytest opencv-python-headless
 
       - name: Byte-compile all sources
         run: python -m compileall -q lib webapp scripts
