@@ -279,6 +279,92 @@ class Listing(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class LibraryEvent(Base):
+    """Append-only ledger of what entered and left a user's library.
+
+    Inventory rows only say what a user holds now. This table is the record of
+    every card they added, bought or sold, and it outlives the inventory row
+    (a sold card moves to the buyer; the seller keeps the event).
+
+    kind:    'added' (scanned or entered, no purchase) | 'purchased' | 'sold'
+    channel: where it happened: 'scan', 'manual', 'market' (this platform),
+             'ebay', 'tcgplayer', 'whatnot', 'in_person', 'other'
+    unit_price: per-card price paid or received. unit_cost: per-card cost
+    basis at the time of a sale, so realized gain survives later edits.
+    """
+
+    __tablename__ = "library_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    catalog_card_id: Mapped[int] = mapped_column(
+        ForeignKey("catalog_cards.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), default="manual")
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price: Mapped[Optional[float]] = mapped_column(Float)
+    unit_cost: Mapped[Optional[float]] = mapped_column(Float)
+    fees: Mapped[Optional[float]] = mapped_column(Float)
+    condition: Mapped[Optional[str]] = mapped_column(String(20))
+    order_id: Mapped[Optional[int]] = mapped_column(ForeignKey("orders.id", ondelete="SET NULL"))
+    image_url: Mapped[Optional[str]] = mapped_column(Text)
+    crop_path: Mapped[Optional[str]] = mapped_column(Text)
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    catalog_card: Mapped[CatalogCard] = relationship()
+
+
+Index("idx_library_events_user_kind", LibraryEvent.user_id, LibraryEvent.kind)
+
+EVENT_KINDS = ("added", "purchased", "sold")
+EVENT_CHANNELS = (
+    "scan", "manual", "market", "ebay", "tcgplayer", "whatnot", "in_person", "other",
+)
+
+
+class Deck(Base):
+    """A saved decklist. source: 'paste' (user import) | 'popular' (copied
+    from a tournament list; source_meta holds the JSON provenance)."""
+
+    __tablename__ = "decks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), default="paste")
+    source_meta: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    cards: Mapped[list["DeckCard"]] = relationship(
+        back_populates="deck", cascade="all, delete-orphan", order_by="DeckCard.position"
+    )
+
+
+class DeckCard(Base):
+    """One line of a decklist. set_code is the Pokemon TCG Live code (TWM),
+    not the pokemontcg.io id; lib.decks.SetCodes translates."""
+
+    __tablename__ = "deck_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    deck_id: Mapped[int] = mapped_column(ForeignKey("decks.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    section: Mapped[str] = mapped_column(String(20), default="pokemon")
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    set_code: Mapped[Optional[str]] = mapped_column(String(40))
+    card_number: Mapped[Optional[str]] = mapped_column(String(40))
+
+    deck: Mapped[Deck] = relationship(back_populates="cards")
+
+
+Index("idx_decks_user", Deck.user_id)
+Index("idx_deck_cards_deck", DeckCard.deck_id)
+
+
 # ----------------------------------------------------------------------
 # Engine / session
 # ----------------------------------------------------------------------
@@ -287,15 +373,20 @@ _engine = None
 _SessionLocal = None
 
 
-def init_models() -> None:
+def init_models(url: Optional[str] = None) -> None:
+    """Create the engine and any missing tables. Passing `url` rebinds to a
+    different database (the test suite points this at a temp file)."""
     global _engine, _SessionLocal
-    if _engine is not None:
+    if _engine is not None and url is None:
         return
+    if _engine is not None:
+        _engine.dispose()
+    db_url = url or DATABASE_URL
     kwargs: dict[str, Any] = {"future": True}
-    if DATABASE_URL.startswith("sqlite"):
+    if db_url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
-    _engine = create_engine(DATABASE_URL, **kwargs)
-    if DATABASE_URL.startswith("sqlite"):
+    _engine = create_engine(db_url, **kwargs)
+    if db_url.startswith("sqlite"):
         # The legacy bench (raw sqlite3) and the scheduler write concurrently;
         # without WAL + busy_timeout, cross-connection writes raise
         # "database is locked".
@@ -401,3 +492,42 @@ def price_at(session: Session, catalog_card_id: int, at: datetime) -> Optional[f
         .first()
     )
     return snap.final_price if snap else None
+
+
+def log_event(
+    session: Session,
+    user_id: int,
+    catalog_card_id: int,
+    kind: str,
+    *,
+    channel: str = "manual",
+    quantity: int = 1,
+    unit_price: Optional[float] = None,
+    unit_cost: Optional[float] = None,
+    fees: Optional[float] = None,
+    condition: Optional[str] = None,
+    order_id: Optional[int] = None,
+    image_url: Optional[str] = None,
+    crop_path: Optional[str] = None,
+    note: Optional[str] = None,
+    occurred_at: Optional[datetime] = None,
+) -> LibraryEvent:
+    """Append one row to the library ledger. Caller commits."""
+    ev = LibraryEvent(
+        user_id=user_id,
+        catalog_card_id=catalog_card_id,
+        kind=kind,
+        channel=channel,
+        quantity=max(1, int(quantity)),
+        unit_price=unit_price,
+        unit_cost=unit_cost,
+        fees=fees,
+        condition=condition,
+        order_id=order_id,
+        image_url=image_url,
+        crop_path=crop_path,
+        note=(note or None),
+        occurred_at=occurred_at or utcnow(),
+    )
+    session.add(ev)
+    return ev

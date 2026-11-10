@@ -52,7 +52,9 @@ def summary():
     uid = current_user_id()
     s = get_session()
     try:
-        items = s.query(InventoryItem).filter_by(user_id=uid).join(CatalogCard).all()
+        items = (s.query(InventoryItem)
+                 .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0)
+                 .join(CatalogCard).all())
         rows = [_item_dict(s, i) for i in items]
         total_value = round(sum(r["value"] or 0 for r in rows), 2)
         total_cost = round(
@@ -135,7 +137,8 @@ def refresh_prices():
     s = get_session()
     try:
         ccids = [row[0] for row in s.query(InventoryItem.catalog_card_id)
-                 .filter_by(user_id=uid).distinct().all()]
+                 .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0)
+                 .distinct().all()]
     finally:
         s.close()
     if not ccids:

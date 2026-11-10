@@ -22,6 +22,7 @@ import sys
 from flask import Blueprint, abort, jsonify, render_template, request
 
 from webapp.auth import current_user_id, login_required
+from webapp.catalog import price_provenance
 from webapp.models import (
     CatalogCard,
     InventoryItem,
@@ -29,6 +30,7 @@ from webapp.models import (
     Order,
     User,
     get_session,
+    log_event,
     utcnow,
 )
 
@@ -72,16 +74,36 @@ def _stripe():
 # Selling
 # ----------------------------------------------------------------------
 
+def _parse_price(value) -> float | None:
+    """A positive dollar amount, or None when the value is not one."""
+    try:
+        price = round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def _create_listing(s, item: InventoryItem, price: float) -> MarketListing:
+    listing = MarketListing(
+        seller_id=item.user_id,
+        inventory_item_id=item.id,
+        catalog_card_id=item.catalog_card_id,
+        price=price,
+    )
+    s.add(listing)
+    return listing
+
+
 @market_bp.route("/api/inventory/<int:item_id>/list-for-sale", methods=["POST"])
 @login_required
 def list_for_sale(item_id: int):
-    """One-click sell. Body: {"price": float?} — defaults to current market price."""
+    """One-click sell. Body: {"price": float?}, defaults to current market price."""
     body = request.get_json(silent=True) or {}
     uid = current_user_id()
     s = get_session()
     try:
         item = s.query(InventoryItem).filter_by(id=item_id, user_id=uid).one_or_none()
-        if item is None:
+        if item is None or item.quantity <= 0:
             abort(404)
         existing = s.query(MarketListing).filter_by(
             inventory_item_id=item.id, status="active"
@@ -89,23 +111,100 @@ def list_for_sale(item_id: int):
         if existing:
             return jsonify({"error": "already listed", "listing_id": existing.id}), 409
 
-        price = body.get("price") or item.catalog_card.final_price
-        if not price or float(price) <= 0:
-            return jsonify({"error": "no market price known — pass a price explicitly"}), 400
+        if body.get("price") in (None, ""):
+            price = _parse_price(item.catalog_card.final_price)
+            if price is None:
+                return jsonify({"error": "no market price known for this card, enter a price"}), 400
+        else:
+            price = _parse_price(body.get("price"))
+            if price is None:
+                return jsonify({"error": "price must be a number greater than 0"}), 400
 
-        listing = MarketListing(
-            seller_id=uid,
-            inventory_item_id=item.id,
-            catalog_card_id=item.catalog_card_id,
-            price=round(float(price), 2),
-        )
-        s.add(listing)
+        listing = _create_listing(s, item, price)
         s.commit()
         out = {"listing_id": listing.id, "price": listing.price,
                "fee_on_sale": _fee(listing.price), "fee_pct": PLATFORM_FEE_PCT}
     finally:
         s.close()
     return jsonify(out)
+
+
+@market_bp.route("/api/inventory/list-for-sale", methods=["POST"])
+@login_required
+def bulk_list_for_sale():
+    """List many cards at their current market price in one go.
+
+    Body: {"item_ids": [...], "include_flagged": bool?, "dry_run": bool?}
+
+    Cards with no price, cards already listed, and (unless include_flagged)
+    cards whose price is flagged for review are skipped and counted. dry_run
+    returns the same counts without listing anything, so the UI can say
+    exactly what is about to happen before the user confirms.
+    """
+    body = request.get_json(silent=True) or {}
+    ids = body.get("item_ids")
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"error": "item_ids (list) required"}), 400
+    include_flagged = bool(body.get("include_flagged"))
+    dry_run = bool(body.get("dry_run"))
+    uid = current_user_id()
+    s = get_session()
+    try:
+        items = (s.query(InventoryItem)
+                 .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0,
+                         InventoryItem.id.in_([int(i) for i in ids]))
+                 .all())
+        listed_ids = {row[0] for row in s.query(MarketListing.inventory_item_id)
+                      .filter_by(seller_id=uid, status="active").all()}
+        out = {"to_list": 0, "total": 0.0, "skipped_no_price": 0,
+               "skipped_already_listed": 0, "skipped_flagged": 0}
+        for item in items:
+            cc = item.catalog_card
+            price = _parse_price(cc.final_price)
+            if item.id in listed_ids:
+                out["skipped_already_listed"] += 1
+            elif price is None:
+                out["skipped_no_price"] += 1
+            elif price_provenance(cc)["flagged"] and not include_flagged:
+                out["skipped_flagged"] += 1
+            else:
+                out["to_list"] += 1
+                out["total"] += price
+                if not dry_run:
+                    _create_listing(s, item, price)
+        if not dry_run:
+            s.commit()
+        out["total"] = round(out["total"], 2)
+        out["fee_on_sale"] = _fee(out["total"])
+        out["fee_pct"] = PLATFORM_FEE_PCT
+        out["dry_run"] = dry_run
+        out["listed"] = 0 if dry_run else out["to_list"]
+    finally:
+        s.close()
+    return jsonify(out)
+
+
+@market_bp.route("/api/market/listings/<int:listing_id>", methods=["PATCH"])
+@login_required
+def reprice_listing(listing_id: int):
+    """Body: {"price": float}. Change the asking price of your active listing."""
+    price = _parse_price((request.get_json(silent=True) or {}).get("price"))
+    if price is None:
+        return jsonify({"error": "price must be a number greater than 0"}), 400
+    s = get_session()
+    try:
+        listing = s.query(MarketListing).filter_by(
+            id=listing_id, seller_id=current_user_id(), status="active"
+        ).one_or_none()
+        if listing is None:
+            abort(404)
+        if s.query(Order).filter_by(listing_id=listing.id, status="pending_payment").count():
+            return jsonify({"error": "a buyer has a pending order at the current price"}), 409
+        listing.price = price
+        s.commit()
+    finally:
+        s.close()
+    return jsonify({"listing_id": listing_id, "price": price, "fee_on_sale": _fee(price)})
 
 
 @market_bp.route("/api/market/listings/<int:listing_id>/cancel", methods=["POST"])
@@ -153,6 +252,8 @@ def browse():
             .order_by(MarketListing.created_at.desc())
             .all()
         )
+        pending_ids = {row[0] for row in s.query(Order.listing_id)
+                       .filter_by(status="pending_payment").all()}
         payload = []
         for listing, cc, item, seller in rows:
             market = cc.final_price
@@ -162,8 +263,10 @@ def browse():
             )
             payload.append({
                 "listing_id": listing.id,
+                "catalog_card_id": cc.id,
                 "name": cc.name,
                 "set_name": cc.set_name,
+                "set_code": cc.set_code,
                 "card_number": cc.card_number,
                 "rarity": cc.rarity,
                 "is_holo": cc.is_holo,
@@ -173,13 +276,19 @@ def browse():
                 "price": listing.price,
                 "market_price": market,
                 "vs_market_pct": vs_market,
+                "provenance": price_provenance(cc),
+                "pending": listing.id in pending_ids,
                 "seller": _mask_email(seller.email),
                 "mine": listing.seller_id == uid,
                 "listed_at": listing.created_at.isoformat() + "Z",
             })
     finally:
         s.close()
-    return jsonify({"listings": payload, "fee_pct": PLATFORM_FEE_PCT})
+    return jsonify({
+        "listings": payload,
+        "fee_pct": PLATFORM_FEE_PCT,
+        "payments": "stripe" if _stripe() else "offline",
+    })
 
 
 # ----------------------------------------------------------------------
@@ -253,6 +362,20 @@ def _apply_payment(s, order: Order) -> None:
     listing = s.get(MarketListing, order.listing_id)
     item = s.get(InventoryItem, listing.inventory_item_id)
     now = utcnow()
+
+    # Both sides of the trade go in the library ledger. Cost basis is read
+    # before the row changes hands below.
+    common = dict(
+        channel="market", unit_price=order.amount, order_id=order.id,
+        condition=item.condition if item else None,
+        image_url=item.image_url if item else None,
+        crop_path=item.source_crop_path if item else None,
+        occurred_at=now,
+    )
+    log_event(s, order.seller_id, listing.catalog_card_id, "sold",
+              unit_cost=item.acquired_price if item else None,
+              fees=order.platform_fee, **common)
+    log_event(s, order.buyer_id, listing.catalog_card_id, "purchased", **common)
 
     if item is not None and item.user_id == order.seller_id:
         if item.quantity > 1:
@@ -388,6 +511,8 @@ def my_market():
             "inventory_item_id": l.inventory_item_id,
             "card": l.catalog_card.name,
             "price": l.price,
+            "market_price": l.catalog_card.final_price,
+            "fee_on_sale": _fee(l.price),
             "listed_at": l.created_at.isoformat() + "Z",
         } for l in active]
 
