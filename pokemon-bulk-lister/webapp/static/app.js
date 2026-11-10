@@ -21,7 +21,11 @@ async function api(path, opts = {}) {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    let message = `${res.status}: ${body}`;
+    try { message = JSON.parse(body).error || message; } catch { /* not JSON */ }
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
   }
   const ct = res.headers.get("content-type") || "";
   return ct.includes("json") ? res.json() : res.text();
@@ -58,6 +62,19 @@ function bestEbay(card) {
   return { value: null, window: null, count: 0 };
 }
 
+// What the final price rests on, and why a flagged row was flagged. A price
+// with no visible basis is a bug.
+function priceBasis(card) {
+  if (card.final_price == null) return "";
+  const n = [card.tcgplayer_market, card.cardmarket_trend_usd, card.ebay_median_30d, card.terapeak_median_usd]
+    .filter(v => v != null && v > 0).length;
+  const basis = `<span class="src">${n} source${n === 1 ? "" : "s"}</span>`;
+  const why = card.needs_review && card.pricing_notes
+    ? `<span class="src why" title="${escapeHtml(card.pricing_notes)}">${escapeHtml(card.pricing_notes.slice(0, 70))}</span>`
+    : "";
+  return basis + why;
+}
+
 function renderRow(card) {
   const flagClass = card.needs_review ? "flag" : "";
   const setBits = [card.set_name, card.card_number ? `#${card.card_number}` : "", card.rarity]
@@ -81,7 +98,7 @@ function renderRow(card) {
       <td class="price">${fmt(card.tcgplayer_market)}</td>
       <td class="price">${fmt(card.cardmarket_trend_usd)}</td>
       <td class="price">${ebayCell}</td>
-      <td class="price"><strong>${fmt(card.final_price)}</strong></td>
+      <td class="price"><strong>${fmt(card.final_price)}</strong>${priceBasis(card)}</td>
       <td class="conf">${(card.pricing_confidence ?? 0).toFixed(2)}</td>
       <td class="actions">
         <button data-act="edit">Edit</button>
@@ -160,21 +177,132 @@ function setupDropzone() {
 
   async function uploadFiles(files) {
     if (!files || !files.length) return;
-    status.textContent = `Uploading ${files.length} file(s)…`;
+    const mode = scanMode();
+    status.textContent = `Uploading ${files.length} photo(s)…`;
     const fd = new FormData();
     for (const f of files) fd.append("file", f);
+    fd.append("mode", mode);
     try {
       const res = await fetch("/api/grids/upload", { method: "POST", body: fd });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      status.textContent = `Added ${data.total_crops} crop(s) from ${data.grids.length} grid(s).`;
+      const skipped = (data.skipped || []).length
+        ? ` Skipped ${data.skipped.length} file(s) that are not JPG, PNG, WEBP or TIFF.` : "";
+      status.textContent = data.total_crops
+        ? `Added ${data.total_crops} card(s) from ${data.grids.length} photo(s).${skipped}`
+        : `No cards found in ${data.grids.length} photo(s).${skipped}`;
       await loadCards();
+      if (data.total_crops && $("#auto-process").checked) startProcess();
     } catch (err) {
       status.textContent = `Upload failed: ${err.message}`;
     } finally {
       input.value = "";
+      camera.value = "";
     }
   }
+
+  const camera = $("#camera-input");
+  camera.addEventListener("change", () => uploadFiles(camera.files));
+  $("#camera-btn").addEventListener("click", () => camera.click());
+  dz.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); input.click(); }
+  });
+
+  // Remember the two scan settings between visits.
+  const saved = JSON.parse(localStorage.getItem("scan-settings") || "{}");
+  if (saved.mode) $$('input[name="scan-mode"]').forEach(r => { r.checked = r.value === saved.mode; });
+  if (saved.auto === false) $("#auto-process").checked = false;
+  const remember = () => {
+    localStorage.setItem("scan-settings", JSON.stringify({ mode: scanMode(), auto: $("#auto-process").checked }));
+    $("#dropzone-hint").textContent = scanMode() === "single"
+      ? "Each photo is one card. Shoot it flat on a plain, darker background."
+      : "Binder pages are split into up to 9 cards. Empty pockets are skipped.";
+  };
+  $$('input[name="scan-mode"]').forEach(r => r.addEventListener("change", remember));
+  $("#auto-process").addEventListener("change", remember);
+  remember();
+}
+
+function scanMode() {
+  const picked = $('input[name="scan-mode"]:checked');
+  return picked ? picked.value : "grid";
+}
+
+const JOB_BUTTONS = ["#process-btn", "#identify-btn", "#run-pricing-btn"];
+
+async function startProcess() {
+  JOB_BUTTONS.forEach(s => { $(s).disabled = true; });
+  try {
+    await api("/api/scan/process", { method: "POST" });
+    pollJob();
+  } catch (err) {
+    JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
+    $("#upload-status").textContent = `Could not start: ${err.message}`;
+  }
+}
+
+// ---------------------------------------------------------------- confirm
+// Resolves {ok, checked}. Used before publishing or moving cards off the bench.
+function askConfirm({ title, html, confirm = "Confirm", checkbox = null }) {
+  $("#confirm-title").textContent = title;
+  $("#confirm-text").innerHTML = html;
+  $("#confirm-ok").textContent = confirm;
+  $("#confirm-check").checked = false;
+  $("#confirm-check-row").classList.toggle("hidden", !checkbox);
+  $("#confirm-check-label").textContent = checkbox || "";
+  const modal = $("#confirm-modal");
+  modal.classList.remove("hidden");
+  $("#confirm-ok").focus();
+  return new Promise(resolve => {
+    const done = ok => {
+      modal.classList.add("hidden");
+      modal.removeEventListener("keydown", onKey);
+      resolve({ ok, checked: $("#confirm-check").checked });
+    };
+    const onKey = ev => { if (ev.key === "Escape") { ev.stopPropagation(); done(false); } };
+    modal.addEventListener("keydown", onKey);
+    $("#confirm-ok").onclick = () => done(true);
+    $("#confirm-cancel").onclick = () => done(false);
+    $("#confirm-x").onclick = () => done(false);
+  });
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// ---------------------------------------------------------------- library
+async function addToLibrary() {
+  const session = await api("/api/session");
+  if (!session.logged_in) {
+    window.location = "/login?next=/";
+    return;
+  }
+  const picked = selectedCards();
+  const pool = picked.length ? picked : state.cards;
+  const ready = pool.filter(c => c.name && c.final_price != null);
+  const flagged = ready.filter(c => c.needs_review).length;
+  const left = pool.length - ready.length;
+  if (!ready.length) {
+    $("#upload-status").textContent = picked.length
+      ? "None of the selected cards are identified and priced yet."
+      : "No cards are identified and priced yet. Run “Identify + price new cards” first.";
+    return;
+  }
+  const value = ready.reduce((sum, c) => sum + c.final_price, 0);
+  const { ok } = await askConfirm({
+    title: `Add ${plural(ready.length, "card")} to your library?`,
+    html: `<p>${plural(ready.length, "priced card")}${picked.length ? " from your selection" : ""}, worth
+      $${value.toFixed(2)} at current prices, will be added to your library. Cards already added are skipped.</p>
+      ${left ? `<p class="muted">${plural(left, "card")} without a name or price stay on the bench.</p>` : ""}
+      ${flagged ? `<p class="flag-text">${plural(flagged, "card")} ${flagged === 1 ? "has a price" : "have prices"} flagged for review. They are added too and stay flagged in the library.</p>` : ""}`,
+    confirm: "Add to library",
+  });
+  if (!ok) return;
+  const body = picked.length ? { card_ids: ready.map(c => c.id) } : { all_priced: true };
+  const res = await api("/api/inventory/promote", { method: "POST", body: JSON.stringify(body) });
+  $("#upload-status").innerHTML =
+    `Added ${plural(res.promoted, "card")} to your library` +
+    (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already there)` : "") +
+    `. <a href="/portfolio">Open library</a> to sell them or check them against decks.`;
 }
 
 // ---------------------------------------------------------------- table interactions
@@ -472,28 +600,50 @@ function setupToolbar() {
   $("#filter-review").addEventListener("change", e => { state.needsReview = e.target.checked; loadCards(); });
   $("#filter-unid").addEventListener("change", e => { state.unidentified = e.target.checked; loadCards(); });
 
-  $("#identify-btn").addEventListener("click", async () => {
-    const btn = $("#identify-btn");
+  $("#process-btn").addEventListener("click", startProcess);
+
+  $("#library-btn").addEventListener("click", async () => {
+    const btn = $("#library-btn");
     btn.disabled = true;
+    try {
+      await addToLibrary();
+    } catch (err) {
+      if (err.status === 401) window.location = "/login?next=/";
+      else $("#upload-status").textContent = `Could not add to library: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#identify-btn").addEventListener("click", async () => {
+    JOB_BUTTONS.forEach(s => { $(s).disabled = true; });
     try {
       await api("/api/identify/run-all", { method: "POST" });
       pollJob();
     } catch (err) {
       alert(err.message);
-      btn.disabled = false;
+      JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
     }
   });
 
   $("#run-pricing-btn").addEventListener("click", async () => {
-    const btn = $("#run-pricing-btn");
-    btn.disabled = true;
     const useTerapeak = $("#use-terapeak").checked ? "1" : "0";
+    const n = state.cards.filter(c => c.name).length;
+    const { ok } = await askConfirm({
+      title: `Re-price ${plural(n, "card")}?`,
+      html: `<p>This looks up every identified card again, including the ones already priced, and
+        replaces their prices.${useTerapeak === "1" ? " Terapeak adds about 5 seconds per card." : ""}</p>
+        <p class="muted">To price only new cards, use “Identify + price new cards”.</p>`,
+      confirm: "Re-price all",
+    });
+    if (!ok) return;
+    JOB_BUTTONS.forEach(s => { $(s).disabled = true; });
     try {
       await api(`/api/pricing/run-all?terapeak=${useTerapeak}`, { method: "POST" });
       pollJob();
     } catch (err) {
       alert(err.message);
-      btn.disabled = false;
+      JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
     }
   });
 
@@ -539,9 +689,10 @@ async function pollJob() {
       if (status.running) setTimeout(tick, 1500);
       else {
         await loadCards();
-        $("#run-pricing-btn").disabled = false;
-        const identifyBtn = $("#identify-btn");
-        if (identifyBtn) identifyBtn.disabled = false;
+        JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
+        // The finished message says how many were identified and priced;
+        // keep it on screen after the bar goes away.
+        if (status.message) $("#upload-status").textContent = `Last run: ${status.message}.`;
         setTimeout(() => bar.classList.add("hidden"), 1500);
       }
     } catch {
@@ -577,12 +728,60 @@ function setupPublish() {
     }
   }
 
+  const SITE_NAMES = { ebay: "eBay", tcgplayer: "TCGplayer", whatnot: "Whatnot" };
+
   async function publish(site) {
     const btn = buttons[site];
+    let status;
+    try {
+      status = await api("/api/publish/status");
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+    const c = status.counts;
+    if (!status[site].ready) {
+      $("#publish-msg").textContent = `${SITE_NAMES[site]} is not set up: ${status[site].reason || "see the note above"}.`;
+      return;
+    }
+    let skipFlagged = false;
+    if (site === "ebay") {
+      if (!c.ebay_eligible) {
+        $("#publish-msg").textContent = c.priced
+          ? `Nothing to list: ${plural(c.ebay_missing_image, "priced card")} still need a hosted image (Edit, then “Push to Cloudinary”).`
+          : "Nothing to list: no cards are priced yet.";
+        return;
+      }
+      const answer = await askConfirm({
+        title: `Publish ${plural(c.ebay_eligible, "live eBay listing")}?`,
+        html: `<p>${plural(c.ebay_eligible, "card")} will be listed live on your eBay account at their final
+          prices, $${c.ebay_total.toFixed(2)} in total. Buyers can purchase them as soon as this finishes.
+          Cards already on eBay are updated, not duplicated.</p>
+          ${c.ebay_missing_image ? `<p class="muted">${plural(c.ebay_missing_image, "priced card")} without a hosted image will be skipped.</p>` : ""}
+          ${c.ebay_flagged ? `<p class="flag-text">${plural(c.ebay_flagged, "of these card")} ${c.ebay_flagged === 1 ? "has a price" : "have prices"} flagged for review.</p>` : ""}`,
+        confirm: "Publish to eBay",
+        checkbox: c.ebay_flagged ? `Leave out the ${c.ebay_flagged} flagged` : null,
+      });
+      if (!answer.ok) return;
+      skipFlagged = answer.checked;
+    } else {
+      if (!c.priced) {
+        $("#publish-msg").textContent = "Nothing to upload: no cards are priced yet.";
+        return;
+      }
+      const answer = await askConfirm({
+        title: `Upload ${plural(c.priced, "card")} to ${SITE_NAMES[site]}?`,
+        html: `<p>A CSV with ${plural(c.priced, "priced card")}, $${c.priced_total.toFixed(2)} in total, will be
+          generated and submitted through your ${SITE_NAMES[site]} seller portal session.</p>
+          ${c.priced_flagged ? `<p class="flag-text">${plural(c.priced_flagged, "of these card")} ${c.priced_flagged === 1 ? "has a price" : "have prices"} flagged for review. Fix or re-price them first if they should not go out as is.</p>` : ""}`,
+        confirm: `Upload to ${SITE_NAMES[site]}`,
+      });
+      if (!answer.ok) return;
+    }
     btn.disabled = true;
     const endpoint = site === "ebay" ? "/api/publish/ebay" : "/api/publish/portal";
     const opts = site === "ebay"
-      ? { method: "POST" }
+      ? { method: "POST", body: JSON.stringify({ skip_flagged: skipFlagged }) }
       : { method: "POST", body: JSON.stringify({ site }) };
     try {
       await api(endpoint, opts);

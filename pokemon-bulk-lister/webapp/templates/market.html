@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Marketplace — Pokémon Card Portfolio</title>
+  <title>Marketplace · Card Portfolio</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
 </head>
 <body>
@@ -11,8 +11,9 @@
     <div class="topbar-left">
       <span class="brand">Card Portfolio</span>
       <nav>
-        <a href="/">Processing bench</a>
-        <a href="/portfolio">Portfolio</a>
+        <a href="/">Scan</a>
+        <a href="/portfolio">Library</a>
+        <a href="/decks">Decks</a>
         <a href="/market" class="active">Marketplace</a>
       </nav>
     </div>
@@ -21,11 +22,29 @@
     </div>
   </header>
 
-  <main class="wrap">
+  <main class="wrap wide">
     <section class="panel">
       <div class="panel-head">
         <h2>Cards for sale</h2>
         <span id="market-meta" class="muted"></span>
+      </div>
+      <div class="controls">
+        <input id="mk-search" type="search" placeholder="Search name, set or number  ( / )" aria-label="Search listings">
+        <select id="mk-set" aria-label="Set"><option value="">All sets</option></select>
+        <select id="mk-cond" aria-label="Condition">
+          <option value="">Any condition</option>
+          <option>NM</option><option>LP</option><option>MP</option><option>HP</option><option>DMG</option>
+        </select>
+        <select id="mk-sort" aria-label="Sort">
+          <option value="newest">Newest</option>
+          <option value="price_asc">Price, low to high</option>
+          <option value="price_desc">Price, high to low</option>
+          <option value="deal">Furthest below market</option>
+          <option value="flagged">Market price needs review first</option>
+        </select>
+        <label class="check"><input type="checkbox" id="mk-below"> At or below market</label>
+        <label class="check"><input type="checkbox" id="mk-hide-mine"> Hide mine</label>
+        <span id="mk-count" class="muted"></span>
       </div>
       <div id="market-grid" class="market-grid">
         <p class="muted">Loading…</p>
@@ -33,6 +52,7 @@
     </section>
   </main>
 
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
   <script src="{{ url_for('static', filename='market.js') }}"></script>
 </body>
 </html>

@@ -1,171 +1,480 @@
-/* Portfolio dashboard: tiles, value chart, inventory, alerts, eBay actions. */
+/* Library dashboard: tiles, value chart, alerts, and the three library tabs
+   (have / sold / purchased). Helpers come from common.js. */
 "use strict";
 
-const $ = (sel) => document.querySelector(sel);
-const fmtUsd = (v) =>
-  v == null ? "—" : v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+const lib = {
+  items: [],            // current holdings
+  events: { sold: null, purchased: null },
+  totals: null,         // ledger totals
+  tab: "have",
+  selected: new Set(),  // inventory ids ticked for bulk listing
+  listings: {},         // inventory_item_id -> active listing
+  market: null,
+};
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
-  if (res.status === 401) {
-    window.location = "/login?next=/portfolio";
-    throw new Error("login required");
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status}`);
-  return data;
-}
-
-/* ---------------- summary + inventory ---------------- */
-
-let cardOptions = []; // [{catalog_card_id, name}] for the rule form
+/* ---------------- summary + tiles ---------------- */
 
 async function loadSummary() {
   const data = await api("/api/portfolio/summary");
   const t = data.totals;
   $("#t-value").textContent = fmtUsd(t.value);
   $("#t-cards").textContent = t.card_count;
-  $("#t-cards-sub").textContent = `${t.priced_count}/${t.item_count} priced`;
+  $("#t-cards-sub").textContent = `${t.priced_count} of ${t.item_count} entries priced`;
   $("#t-cost").textContent = fmtUsd(t.cost_basis);
+  const costSub = $("#t-cost-sub");
   if (t.cost_basis && t.value != null) {
     const gain = t.value - t.cost_basis;
-    const el = $("#t-cost-sub");
-    el.textContent = `${gain >= 0 ? "+" : ""}${fmtUsd(gain)} unrealized`;
-    el.className = "tile-sub " + (gain >= 0 ? "up" : "down");
+    costSub.textContent = `${gain >= 0 ? "+" : ""}${fmtUsd(gain)} unrealized`;
+    costSub.className = "tile-sub " + (gain >= 0 ? "up" : "down");
+  } else {
+    costSub.textContent = "from cards with a price paid";
+    costSub.className = "tile-sub";
   }
   $("#alerts-unread").textContent = t.unread_alerts ? `(${t.unread_alerts} unread)` : "";
   const sched = data.scheduler || {};
   $("#t-value-sub").textContent = sched.last_cycle_at
-    ? `prices checked ${new Date(sched.last_cycle_at).toLocaleTimeString()}`
-    : "";
-  renderInventory(data.items);
+    ? `prices checked ${ago(sched.last_cycle_at)}`
+    : "from the latest catalog prices";
 
-  cardOptions = [];
+  lib.items = data.items;
+  for (const id of [...lib.selected]) if (!lib.items.some((i) => i.id === id)) lib.selected.delete(id);
+  $("#n-have").textContent = t.card_count;
+  renderLibrary();
+
   const seen = new Set();
+  const opts = [];
   for (const it of data.items) {
     if (!seen.has(it.catalog_card_id)) {
       seen.add(it.catalog_card_id);
-      cardOptions.push({ id: it.catalog_card_id, name: it.name });
+      opts.push(`<option value="${it.catalog_card_id}">${esc(it.name)}</option>`);
     }
   }
-  const sel = document.querySelector('#rule-form select[name="catalog_card_id"]');
-  sel.innerHTML = '<option value="">All my cards</option>' +
-    cardOptions.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  $('#rule-form select[name="catalog_card_id"]').innerHTML =
+    '<option value="">All my cards</option>' + opts.join("");
 }
 
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (m) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+async function loadLedger() {
+  const [sold, purchased] = await Promise.all([
+    api("/api/library/events?kind=sold"),
+    api("/api/library/events?kind=purchased"),
+  ]);
+  lib.events.sold = sold.events;
+  lib.events.purchased = purchased.events;
+  lib.totals = sold.totals;
+  const t = lib.totals;
+  $("#n-sold").textContent = t.sold_cards;
+  $("#n-purchased").textContent = t.purchased_cards;
+  $("#t-balance").textContent = fmtUsd(t.sold_net);
+  $("#t-balance-sub").textContent = t.sold_cards
+    ? `${t.sold_cards} sold, after ${fmtUsd(t.sold_fees)} in fees`
+    : "nothing sold yet";
+  if (lib.tab !== "have") renderLibrary();
 }
 
-function renderInventory(items) {
+/* ---------------- library tabs ---------------- */
+
+const CHANNELS = {
+  scan: "Scan", manual: "Entered", market: "Marketplace", ebay: "eBay",
+  tcgplayer: "TCGplayer", whatnot: "Whatnot", in_person: "In person", other: "Other",
+};
+
+function matches(row, q) {
+  if (!q) return true;
+  const hay = [row.name, row.set_name, row.set_code, row.card_number, row.condition]
+    .filter(Boolean).join(" ").toLowerCase();
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+function visibleItems() {
+  const q = $("#lib-search").value.trim().toLowerCase();
+  const flaggedOnly = $("#lib-flagged").checked;
+  const unlistedOnly = $("#lib-unlisted").checked;
+  const rows = lib.items.filter((it) =>
+    matches(it, q)
+    && (!flaggedOnly || it.provenance.flagged)
+    && (!unlistedOnly || !lib.listings[it.id]));
+  const by = $("#lib-sort").value;
+  const val = (it) => (it.value == null ? -1 : it.value);
+  const sorters = {
+    value: (a, b) => val(b) - val(a),
+    flagged: (a, b) => (b.provenance.flagged - a.provenance.flagged) || val(b) - val(a),
+    change: (a, b) => Math.abs(b.change_7d_pct ?? 0) - Math.abs(a.change_7d_pct ?? 0),
+    name: (a, b) => a.name.localeCompare(b.name),
+    newest: (a, b) => b.id - a.id,
+  };
+  return rows.sort(sorters[by] || sorters.value);
+}
+
+function renderLibrary() {
+  const have = lib.tab === "have";
+  $("#have-table").classList.toggle("hidden", !have);
+  $("#have-controls").classList.toggle("hidden", !have);
+  $("#ledger-table").classList.toggle("hidden", have);
+  $("#ledger-totals").classList.toggle("hidden", have);
+  if (have) renderHave(); else renderLedger(lib.tab);
+}
+
+function renderHave() {
   const body = $("#inv-body");
-  if (!items.length) {
-    body.innerHTML =
-      '<tr><td colspan="8" class="muted">No cards yet — price cards on the ' +
-      '<a href="/">processing bench</a>, then click “Import priced bench cards”.</td></tr>';
-    return;
+  const rows = visibleItems();
+  $("#lib-count").textContent = lib.items.length
+    ? `${rows.length} of ${lib.items.length} entries` : "";
+  if (!lib.items.length) {
+    body.innerHTML = `<tr><td colspan="9" class="empty">Your library is empty.
+      <a href="/">Scan binder pages</a> and click “Import scanned cards”, or use “Add a card”.</td></tr>`;
+  } else if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="9" class="empty">No cards match these filters.</td></tr>';
+  } else {
+    body.innerHTML = rows.map(haveRow).join("");
   }
-  body.innerHTML = items.map((it) => {
-    const chg = it.change_7d_pct;
-    const chgTxt = chg == null ? "—" : `${chg > 0 ? "+" : ""}${chg}%`;
-    const chgCls = chg == null ? "" : chg >= 0 ? "up" : "down";
-    const img = it.image_url
-      ? `<img class="inv-thumb" src="${esc(it.image_url)}" alt="">`
-      : it.crop_path ? `<img class="inv-thumb" src="/${esc(it.crop_path)}" alt="">` : "";
-    return `<tr data-id="${it.id}">
-      <td>${img}</td>
-      <td>
-        <div class="inv-name">${esc(it.name)}${it.is_holo ? " ✦" : ""}</div>
-        <div class="inv-set">${esc(it.set_name || "")}${it.card_number ? " #" + esc(it.card_number) : ""}</div>
-      </td>
-      <td>${esc(it.condition)}</td>
-      <td class="num">${it.quantity}</td>
-      <td class="num">${fmtUsd(it.price)}</td>
-      <td class="num"><span class="chg ${chgCls}">${chgTxt}</span></td>
-      <td class="num">${fmtUsd(it.value)}</td>
-      <td>
-        <div class="row-actions">
-          <button class="btn act-sell" data-price="${it.price ?? ""}"
-                  title="List on the marketplace">Sell</button>
-          ${ebayStatus.authorized
-            ? `<button class="btn btn-ghost act-ebay" data-price="${it.price ?? ""}"
-                  title="List on your eBay account">eBay</button>` : ""}
-          <button class="btn btn-ghost act-del" title="Remove from library">✕</button>
-        </div>
-      </td>
-    </tr>`;
-  }).join("");
-  markListedRows();
+  syncSelection(rows);
 }
 
-let activeListingByItem = {}; // inventory_item_id -> listing_id
-
-function markListedRows() {
-  document.querySelectorAll("#inv-body tr[data-id]").forEach((row) => {
-    const btn = row.querySelector(".act-sell");
-    if (!btn) return;
-    const lid = activeListingByItem[row.dataset.id];
-    if (lid) {
-      btn.textContent = "Listed ✓";
-      btn.disabled = true;
-    } else if (btn.textContent === "Listed ✓") {
-      btn.textContent = "Sell";
-      btn.disabled = false;
-    }
-  });
+function haveRow(it) {
+  const chg = it.change_7d_pct;
+  const chgTxt = chg == null ? "—" : `${chg > 0 ? "+" : ""}${chg}%`;
+  const chgCls = chg == null ? "" : chg >= 0 ? "up" : "down";
+  const listing = lib.listings[it.id];
+  const sellCell = listing
+    ? `<span class="listed">Listed ${fmtUsd(listing.price)}</span>
+       <button class="btn btn-ghost" data-act="reprice" title="Change the asking price">Reprice</button>
+       <button class="btn btn-ghost" data-act="unlist" title="Take the listing down">Unlist</button>`
+    : `<button class="btn" data-act="sell" title="List on the marketplace">Sell</button>`;
+  return `<tr data-id="${it.id}" class="${it.provenance.flagged ? "flag" : ""}">
+    <td class="sel"><input type="checkbox" data-act="select" ${lib.selected.has(it.id) ? "checked" : ""}
+        ${listing ? "disabled" : ""} aria-label="Select ${esc(it.name)}"></td>
+    <td>${thumbHtml(it)}</td>
+    <td>${cardLine(it)}</td>
+    <td>${esc(it.condition)}</td>
+    <td class="num">${it.quantity}</td>
+    <td class="num price-cell">${fmtUsd(it.price)}${provenanceHtml(it.provenance)}</td>
+    <td class="num"><span class="chg ${chgCls}">${chgTxt}</span></td>
+    <td class="num">${fmtUsd(it.value)}</td>
+    <td>
+      <div class="row-actions">
+        ${sellCell}
+        <button class="btn btn-ghost" data-act="sold" title="Record a sale made somewhere else">Sold elsewhere</button>
+        ${ebayStatus.authorized
+          ? '<button class="btn btn-ghost" data-act="ebay" title="List on your eBay account">eBay</button>' : ""}
+        <button class="btn btn-ghost" data-act="remove" title="Remove from library (not a sale)" aria-label="Remove">✕</button>
+      </div>
+    </td>
+  </tr>`;
 }
 
-$("#inv-body").addEventListener("click", async (e) => {
-  const row = e.target.closest("tr[data-id]");
-  if (!row) return;
-  const id = row.dataset.id;
-  if (e.target.classList.contains("act-del")) {
-    if (!confirm("Remove this card from your library?")) return;
-    await api(`/api/inventory/${id}`, { method: "DELETE" });
-    refreshAll();
-  } else if (e.target.classList.contains("act-ebay")) {
-    listOnEbay(id, e.target.dataset.price, e.target);
-  } else if (e.target.classList.contains("act-sell")) {
-    const suggested = e.target.dataset.price;
-    const raw = prompt("List for how much? ($)", suggested || "");
-    if (raw === null) return;
-    const price = parseFloat(raw);
-    if (!price || price <= 0) { alert("Enter a price greater than 0."); return; }
-    e.target.disabled = true;
-    e.target.textContent = "Listing…";
-    try {
-      const res = await api(`/api/inventory/${id}/list-for-sale`, {
-        method: "POST",
-        body: JSON.stringify({ price }),
-      });
-      e.target.textContent = "Listed ✓";
-      alert(`Listed at ${fmtUsd(res.price)} — platform fee on sale: ${fmtUsd(res.fee_on_sale)} (${res.fee_pct}%).`);
-      loadMarket();
-    } catch (err) {
-      e.target.textContent = "Sell";
-      e.target.disabled = false;
-      alert(`Listing failed: ${err.message}`);
-    }
+function syncSelection(rows = visibleItems()) {
+  const pickable = rows.filter((it) => !lib.listings[it.id]);
+  const picked = pickable.filter((it) => lib.selected.has(it.id)).length;
+  const all = $("#lib-select-all");
+  all.checked = pickable.length > 0 && picked === pickable.length;
+  all.indeterminate = picked > 0 && picked < pickable.length;
+  const btn = $("#btn-bulk-list");
+  btn.textContent = `List selected (${lib.selected.size})`;
+  btn.disabled = lib.selected.size === 0;
+}
+
+function renderLedger(kind) {
+  const events = lib.events[kind];
+  const head = $("#ledger-head"), body = $("#ledger-body"), strip = $("#ledger-totals");
+  if (events == null) { body.innerHTML = '<tr><td class="muted">Loading…</td></tr>'; return; }
+  const q = $("#lib-search").value.trim().toLowerCase();
+  const rows = events.filter((e) => matches(e, q));
+  $("#lib-count").textContent = events.length ? `${rows.length} of ${events.length} records` : "";
+  const t = lib.totals || {};
+
+  if (kind === "sold") {
+    const gainNote = t.sold_with_cost < t.sold_cards
+      ? ` (covers ${t.sold_with_cost} of ${t.sold_cards} cards; the rest have no price paid on file)` : "";
+    strip.innerHTML = `
+      <span><strong>${t.sold_cards}</strong> cards sold</span>
+      <span>Gross <strong>${fmtUsd(t.sold_gross)}</strong></span>
+      <span>Fees <strong>${fmtUsd(t.sold_fees)}</strong></span>
+      <span>Net <strong>${fmtUsd(t.sold_net)}</strong></span>
+      <span>Realized gain <strong>${t.sold_with_cost ? fmtUsd(t.realized_gain) : "—"}</strong>${gainNote}</span>`;
+    head.innerHTML = `<tr><th>Date</th><th></th><th>Card</th><th>Cond.</th><th>Where</th>
+      <th class="num">Qty</th><th class="num">Each</th><th class="num">Fees</th>
+      <th class="num">Net</th><th class="num">Gain</th></tr>`;
+    body.innerHTML = rows.map((e) => `<tr>
+      <td>${shortDate(e.occurred_at)}</td><td>${thumbHtml(e)}</td><td>${cardLine(e)}${noteHtml(e)}</td>
+      <td>${esc(e.condition || "")}</td><td>${CHANNELS[e.channel] || esc(e.channel)}</td>
+      <td class="num">${e.quantity}</td><td class="num">${fmtUsd(e.unit_price)}</td>
+      <td class="num">${e.fees ? fmtUsd(e.fees) : "—"}</td><td class="num">${fmtUsd(e.net)}</td>
+      <td class="num">${e.gain == null ? '<span class="muted" title="No price paid on file">—</span>'
+        : `<span class="chg ${e.gain >= 0 ? "up" : "down"}">${e.gain >= 0 ? "+" : ""}${fmtUsd(e.gain)}</span>`}</td>
+    </tr>`).join("") || emptyRow(10, events.length
+      ? "No sales match this search."
+      : "No sales yet. Use “Sell” to list a card here, or “Sold elsewhere” to record a sale made off this site.");
+  } else {
+    const unpriced = t.purchased_unpriced
+      ? ` (${t.purchased_unpriced} cards have no price paid on file)` : "";
+    strip.innerHTML = `
+      <span><strong>${t.purchased_cards}</strong> cards purchased</span>
+      <span>Spent <strong>${fmtUsd(t.purchased_spend)}</strong>${unpriced}</span>`;
+    head.innerHTML = `<tr><th>Date</th><th></th><th>Card</th><th>Cond.</th><th>Where</th>
+      <th class="num">Qty</th><th class="num">Paid each</th><th class="num">Total</th>
+      <th class="num">Market now, each</th></tr>`;
+    body.innerHTML = rows.map((e) => `<tr>
+      <td>${shortDate(e.occurred_at)}</td><td>${thumbHtml(e)}</td><td>${cardLine(e)}${noteHtml(e)}</td>
+      <td>${esc(e.condition || "")}</td><td>${CHANNELS[e.channel] || esc(e.channel)}</td>
+      <td class="num">${e.quantity}</td><td class="num">${fmtUsd(e.unit_price)}</td>
+      <td class="num">${fmtUsd(e.total)}</td><td class="num">${fmtUsd(e.market_price_now)}</td>
+    </tr>`).join("") || emptyRow(9, events.length
+      ? "No purchases match this search."
+      : "No purchases yet. Cards you buy on the marketplace land here; use “Add a card” with a price paid for anything bought elsewhere.");
+  }
+}
+
+const emptyRow = (n, text) => `<tr><td colspan="${n}" class="empty">${text}</td></tr>`;
+const noteHtml = (e) => (e.note ? `<div class="inv-set">${esc(e.note)}</div>` : "");
+
+$$("#library .tab").forEach((tab) => tab.addEventListener("click", () => {
+  $$("#library .tab").forEach((t) => t.classList.toggle("active", t === tab));
+  lib.tab = tab.dataset.tab;
+  renderLibrary();
+}));
+["#lib-search", "#lib-sort", "#lib-flagged", "#lib-unlisted"].forEach((sel) =>
+  $(sel).addEventListener("input", renderLibrary));
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && !e.target.closest("input, textarea, select") && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    $("#lib-search").focus();
   }
 });
+
+/* ---------------- row actions ---------------- */
+
+const itemById = (id) => lib.items.find((i) => i.id === Number(id));
+
+$("#inv-body").addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-act]");
+  const row = e.target.closest("tr[data-id]");
+  if (!el || !row) return;
+  const item = itemById(row.dataset.id);
+  if (!item) return;
+  const act = el.dataset.act;
+  try {
+    if (act === "select") {
+      if (el.checked) lib.selected.add(item.id); else lib.selected.delete(item.id);
+      syncSelection();
+    } else if (act === "sell") {
+      openSell(item, null);
+    } else if (act === "reprice") {
+      openSell(item, lib.listings[item.id]);
+    } else if (act === "unlist") {
+      await postJson(`/api/market/listings/${lib.listings[item.id].listing_id}/cancel`);
+      toast(`${item.name} is no longer listed.`);
+      await loadMarket();
+    } else if (act === "sold") {
+      openSale(item);
+    } else if (act === "ebay") {
+      await listOnEbay(item, el);
+    } else if (act === "remove") {
+      const { ok } = await askConfirm({
+        title: "Remove from library?",
+        html: `<p><strong>${esc(item.name)}</strong> (${item.quantity}) leaves your library with no sale recorded.
+               Any active listing for it is taken down.</p>
+               <p class="muted">If you sold it, use “Sold elsewhere” so it shows in your sales.</p>`,
+        confirm: "Remove",
+      });
+      if (!ok) return;
+      await api(`/api/inventory/${item.id}`, { method: "DELETE" });
+      toast(`Removed ${item.name}.`);
+      refreshAll();
+    }
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+$("#lib-select-all").addEventListener("change", (e) => {
+  for (const it of visibleItems()) {
+    if (lib.listings[it.id]) continue;
+    if (e.target.checked) lib.selected.add(it.id); else lib.selected.delete(it.id);
+  }
+  renderHave();
+});
+
+/* ---------------- sell / reprice dialog ---------------- */
+
+let sellCtx = null;
+
+function openSell(item, listing) {
+  sellCtx = { item, listing };
+  const form = $("#sell-form");
+  $("#sell-title").textContent = listing ? `Reprice ${item.name}` : `List ${item.name} for sale`;
+  $("#sell-submit").textContent = listing ? "Update price" : "List for sale";
+  $("#sell-prov").innerHTML = `
+    <p>Market price ${fmtUsd(item.price)}<br>${provenanceHtml(item.provenance)}</p>
+    ${item.quantity > 1 ? `<p class="muted">You have ${item.quantity}. A listing sells one copy.</p>` : ""}`;
+  form.price.value = (listing ? listing.price : item.price) ?? "";
+  updateSellNet();
+  openDialog($("#sell-dialog"));
+  form.price.select();
+}
+
+function updateSellNet() {
+  const price = parseFloat($("#sell-form").price.value);
+  const pct = lib.market ? lib.market.fee_pct : 0;
+  if (!(price > 0)) { $("#sell-net").textContent = ""; return; }
+  const fee = Math.round(price * pct) / 100;
+  const market = sellCtx.item.price;
+  const vs = market ? ` · ${Math.round((price - market) / market * 100)}% vs market` : "";
+  $("#sell-net").textContent =
+    `Platform fee ${pct}% = ${fmtUsd(fee)}. You get ${fmtUsd(price - fee)} when it sells${vs}.`;
+}
+$("#sell-form").price.addEventListener("input", updateSellNet);
+
+$("#sell-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const { item, listing } = sellCtx;
+  const price = parseFloat(e.target.price.value);
+  try {
+    if (listing) {
+      await postJson(`/api/market/listings/${listing.listing_id}`, { price }, "PATCH");
+      toast(`${item.name} now listed at ${fmtUsd(price)}.`);
+    } else {
+      const res = await postJson(`/api/inventory/${item.id}/list-for-sale`, { price });
+      toast(`Listed ${item.name} at ${fmtUsd(res.price)}. Fee on sale: ${fmtUsd(res.fee_on_sale)}.`);
+    }
+    $("#sell-dialog").close();
+    await loadMarket();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- bulk list ---------------- */
+
+$("#btn-bulk-list").addEventListener("click", async () => {
+  const item_ids = [...lib.selected];
+  try {
+    const p = await postJson("/api/inventory/list-for-sale", { item_ids, dry_run: true });
+    const skips = [
+      p.skipped_no_price ? `${p.skipped_no_price} with no market price` : "",
+      p.skipped_already_listed ? `${p.skipped_already_listed} already listed` : "",
+    ].filter(Boolean);
+    if (!p.to_list && !p.skipped_flagged) {
+      toast(`Nothing to list: ${skips.join(", ") || "no eligible cards"}.`, "err");
+      return;
+    }
+    const { ok, checked } = await askConfirm({
+      title: `List ${p.to_list} card${p.to_list === 1 ? "" : "s"} for sale?`,
+      html: `<p>${p.to_list} card${p.to_list === 1 ? "" : "s"} go on the marketplace at their current
+             market price, ${fmtUsd(p.total)} in total. The platform fee is ${p.fee_pct}% of each sale
+             (${fmtUsd(p.fee_on_sale)} if they all sell).</p>
+             ${skips.length ? `<p class="muted">Skipping ${skips.join(" and ")}.</p>` : ""}
+             ${p.skipped_flagged ? `<p class="flag-note">${p.skipped_flagged} selected
+               card${p.skipped_flagged === 1 ? " has a price that needs" : "s have prices that need"} review and
+               will not be listed unless you tick the box.</p>` : ""}`,
+      confirm: "List them",
+      checkbox: p.skipped_flagged ? `Also list the ${p.skipped_flagged} with prices that need review` : null,
+    });
+    if (!ok) return;
+    const res = await postJson("/api/inventory/list-for-sale", { item_ids, include_flagged: checked });
+    toast(`Listed ${res.listed} card${res.listed === 1 ? "" : "s"} for ${fmtUsd(res.total)}.`);
+    lib.selected.clear();
+    await loadMarket();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- record a sale made elsewhere ---------------- */
+
+let saleItem = null;
+
+function openSale(item) {
+  saleItem = item;
+  const form = $("#sale-form");
+  form.reset();
+  $("#sale-title").textContent = `Record a sale: ${item.name}`;
+  form.quantity.max = item.quantity;
+  form.price.value = item.price ?? "";
+  form.sold_on.value = new Date().toISOString().slice(0, 10);
+  openDialog($("#sale-dialog"));
+}
+
+$("#sale-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try {
+    const res = await postJson(`/api/inventory/${saleItem.id}/record-sale`, f);
+    $("#sale-dialog").close();
+    toast(`Recorded: ${res.event.quantity} × ${saleItem.name} for ${fmtUsd(res.event.net)} net.`);
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- add a card by hand ---------------- */
+
+$("#btn-add").addEventListener("click", () => {
+  $("#add-form").reset();
+  openDialog($("#add-dialog"));
+});
+
+let suggestTimer = null;
+let suggestions = [];
+$("#add-form").name.addEventListener("input", (e) => {
+  const q = e.target.value.trim();
+  // Picking a suggestion fills in the printing details.
+  const hit = suggestions.find((c) => suggestionLabel(c) === q);
+  if (hit) {
+    const form = $("#add-form");
+    form.name.value = hit.name;
+    form.set_name.value = hit.set_name || "";
+    form.set_code.value = hit.set_code || "";
+    form.card_number.value = hit.card_number || "";
+    form.is_holo.checked = !!hit.is_holo;
+    return;
+  }
+  clearTimeout(suggestTimer);
+  if (q.length < 2) return;
+  suggestTimer = setTimeout(async () => {
+    try {
+      suggestions = (await api(`/api/catalog/search?q=${encodeURIComponent(q)}`)).cards;
+      $("#add-suggestions").innerHTML = suggestions
+        .map((c) => `<option value="${esc(suggestionLabel(c))}">`).join("");
+    } catch { /* suggestions are optional */ }
+  }, 200);
+});
+const suggestionLabel = (c) =>
+  [c.name, c.set_name || c.set_code, c.card_number ? "#" + c.card_number : "", c.is_holo ? "holo" : ""]
+    .filter(Boolean).join(" · ");
+
+$("#add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  f.is_holo = e.target.is_holo.checked;
+  f.purchased = f.channel !== "manual";
+  try {
+    const item = await postJson("/api/inventory/add", f);
+    $("#add-dialog").close();
+    toast(item.needs_price
+      ? `Added ${item.name}. No price on file yet; “Refresh prices” looks it up.`
+      : `Added ${item.name} at ${fmtUsd(item.price)} market price.`);
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- import from the scan bench ---------------- */
 
 $("#btn-promote").addEventListener("click", async () => {
   const btn = $("#btn-promote");
   btn.disabled = true;
   try {
-    const res = await api("/api/inventory/promote", {
-      method: "POST",
-      body: JSON.stringify({ all_priced: true }),
-    });
-    alert(`Imported ${res.promoted} cards` +
-      (res.skipped_duplicates ? ` (${res.skipped_duplicates} already in your library)` : ""));
+    const res = await postJson("/api/inventory/promote", { all_priced: true });
+    toast(`Imported ${res.promoted} scanned card${res.promoted === 1 ? "" : "s"}` +
+      (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already imported)` : "") + ".");
     refreshAll();
   } catch (err) {
-    alert(err.message);
+    toast(err.message === "no matching bench cards"
+      ? "Nothing to import: no scanned cards have a price yet. Scan and price them first."
+      : err.message, "err");
   } finally {
     btn.disabled = false;
   }
@@ -176,12 +485,13 @@ $("#btn-refresh").addEventListener("click", async () => {
   btn.disabled = true;
   btn.textContent = "Refreshing…";
   try {
-    await api("/api/portfolio/refresh-prices", { method: "POST" });
-    setTimeout(() => { refreshAll(); btn.disabled = false; btn.textContent = "Refresh prices"; }, 4000);
+    const res = await postJson("/api/portfolio/refresh-prices");
+    toast(`Looking up prices for ${res.cards} cards in the background.`);
+    setTimeout(refreshAll, 6000);
   } catch (err) {
-    alert(err.message);
-    btn.disabled = false;
-    btn.textContent = "Refresh prices";
+    toast(err.message, "err");
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh prices"; }, 6000);
   }
 });
 
@@ -293,7 +603,7 @@ async function loadAlerts() {
   ul.innerHTML = data.alerts.map((a) => `
     <li class="${a.is_read ? "" : "unread"}">
       <span>${esc(a.message)}</span>
-      <span class="alert-time">${new Date(a.created_at).toLocaleDateString()}</span>
+      <span class="alert-time">${shortDate(a.created_at)}</span>
     </li>`).join("");
 }
 
@@ -344,58 +654,61 @@ $("#rule-form").addEventListener("submit", async (e) => {
     e.target.reset();
     loadRules();
   } catch (err) {
-    alert(err.message);
+    toast(err.message, "err");
   }
 });
 
-/* ---------------- my sales & purchases ---------------- */
+/* ---------------- listings & open orders ---------------- */
 
 const ORDER_STATUS = {
-  pending_payment: '<span class="chg down">awaiting payment</span>',
-  paid: '<span class="chg up">paid</span>',
-  completed: '<span class="chg up">completed</span>',
-  cancelled: '<span class="muted">cancelled</span>',
+  pending_payment: '<span class="pill">awaiting payment</span>',
+  paid: '<span class="pill ok">paid</span>',
+  completed: '<span class="pill ok">completed</span>',
+  cancelled: '<span class="pill muted">cancelled</span>',
 };
 
 async function loadMarket() {
   const data = await api("/api/market/my");
-  $("#fee-note").textContent =
-    `platform fee ${data.fee_pct}% · payments: ${data.payments}`;
-  $("#t-balance").textContent = fmtUsd(data.balance);
-  $("#t-balance-sub").textContent = data.fees_recorded
-    ? `${fmtUsd(data.fees_recorded)} in platform fees` : "";
+  lib.market = data;
+  $("#fee-note").textContent = `platform fee ${data.fee_pct}% of each sale · payments: ${
+    data.payments === "stripe" ? "card (Stripe)" : "settled directly with the other person"}`;
 
-  activeListingByItem = {};
-  for (const l of data.active_listings) activeListingByItem[l.inventory_item_id] = l.listing_id;
-  markListedRows();
+  lib.listings = {};
+  for (const l of data.active_listings) lib.listings[l.inventory_item_id] = l;
+  for (const id of [...lib.selected]) if (lib.listings[id]) lib.selected.delete(id);
+  if (lib.tab === "have") renderHave();
 
   const rows = [];
   for (const l of data.active_listings) {
     rows.push(`<li>
-      <span>For sale: <strong>${esc(l.card)}</strong> at ${fmtUsd(l.price)}</span>
-      <button class="btn btn-ghost mk-cancel" data-id="${l.listing_id}">Cancel</button>
+      <span>For sale: <strong>${esc(l.card)}</strong> at ${fmtUsd(l.price)}
+        <span class="muted">market ${fmtUsd(l.market_price)} · you get ${fmtUsd(l.price - l.fee_on_sale)}</span></span>
+      <button class="btn btn-ghost mk-cancel" data-id="${l.listing_id}">Unlist</button>
     </li>`);
   }
-  for (const o of data.sales) {
-    const action = o.status === "pending_payment" && "offline" === o.payment_provider
-      ? ` <button class="btn mk-paid" data-id="${o.order_id}">Mark paid</button>` : "";
+  // Orders stay here only while someone has to act; finished ones live in
+  // the Sold and Purchased tabs.
+  for (const o of data.sales.filter((o) => o.status === "pending_payment")) {
+    const action = o.payment_provider === "offline"
+      ? `<button class="btn mk-paid" data-id="${o.order_id}" data-card="${esc(o.card)}" data-amount="${o.amount}">Mark paid</button>` : "";
     rows.push(`<li>
-      <span>Sold: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
-        <span class="muted">(you get ${fmtUsd(o.seller_proceeds)}, fee ${fmtUsd(o.platform_fee)})</span>
-        ${ORDER_STATUS[o.status] || o.status}</span>
-      <span>${action}<span class="alert-time"> ${new Date(o.created_at).toLocaleDateString()}</span></span>
+      <span>Buyer waiting: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
+        <span class="muted">you get ${fmtUsd(o.seller_proceeds)} after the ${fmtUsd(o.platform_fee)} fee</span>
+        ${ORDER_STATUS[o.status]}</span>
+      <span>${action}<span class="alert-time"> ${shortDate(o.created_at)}</span></span>
     </li>`);
   }
-  for (const o of data.purchases) {
+  for (const o of data.purchases.filter((o) => ["pending_payment", "paid"].includes(o.status))) {
     const action = o.status === "paid"
-      ? ` <button class="btn mk-complete" data-id="${o.order_id}">Card arrived</button>` : "";
+      ? `<button class="btn mk-complete" data-id="${o.order_id}">Card arrived</button>` : "";
     rows.push(`<li>
-      <span>Bought: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
-        ${ORDER_STATUS[o.status] || o.status}</span>
-      <span>${action}<span class="alert-time"> ${new Date(o.created_at).toLocaleDateString()}</span></span>
+      <span>Buying: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)} ${ORDER_STATUS[o.status]}
+        ${o.status === "pending_payment" ? '<span class="muted">pay the seller; they confirm it</span>' : ""}</span>
+      <span>${action}<span class="alert-time"> ${shortDate(o.created_at)}</span></span>
     </li>`);
   }
-  $("#market-list").innerHTML = rows.join("") || '<li class="muted">Nothing yet — hit “Sell” on a card, or browse the <a href="/market">marketplace</a>.</li>';
+  $("#market-list").innerHTML = rows.join("") ||
+    '<li class="muted">No active listings or open orders. Click “Sell” on a card, or browse the <a href="/market">marketplace</a>.</li>';
 }
 
 $("#market-list").addEventListener("click", async (e) => {
@@ -403,16 +716,26 @@ $("#market-list").addEventListener("click", async (e) => {
   if (!btn) return;
   try {
     if (btn.classList.contains("mk-cancel")) {
-      await api(`/api/market/listings/${btn.dataset.id}/cancel`, { method: "POST" });
+      await postJson(`/api/market/listings/${btn.dataset.id}/cancel`);
+      toast("Listing taken down.");
     } else if (btn.classList.contains("mk-paid")) {
-      if (!confirm("Confirm you received payment? The card transfers to the buyer's library.")) return;
-      await api(`/api/market/orders/${btn.dataset.id}/mark-paid`, { method: "POST" });
+      const { ok } = await askConfirm({
+        title: "Mark this order paid?",
+        html: `<p>Confirm you received ${fmtUsd(Number(btn.dataset.amount))} for
+               <strong>${esc(btn.dataset.card)}</strong>. The card moves to the buyer's library
+               and the sale is recorded. This can't be undone here.</p>`,
+        confirm: "I've been paid",
+      });
+      if (!ok) return;
+      await postJson(`/api/market/orders/${btn.dataset.id}/mark-paid`);
+      toast("Sale recorded. The card is now in the buyer's library.");
     } else if (btn.classList.contains("mk-complete")) {
-      await api(`/api/market/orders/${btn.dataset.id}/complete`, { method: "POST" });
+      await postJson(`/api/market/orders/${btn.dataset.id}/complete`);
+      toast("Order completed.");
     }
     refreshAll();
   } catch (err) {
-    alert(err.message);
+    toast(err.message, "err");
   }
 });
 
@@ -474,7 +797,7 @@ $("#ebay-keys-form").addEventListener("submit", async (e) => {
     e.target.reset();
     await loadEbayStatus();
   } catch (err) {
-    alert(`Could not save keys: ${err.message}`);
+    toast(`Could not save keys: ${err.message}`, "err");
   }
 });
 
@@ -487,7 +810,7 @@ $("#ebay-remove").addEventListener("click", async () => {
 
 $("#ebay-authorize").addEventListener("click", async () => {
   const pasted = $("#ebay-redirect").value.trim();
-  if (!pasted) { alert("Open the consent link, approve, then paste the URL you land on."); return; }
+  if (!pasted) { toast("Open the consent link, approve, then paste the URL you land on.", "err"); return; }
   try {
     await api("/api/settings/ebay/authorize", {
       method: "POST",
@@ -497,31 +820,28 @@ $("#ebay-authorize").addEventListener("click", async () => {
     await loadEbayStatus();
     loadSummary().catch(console.error); // reveal the eBay buttons
   } catch (err) {
-    alert(`Authorization failed: ${err.message}`);
+    toast(`Authorization failed: ${err.message}`, "err");
   }
 });
 
-async function listOnEbay(itemId, suggested, btn) {
-  const raw = prompt("List on eBay for how much? ($)", suggested || "");
-  if (raw === null) return;
-  const price = parseFloat(raw);
-  if (!price || price <= 0) { alert("Enter a price greater than 0."); return; }
+async function listOnEbay(item, btn) {
+  const price = item.price;
+  if (!price) { toast("This card has no market price yet. Refresh prices first.", "err"); return; }
+  const { ok } = await askConfirm({
+    title: "List on your eBay account?",
+    html: `<p>This publishes 1 live eBay listing: <strong>${esc(item.name)}</strong> at ${fmtUsd(price)}.</p>
+           <p>${provenanceHtml(item.provenance)}</p>`,
+    confirm: `Publish at ${fmtUsd(price)}`,
+  });
+  if (!ok) return;
   btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = "Listing…";
   try {
-    const res = await api("/api/settings/ebay/list-item", {
-      method: "POST",
-      body: JSON.stringify({ item_id: itemId, price }),
-    });
-    btn.textContent = "On eBay ✓";
-    alert(res.listing && res.listing.url
-      ? `Live: ${res.listing.url}`
-      : `Published (status: ${res.status}).`);
+    const res = await postJson("/api/settings/ebay/list-item", { item_id: item.id, price });
+    toast(res.listing && res.listing.url ? `Live on eBay: ${res.listing.url}` : `Published (status: ${res.status}).`);
   } catch (err) {
-    btn.textContent = orig;
+    toast(`eBay listing failed: ${err.message}`, "err");
+  } finally {
     btn.disabled = false;
-    alert(`eBay listing failed: ${err.message}`);
   }
 }
 
@@ -531,11 +851,17 @@ function refreshAll() {
   loadEbayStatus()
     .catch(() => {})
     .then(() => loadSummary().then(loadMarket))
-    .catch(console.error);
+    .catch((err) => toast(err.message, "err"));
+  loadLedger().catch(console.error);
   loadChart().catch(console.error);
   loadAlerts().catch(console.error);
   loadRules().catch(console.error);
 }
 
 refreshAll();
-setInterval(() => { loadSummary().then(loadMarket).catch(() => {}); loadAlerts().catch(() => {}); }, 60_000);
+setInterval(() => {
+  if (document.querySelector("dialog[open]")) return;  // don't redraw under an open form
+  loadSummary().then(loadMarket).catch(() => {});
+  loadLedger().catch(() => {});
+  loadAlerts().catch(() => {});
+}, 60_000);

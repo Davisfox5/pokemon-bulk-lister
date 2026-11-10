@@ -2,6 +2,8 @@
 
 Repo: **pokemon-bulk-lister** — Python 3.11 Flask 3 web app (`pokemon-bulk-lister/webapp/`) plus a 7-step CLI pipeline (`pokemon-bulk-lister/scripts/`) that turns binder-page photos into priced bulk card listings for TCGPlayer, Whatnot, and eBay. Business logic in `pokemon-bulk-lister/lib/`; SQLite state in `webapp/db.py`; tests in `pokemon-bulk-lister/tests/`.
 
+Two data layers share one SQLite file. The scan bench (`webapp/db.py`, raw sqlite3, `cards` table) is single-user and unauthenticated. The multi-user layer (`webapp/models.py`, SQLAlchemy) holds users, the shared price catalog, inventory, the `library_events` ledger (every add, purchase and sale), decks and the marketplace. `models.py` has no column migrations (`create_all` only adds tables), so add tables there, not columns.
+
 Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also runs `python -m compileall -q lib webapp scripts`. There is no deployment — the app runs locally only; no branch auto-deploys anywhere.
 
 ## Model routing (dev)
@@ -57,8 +59,13 @@ This is a working tool for one operator, not a product surface.
 - `header` with title left, stats right, one border-bottom rule
 - `.panel` is the primary container. `.muted` and `.small` for secondary text.
 - `.dropzone` for file input. `.hidden` toggles visibility.
-- Screens: `index.html` (intake), `market.html` (pricing), `portfolio.html` (holdings),
-  plus `login.html` and `register.html`
+- Screens: `index.html` (scan: intake, pricing, publish), `portfolio.html` (library:
+  have / sold / purchased), `decks.html` (deck building), `market.html` (marketplace),
+  plus `login.html` and `register.html`. All four share one nav: Scan, Library, Decks,
+  Marketplace.
+- `index.html` uses `style.css`. The other screens use `portfolio.css` and the helpers
+  in `static/common.js` (`provenanceHtml` for price provenance, `askConfirm` for
+  confirmations, `toast` for status). Use those rather than `alert()` or `prompt()`.
 
 ### Rules
 - Density over polish. This screen gets used for hundreds of rows at a time, so

@@ -942,6 +942,7 @@ def _identify_job() -> Optional[int]:
         done = 0
         by_image = 0
         by_ai = 0
+        last_error = ""   # shown to the user; a missing API key fails every card the same way
 
         def _apply(card: dict, res: dict) -> None:
             with db.connect(DB_PATH) as conn:
@@ -990,6 +991,7 @@ def _identify_job() -> Optional[int]:
                             for r in identify_page(str(page_path))
                         }
                     except Exception as exc:
+                        last_error = str(exc)
                         print(f"[identify] page grid={grid_id}: {exc}", file=sys.stderr)
 
             for card in unmatched:
@@ -1002,6 +1004,7 @@ def _identify_job() -> Optional[int]:
                             if res is None or float(crop_res.get("confidence") or 0.0) >= float(res.get("confidence") or 0.0):
                                 res = crop_res
                         except Exception as exc:
+                            last_error = str(exc)
                             print(f"[identify] crop id={card['id']}: {exc}", file=sys.stderr)
                 if res and (res.get("name") or "").strip():
                     _apply(card, res)
@@ -1015,6 +1018,9 @@ def _identify_job() -> Optional[int]:
             f"identified {by_image + by_ai}/{len(cards)} "
             f"({by_image} free by image match, {by_ai} by AI)"
         )
+        missed = len(cards) - by_image - by_ai
+        if missed and last_error:
+            _job_state["message"] += f", {missed} failed: {last_error[:160]}"
         return by_image + by_ai
     except Exception as exc:
         traceback.print_exc()

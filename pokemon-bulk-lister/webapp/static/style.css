@@ -151,3 +151,25 @@ td.actions button { padding: 3px 8px; font-size: 12px; }
 }
 td.select { width: 28px; text-align: center; }
 th:first-child { width: 28px; text-align: center; }
+
+/* Scan bench additions */
+header { gap: 16px; flex-wrap: wrap; }
+.topnav { display: flex; gap: 14px; margin-right: auto; }
+.topnav a { color: var(--muted); text-decoration: none; }
+.topnav a:hover { color: var(--accent); }
+.topnav a.active { color: var(--fg); font-weight: 600; }
+.upload-options { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 10px 0 6px; font-size: 13px; }
+thead th { position: sticky; top: 0; z-index: 1; }
+.src { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+tr.flag .src.why { color: var(--row-flag-text); font-weight: 600; }
+.confirm-card { width: min(480px, 96vw); }
+.confirm-body { flex-direction: column; gap: 10px; }
+.confirm-body p { margin: 0 0 6px; }
+.confirm-body .actions { justify-content: flex-end; }
+.flag-text { color: var(--row-flag-text); font-weight: 600; }
+button:disabled { opacity: 0.55; cursor: default; }
+td.actions { display: table-cell; margin-top: 0; }
+@media (max-width: 900px) {
+  body { padding: 0 12px 32px; }
+  .table-wrap { overflow-x: auto; }
+}

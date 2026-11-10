@@ -43,28 +43,116 @@ cp .env.example .env
 
 ## Web UI (recommended)
 
-A single-page Flask app on top of a local SQLite DB. Upload grids, edit
-identifications, run pricing, and export CSVs from one browser tab.
+A Flask app on top of a local SQLite DB, with four screens.
 
 ```bash
 python -m webapp.app
 # http://localhost:5050
 ```
 
-Data lives at `output/db.sqlite` (auto-created; auto-imports any existing
-`output/cards.json` / `output/cards_priced.json` on first launch). Drop binder
-photos into the drop-zone — they're split into crops automatically and inserted
-as empty card rows. **"Identify all (AI)"** identifies every unidentified card
-with Claude vision (one call per binder page + per-crop retries for
-low-confidence cells; needs `ANTHROPIC_API_KEY`, model set by `VISION_MODEL`,
-default Haiku — roughly a cent per page). You can still edit fields inline, use
-the per-card "AI identify" button in the edit modal, or paste a JSON list of
-identifications in bulk. Per-card "Price" runs the eBay + TCGplayer +
-Cardmarket pipeline; the "Run pricing (all)" button kicks it off as a
-background job with a progress bar.
+| Screen | URL | What it is for |
+|---|---|---|
+| Scan | `/` | Photos in, identified and priced cards out. Publish to eBay, TCGplayer, Whatnot. |
+| Library | `/portfolio` | Every card you have, have sold and have purchased. Sell from here. |
+| Decks | `/decks` | Popular decks ranked by how much of each you already own, with what is missing and where to buy it. |
+| Marketplace | `/market` | Cards other users on this install have listed. |
 
-The CLI scripts below still work — they read/write the same `output/` files —
-so you can mix and match.
+Scan works without an account. Library, Decks and Marketplace need a login
+(`/register`).
+
+### Scan
+
+1. Drop photos on the drop zone, or use **Take a photo** on a phone. Pick
+   **Binder pages** (each photo is split into up to 9 cards) or **Single
+   cards** (one card per photo).
+2. With **Identify and price automatically** ticked, each upload starts one
+   background job: identify the new cards, then price them. The **Identify +
+   price new cards** button runs the same job by hand. It never re-identifies
+   or re-prices a card that is already done, so running it again is free.
+3. Rows that need a human look (low confidence, sources that disagree, a
+   name-only match) are tinted and sorted to the top, with the reason under
+   the price. Fix them with **Edit**.
+4. **Add to library** moves priced cards (the selection, or all of them) into
+   your library. From there you can sell them or check them against decks.
+
+Identification needs `ANTHROPIC_API_KEY` for anything the free image match
+cannot place (model set by `VISION_MODEL`, default Haiku, roughly a cent per
+binder page). **Identify only** and **Re-price all** are still there for
+running one half on its own, and **Use Terapeak** adds the 365-day eBay comps
+to a re-price.
+
+Every publish button says what it is about to do, with counts and a total,
+and waits for a yes. The eBay one lets you leave out cards whose price is
+flagged for review.
+
+Data lives at `output/db.sqlite` (auto-created; auto-imports any existing
+`output/cards.json` / `output/cards_priced.json` on first launch). The CLI
+scripts below still work. They read and write the same `output/` files, so
+you can mix and match.
+
+### Library
+
+Three tabs over one ledger:
+
+- **Have**: current holdings with market price, 7-day change and value. Each
+  price shows its sources (TCGplayer, Cardmarket, eBay sold), its confidence
+  and its age. Search with `/`, filter to prices that need review, tick rows
+  and **List selected** to put many cards on the marketplace at once.
+- **Sold**: every sale, on this marketplace or anywhere else, with fees, net
+  and realized gain. Realized gain only counts cards with a price paid on
+  file, and says how many that is.
+- **Purchased**: everything bought, with what you paid and what it is worth
+  now.
+
+Cards get into the library three ways: **Import scanned cards** (from Scan),
+buying on the marketplace, or **Add a card** for anything bought elsewhere or
+already owned. They leave it by selling on the marketplace or by **Sold
+elsewhere**, which records an off-site sale (eBay, a card show) with its
+price, fees and date. The ✕ button removes a card without recording a sale.
+
+The ledger is the `library_events` table. A sale on the marketplace writes a
+row for both the seller and the buyer, so history survives the card changing
+hands.
+
+### Decks
+
+**Popular right now** lists the most played archetypes from the largest
+recent [Limitless TCG](https://play.limitlesstcg.com) tournaments. Each one
+shows how many of its 60 cards your library already covers, and the list is
+sorted so the deck you are closest to finishing comes first. The list shown
+for an archetype is the best-placing player's actual 60 cards, and the page
+names the player, placing, tournament and date.
+
+Open a deck to see it card by card:
+
+- **Have / Missing** per card. Any printing of a Trainer or Energy counts. For
+  Pokémon, the exact printing or another printing from the same set counts. A
+  same-named Pokémon from a different set is shown as "check the printing"
+  and is not counted, because same name does not always mean same card.
+- **Price each** from the catalog, with the same provenance line as the
+  library. **Price the unpriced missing cards** looks up the rest in the
+  background.
+- **Estimated cost to finish**, which states how many of the missing cards it
+  covers. Basic energy is left out.
+- **Where to get it**: the cheapest listing on this marketplace with a Buy
+  button, plus search links to TCGplayer and eBay. **Copy missing list**
+  copies the shopping list as a decklist.
+
+**Import a decklist** takes any list in Pokémon TCG Live export format (one
+card per line: `4 Dragapult ex TWM 130`). **Save deck** keeps a popular list
+as it is today.
+
+Popular decks ship as a snapshot in `data/popular_decks.json`, so the page
+works offline. **Refresh** pulls current lists from the Limitless API (4
+requests, cached at `output/cache/decks/popular.json`). `data/set_codes.json`
+maps Pokémon TCG Live set codes (TWM) to pokemontcg.io set ids (sv6).
+
+### Marketplace
+
+Search, filter by set and condition, sort by price or by distance from market
+price. Every listing shows the market price it is being compared to and where
+that number came from. Listings whose market price needs review are tinted
+and say why. **Buy** confirms first and says how payment works.
 
 ### Free image identification (cuts AI cost ~50%+)
 
@@ -96,9 +184,10 @@ the collector number).
 `/portfolio` → **⚙ Advanced** lets a signed-in user store their *own* eBay
 developer keyset (Client ID / Cert ID / RuName from
 [developer.ebay.com](https://developer.ebay.com/)) and run the one-time
-consent flow. Once connected, an **eBay** button appears on each card in "My
-cards" that publishes a live listing via the official Sell API under *their*
-account. Users without keys never see any of it.
+consent flow. Once connected, an **eBay** button appears on each card in the
+library's Have tab. It confirms the card and price, then publishes a live
+listing via the official Sell API under *their* account. Users without keys
+never see any of it.
 
 ## Credentials
 
@@ -275,7 +364,22 @@ pokemon-bulk-lister/
 │  ├─ portal_uploader.py       # headless-browser CSV upload base
 │  ├─ tcgplayer_lister.py      # TCGPlayer seller-portal CSV upload
 │  ├─ whatnot_lister.py        # Whatnot Seller Hub CSV upload
+│  ├─ decks.py                 # decklist parser, library matching, Limitless popular decks
 │  └─ cloudinary_client.py
+├─ webapp/
+│  ├─ app.py                   # Scan bench: upload, identify, price, publish
+│  ├─ db.py                    # bench SQLite schema + migrations
+│  ├─ models.py                # users, catalog, inventory, ledger, decks, marketplace
+│  ├─ catalog.py               # inventory CRUD + import from the bench
+│  ├─ library.py               # sold / purchased ledger, record a sale, add a card
+│  ├─ decks.py                 # deck endpoints
+│  ├─ marketplace.py           # list, buy, orders
+│  ├─ portfolio.py             # valuation, price history, alerts
+│  └─ templates/, static/      # index, portfolio, decks, market, login, register
+├─ data/
+│  ├─ popular_decks.json       # bundled Limitless snapshot (offline fallback)
+│  └─ set_codes.json           # Pokémon TCG Live code -> pokemontcg.io set id
+├─ tests/
 ├─ input/grids/
 ├─ output/
 │  ├─ crops/

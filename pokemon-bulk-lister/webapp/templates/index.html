@@ -3,23 +3,37 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pokémon bulk lister</title>
+  <title>Scan · Pokémon bulk lister</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
   <header>
     <h1>Pokémon bulk lister</h1>
+    <nav class="topnav">
+      <a href="/" class="active">Scan</a>
+      <a href="/portfolio">Library</a>
+      <a href="/decks">Decks</a>
+      <a href="/market">Marketplace</a>
+    </nav>
     <div id="stats" class="stats"></div>
-    <a href="/portfolio" style="margin-left:auto">My portfolio →</a>
   </header>
 
   <section class="panel" id="upload-panel">
-    <div id="dropzone" class="dropzone">
-      <p><strong>Drop binder-page photos here</strong> or click to choose files.</p>
-      <p class="muted">Each grid is auto-split into 9 crops. Empty pockets are skipped.</p>
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload card photos">
+      <p><strong>Drop card photos here</strong> or click to choose files.</p>
+      <p class="muted" id="dropzone-hint">Binder pages are split into up to 9 cards. Empty pockets are skipped.</p>
       <input id="file-input" type="file" multiple accept="image/*" hidden />
+      <input id="camera-input" type="file" accept="image/*" capture="environment" hidden />
     </div>
-    <div id="upload-status" class="muted"></div>
+    <div class="upload-options">
+      <label><input type="radio" name="scan-mode" value="grid" checked /> Binder pages (3×3)</label>
+      <label><input type="radio" name="scan-mode" value="single" /> Single cards (one per photo)</label>
+      <button id="camera-btn" type="button" title="Opens the camera on a phone or tablet">Take a photo</button>
+      <label title="After each upload: identify the new cards, then price them">
+        <input type="checkbox" id="auto-process" checked /> Identify and price automatically
+      </label>
+    </div>
+    <div id="upload-status" class="muted" role="status"></div>
   </section>
 
   <section class="panel toolbar">
@@ -42,8 +56,10 @@
         <input type="checkbox" id="use-terapeak" />
         Use Terapeak <span class="muted small" id="terapeak-status">(checking…)</span>
       </label>
-      <button id="identify-btn" title="AI-identify all unidentified cards (one Claude vision call per binder page)">Identify all (AI)</button>
-      <button id="run-pricing-btn">Run pricing (all)</button>
+      <button id="process-btn" class="primary" title="Identify every unidentified card, then price every card that has no price yet">Identify + price new cards</button>
+      <button id="identify-btn" title="Identify all unidentified cards (free image match first, then one Claude vision call per binder page)">Identify only</button>
+      <button id="run-pricing-btn" title="Re-price every identified card, including ones already priced">Re-price all</button>
+      <button id="library-btn" title="Add priced cards to your library">Add to library</button>
       <button id="export-csv-btn">Export CSVs</button>
       <button id="bundle-btn" disabled title="Select 2+ cards to bundle as a single lot listing">Bundle selected (0)</button>
     </div>
@@ -75,7 +91,7 @@
     <div class="progress"><div id="publish-progress-fill" class="progress-fill"></div></div>
   </section>
 
-  <section class="panel">
+  <section class="panel table-wrap">
     <table id="cards-table">
       <thead>
         <tr>
@@ -135,6 +151,24 @@
     </div>
   </div>
 
+
+  <!-- Confirm modal: shown before anything goes live or leaves the bench -->
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-card confirm-card">
+      <header>
+        <h2 id="confirm-title">Confirm</h2>
+        <button id="confirm-x" aria-label="Close">×</button>
+      </header>
+      <div class="modal-body confirm-body">
+        <div id="confirm-text"></div>
+        <label id="confirm-check-row" class="hidden"><input type="checkbox" id="confirm-check" /> <span id="confirm-check-label"></span></label>
+        <div class="actions">
+          <button id="confirm-cancel" type="button">Cancel</button>
+          <button id="confirm-ok" type="button" class="primary">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Bundle-as-lot modal -->
   <div id="bundle-modal" class="modal hidden">

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Decks · Card Portfolio</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="brand">Card Portfolio</span>
+      <nav>
+        <a href="/">Scan</a>
+        <a href="/portfolio">Library</a>
+        <a href="/decks" class="active">Decks</a>
+        <a href="/market">Marketplace</a>
+      </nav>
+    </div>
+    <div class="topbar-right">
+      <button id="btn-import" class="btn btn-primary">Import a decklist</button>
+      <a href="/logout" class="btn btn-ghost">Log out</a>
+    </div>
+  </header>
+
+  <main class="wrap wide">
+    <div class="deck-layout">
+      <!-- Deck lists -->
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Decks you can build</h2>
+          <select id="deck-sort" aria-label="Sort decks">
+            <option value="closest">Closest to complete</option>
+            <option value="popular">Most played</option>
+          </select>
+        </div>
+        <div id="library-note" class="muted"></div>
+
+        <div class="list-head"><h3>Saved</h3></div>
+        <ul id="saved-list" class="deck-list"><li class="muted">Loading…</li></ul>
+
+        <div class="list-head">
+          <h3>Popular right now</h3>
+          <button id="btn-refresh-popular" class="btn btn-ghost" title="Pull the latest tournament lists from Limitless">Refresh</button>
+        </div>
+        <ul id="popular-list" class="deck-list"></ul>
+        <p id="popular-source" class="source-note"></p>
+      </section>
+
+      <!-- Selected deck -->
+      <section class="panel" id="deck-detail">
+        <p class="muted">Pick a deck to see which cards you have and which you need.</p>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="import-dialog" class="wide">
+    <form method="dialog" id="import-form">
+      <h2>Import a decklist</h2>
+      <p class="muted">Paste a list exported from Pokémon TCG Live, Limitless or any site that uses the same
+        format: one card per line, count first, then name, set code and number.</p>
+      <label>Deck name
+        <input name="name" placeholder="Dragapult ex" maxlength="200">
+      </label>
+      <label>Decklist
+        <textarea name="text" required placeholder="Pokémon: 12
+4 Dragapult ex TWM 130
+...
+Trainer: 36
+4 Ultra Ball SVI 196
+...
+Energy: 12
+6 Fire Energy MEE 10"></textarea>
+      </label>
+      <div class="dialog-row">
+        <button type="button" class="btn" data-close-dialog>Cancel</button>
+        <button type="submit" class="btn btn-primary">Import</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
+  <script src="{{ url_for('static', filename='decks.js') }}"></script>
+</body>
+</html>
