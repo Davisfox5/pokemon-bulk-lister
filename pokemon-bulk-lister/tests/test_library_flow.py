@@ -1,7 +1,7 @@
 """End-to-end over the multi-user layer: library ledger, selling, decks.
 
-Builds a small Flask app from the blueprints (webapp.app itself needs OpenCV,
-which CI does not install) against a throwaway SQLite file.
+Builds a small Flask app from the blueprints against a throwaway SQLite file,
+so the tests do not start webapp.app's scheduler or touch output/.
 """
 from pathlib import Path
 
@@ -235,6 +235,112 @@ def test_promote_from_bench_logs_added_and_does_not_reimport_sold_cards(app):
     c.post(f"/api/inventory/{item['id']}/record-sale", json={"price": 2})
     again = c.post("/api/inventory/promote", json={"all_priced": True}).get_json()
     assert (again["promoted"], again["skipped_duplicates"]) == (0, 1)
+
+
+def _sell(seller, buyer, item_id, price=5):
+    lid = seller.post(f"/api/inventory/{item_id}/list-for-sale", json={"price": price}).get_json()["listing_id"]
+    oid = buyer.post(f"/api/market/listings/{lid}/buy").get_json()["order_id"]
+    return lid, oid
+
+
+def test_a_listed_card_cannot_be_emptied_out_from_under_a_buyer(app):
+    seller, buyer = _user(app, "seller@example.com"), _user(app, "buyer@example.com")
+    item = _add(seller)
+    lid = seller.post(f"/api/inventory/{item['id']}/list-for-sale", json={"price": 5}).get_json()["listing_id"]
+
+    # Setting quantity to 0 takes the listing down with it.
+    assert seller.patch(f"/api/inventory/{item['id']}", json={"quantity": 0}).status_code == 200
+    assert buyer.get("/api/market/listings").get_json()["listings"] == []
+    assert buyer.post(f"/api/market/listings/{lid}/buy").status_code == 404
+
+    # With a buyer waiting, the quantity cannot be zeroed at all.
+    seller.patch(f"/api/inventory/{item['id']}", json={"quantity": 1})
+    _sell(seller, buyer, item["id"])
+    assert seller.patch(f"/api/inventory/{item['id']}", json={"quantity": 0}).status_code == 409
+    assert seller.patch(f"/api/inventory/{item['id']}", json={"quantity": "x"}).status_code == 400
+
+
+def test_non_finite_and_absurd_amounts_are_rejected(app):
+    c = _user(app, "a@example.com")
+    item = _add(c)
+    for bad in ("inf", "nan", "1e999", 2_000_000):
+        assert c.post(f"/api/inventory/{item['id']}/list-for-sale", json={"price": bad}).status_code == 400
+        assert c.post(f"/api/inventory/{item['id']}/record-sale", json={"price": bad}).status_code == 400
+        assert c.post("/api/inventory/add", json={"name": "x", "price": bad}).status_code == 400
+        assert c.patch(f"/api/inventory/{item['id']}", json={"acquired_price": bad}).status_code == 400
+    lid = c.post(f"/api/inventory/{item['id']}/list-for-sale", json={"price": 3}).get_json()["listing_id"]
+    assert c.patch(f"/api/market/listings/{lid}", json={"price": "inf"}).status_code == 400
+    # a non-string note is stored as text, not a server error
+    assert c.post("/api/inventory/add", json={"name": "y", "note": {"a": 1}}).status_code == 200
+
+
+def test_a_card_sold_on_the_marketplace_is_not_reimported_from_the_bench(app):
+    with bench_db.connect(app.bench_path) as conn:
+        gid = bench_db.get_or_create_grid(conn, "page1", "input/grids/page1.jpg")
+        cid = bench_db.insert_card_stub(conn, gid, "output/crops/page1_r0c0.jpg", 0, 0)
+        bench_db.update_card(conn, cid, {"name": "Pikachu", "final_price": 1.25})
+    seller, buyer = _user(app, "seller@example.com"), _user(app, "buyer@example.com")
+    assert seller.post("/api/inventory/promote", json={"card_ids": [cid]}).get_json()["promoted"] == 1
+    item = seller.get("/api/inventory").get_json()["items"][0]
+    _, oid = _sell(seller, buyer, item["id"])
+    seller.post(f"/api/market/orders/{oid}/mark-paid")
+
+    again = seller.post("/api/inventory/promote", json={"all_priced": True}).get_json()
+    assert (again["promoted"], again["skipped_duplicates"]) == (0, 1)
+    assert seller.get("/api/inventory").get_json()["items"] == []
+    totals = _events(seller)["totals"]
+    assert (totals["added_cards"], totals["sold_cards"]) == (1, 1)
+
+
+def test_an_unpaid_order_can_be_cancelled_by_either_side(app):
+    seller, buyer, other = (_user(app, f"{n}@example.com") for n in ("seller", "buyer", "other"))
+    item = _add(seller)
+    lid, oid = _sell(seller, buyer, item["id"])
+    assert other.post(f"/api/market/orders/{oid}/cancel").status_code == 404
+    assert buyer.post(f"/api/market/orders/{oid}/cancel").status_code == 200
+    # the card is free again: repricing works and someone else can buy it
+    assert seller.patch(f"/api/market/listings/{lid}", json={"price": 6}).status_code == 200
+    oid2 = other.post(f"/api/market/listings/{lid}/buy").get_json()["order_id"]
+    assert seller.post(f"/api/market/orders/{oid2}/cancel").status_code == 200
+    assert seller.post(f"/api/market/orders/{oid}/mark-paid").status_code == 404
+    assert _events(seller, "sold")["events"] == []
+
+
+def test_settling_an_order_twice_records_one_sale(app):
+    from webapp import marketplace
+
+    seller, buyer = _user(app, "seller@example.com"), _user(app, "buyer@example.com")
+    item = _add(seller, quantity=3)
+    _, oid = _sell(seller, buyer, item["id"])
+    assert seller.post(f"/api/market/orders/{oid}/mark-paid").status_code == 200
+
+    s = models.get_session()
+    try:  # a retried webhook or a second click arriving with a stale order object
+        order = s.get(models.Order, oid)
+        with pytest.raises(marketplace.PaymentError):
+            marketplace._apply_payment(s, order)
+        s.rollback()
+    finally:
+        s.close()
+    assert _events(seller, "sold")["totals"]["sold_cards"] == 1
+    assert seller.get("/api/inventory").get_json()["items"][0]["quantity"] == 2
+    assert len(buyer.get("/api/inventory").get_json()["items"]) == 1
+
+
+def test_payment_is_refused_when_the_seller_no_longer_holds_the_card(app):
+    seller, buyer = _user(app, "seller@example.com"), _user(app, "buyer@example.com")
+    item = _add(seller)
+    _, oid = _sell(seller, buyer, item["id"])
+    s = models.get_session()
+    try:  # the state the guards prevent, forced directly
+        s.get(models.InventoryItem, item["id"]).quantity = 0
+        s.commit()
+    finally:
+        s.close()
+    r = seller.post(f"/api/market/orders/{oid}/mark-paid")
+    assert r.status_code == 409 and "no longer has this card" in r.get_json()["error"]
+    assert _events(seller, "sold")["events"] == [] and _events(buyer, "purchased")["events"] == []
+    assert buyer.get("/api/market/my").get_json()["purchases"][0]["status"] == "cancelled"
 
 
 DECK = """Pokémon: 2

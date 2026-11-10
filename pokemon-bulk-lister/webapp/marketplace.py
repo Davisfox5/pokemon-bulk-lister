@@ -17,6 +17,7 @@ both portfolios stay truthful.
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 from flask import Blueprint, abort, jsonify, render_template, request
@@ -74,13 +75,21 @@ def _stripe():
 # Selling
 # ----------------------------------------------------------------------
 
+MAX_PRICE = 1_000_000.0
+
+
 def _parse_price(value) -> float | None:
-    """A positive dollar amount, or None when the value is not one."""
+    """A positive, finite dollar amount, or None when the value is not one.
+    ("inf" and "nan" parse as floats; stored, they turn every listing
+    response into invalid JSON.)"""
     try:
-        price = round(float(value), 2)
+        price = float(value)
     except (TypeError, ValueError):
         return None
-    return price if price > 0 else None
+    if not math.isfinite(price):
+        return None
+    price = round(price, 2)
+    return price if 0 < price <= MAX_PRICE else None
 
 
 def _create_listing(s, item: InventoryItem, price: float) -> MarketListing:
@@ -308,6 +317,12 @@ def buy(listing_id: int):
             return jsonify({"error": "that's your own listing"}), 400
         if s.query(Order).filter_by(listing_id=listing.id, status="pending_payment").count():
             return jsonify({"error": "another buyer already has a pending order"}), 409
+        item = s.get(InventoryItem, listing.inventory_item_id)
+        if item is None or item.user_id != listing.seller_id or item.quantity < 1:
+            # The seller no longer holds the card; the listing is stale.
+            listing.status = "cancelled"
+            s.commit()
+            return jsonify({"error": "this card is no longer available"}), 409
 
         amount = listing.price
         order = Order(
@@ -357,55 +372,74 @@ def buy(listing_id: int):
         s.close()
 
 
+class PaymentError(Exception):
+    """The order cannot be settled; the message is safe to show the user."""
+
+
 def _apply_payment(s, order: Order) -> None:
-    """Mark paid + move the card from seller to buyer. Caller commits."""
+    """Mark paid + move the card from seller to buyer. Caller commits.
+
+    Safe to call twice for one order: the order is claimed with a conditional
+    UPDATE first, so a double click or a webhook retry settles it once and
+    the ledger gets one sold/purchased pair, not two.
+    """
+    claimed = s.query(Order).filter(
+        Order.id == order.id, Order.status == "pending_payment"
+    ).update({"status": "paid"}, synchronize_session=False)
+    if claimed != 1:
+        raise PaymentError("this order was already settled or cancelled")
+
     listing = s.get(MarketListing, order.listing_id)
     item = s.get(InventoryItem, listing.inventory_item_id)
     now = utcnow()
+    if item is None or item.user_id != order.seller_id or item.quantity < 1:
+        # Nothing to hand over. Cancel rather than record a sale of a card
+        # the seller does not hold.
+        s.query(Order).filter(Order.id == order.id).update(
+            {"status": "cancelled"}, synchronize_session=False)
+        listing.status = "cancelled"
+        s.commit()
+        raise PaymentError("the seller no longer has this card; the order was cancelled")
 
     # Both sides of the trade go in the library ledger. Cost basis is read
     # before the row changes hands below.
     common = dict(
         channel="market", unit_price=order.amount, order_id=order.id,
-        condition=item.condition if item else None,
-        image_url=item.image_url if item else None,
-        crop_path=item.source_crop_path if item else None,
-        occurred_at=now,
+        condition=item.condition, image_url=item.image_url,
+        crop_path=item.source_crop_path, occurred_at=now,
     )
     log_event(s, order.seller_id, listing.catalog_card_id, "sold",
-              unit_cost=item.acquired_price if item else None,
-              fees=order.platform_fee, **common)
+              unit_cost=item.acquired_price, fees=order.platform_fee, **common)
     log_event(s, order.buyer_id, listing.catalog_card_id, "purchased", **common)
 
-    if item is not None and item.user_id == order.seller_id:
-        if item.quantity > 1:
-            item.quantity -= 1
-            s.add(InventoryItem(
-                user_id=order.buyer_id,
-                catalog_card_id=item.catalog_card_id,
-                quantity=1,
-                condition=item.condition,
-                acquired_price=order.amount,
-                acquired_at=now,
-                image_url=item.image_url,
-                source_crop_path=item.source_crop_path,
-            ))
-        else:
-            item.user_id = order.buyer_id
-            item.acquired_price = order.amount
-            item.acquired_at = now
-            item.notes = None
+    if item.quantity > 1:
+        item.quantity -= 1
+        s.add(InventoryItem(
+            user_id=order.buyer_id,
+            catalog_card_id=item.catalog_card_id,
+            quantity=1,
+            condition=item.condition,
+            acquired_price=order.amount,
+            acquired_at=now,
+            image_url=item.image_url,
+            source_crop_path=item.source_crop_path,
+        ))
+    else:
+        item.user_id = order.buyer_id
+        item.acquired_price = order.amount
+        item.acquired_at = now
+        item.notes = None
 
     listing.status = "sold"
     listing.sold_at = now
-    order.status = "paid"
-    order.paid_at = now
+    s.query(Order).filter(Order.id == order.id).update(
+        {"paid_at": now}, synchronize_session=False)
     # Any other pending orders on this listing lose the race.
     s.query(Order).filter(
         Order.listing_id == listing.id,
         Order.id != order.id,
         Order.status == "pending_payment",
-    ).update({"status": "cancelled"})
+    ).update({"status": "cancelled"}, synchronize_session=False)
 
 
 @market_bp.route("/api/market/orders/<int:order_id>/mark-paid", methods=["POST"])
@@ -420,11 +454,38 @@ def mark_paid(order_id: int):
         ).one_or_none()
         if order is None:
             abort(404)
-        _apply_payment(s, order)
+        try:
+            _apply_payment(s, order)
+        except PaymentError as exc:
+            return jsonify({"error": str(exc)}), 409
         s.commit()
     finally:
         s.close()
     return jsonify({"order_id": order_id, "status": "paid"})
+
+
+@market_bp.route("/api/market/orders/<int:order_id>/cancel", methods=["POST"])
+@login_required
+def cancel_order(order_id: int):
+    """Either side can back out of an unpaid order. Without this, a buyer who
+    clicks Buy and never pays would hold the seller's card indefinitely.
+    Orders being paid through Stripe are left alone: the payment may already
+    be in flight."""
+    uid = current_user_id()
+    s = get_session()
+    try:
+        order = s.query(Order).filter(
+            Order.id == order_id, Order.status == "pending_payment",
+            Order.payment_provider == "offline",
+            (Order.buyer_id == uid) | (Order.seller_id == uid),
+        ).one_or_none()
+        if order is None:
+            abort(404)
+        order.status = "cancelled"
+        s.commit()
+    finally:
+        s.close()
+    return jsonify({"order_id": order_id, "status": "cancelled"})
 
 
 @market_bp.route("/api/market/orders/<int:order_id>/complete", methods=["POST"])
@@ -469,8 +530,11 @@ def stripe_webhook():
         try:
             order = s.query(Order).filter_by(id=order_id, status="pending_payment").one_or_none()
             if order is not None:
-                _apply_payment(s, order)
-                s.commit()
+                try:
+                    _apply_payment(s, order)
+                    s.commit()
+                except PaymentError as exc:
+                    print(f"[market] stripe order {order_id}: {exc}", file=sys.stderr)
         finally:
             s.close()
     return jsonify({"received": True})

@@ -96,6 +96,9 @@ class SetCodes:
         except (OSError, ValueError):
             return cls({})
 
+    def known(self, code: Optional[str]) -> bool:
+        return (code or "").upper() in self._by_code
+
     def ids(self, code: Optional[str]) -> list[str]:
         return list((self._by_code.get((code or "").upper()) or {}).get("ids") or [])
 
@@ -124,35 +127,59 @@ class SetCodes:
 # ----------------------------------------------------------------------
 
 _SECTION_RE = re.compile(
-    r"^(pok[eé]mon|trainers?|energy|energies)\b\s*[:\-]?\s*\(?\d*\)?\s*$", re.I
+    r"^(?:\d+\s+)?(pok[eé]mon|trainers?|energy|energies)\b\s*[:\-]?\s*\(?\d*\)?\s*$", re.I
 )
 _SECTION_KEY = {"pok": "pokemon", "tra": "trainer", "ene": "energy"}
-# "4 Dragapult ex TWM 130" (set code is upper-case, 2-6 chars, may hold digits
-# or a dash: 30C, PR-SV). An optional trailing "PH" marks a parallel foil.
+# List markers some sites put in front of a line: "* 4 Arven", "## Pokémon".
+_LEAD_RE = re.compile(r"^[\s*#•\-]+")
+# "4 Dragapult ex TWM 130": count, name, set code, collector number. The
+# number may carry a letter prefix (TG05, SWSH061), a one-letter suffix (97A)
+# and a "/total" tail (168/131). An optional trailing "PH" marks a parallel foil.
 _CARD_RE = re.compile(
-    r"^(\d+)x?\s+(.+?)\s+([A-Z0-9][A-Z0-9-]{1,5})\s+([A-Za-z]{0,3}\d+[a-z]?)(?:\s+PH)?$"
+    r"^(\d+)(?:\s*x(?=\s))?\s+(.+?)\s+([A-Za-z0-9][A-Za-z0-9-]{1,5})"
+    r"\s+([A-Za-z]{0,7}\d+[A-Za-z]?)(?:/\d+)?(?:\s+PH)?$"
 )
-_NAME_ONLY_RE = re.compile(r"^(\d+)x?\s+(.+)$")
+_NAME_ONLY_RE = re.compile(r"^(\d+)(?:\s*x(?=\s))?\s+(.+)$")
+# Card-name suffixes that look like set codes: "Charizard EX 12" is a name
+# followed by a number, not a card from a set called EX.
+_NOT_SET_CODES = {"EX", "GX", "V", "VMAX", "VSTAR", "BREAK", "LV", "STAR", "PRIME"}
 
 
-def parse_decklist(text: str) -> dict[str, Any]:
+def _looks_like_set_code(code: str, set_codes: Optional["SetCodes"]) -> bool:
+    if set_codes is not None and set_codes.known(code):
+        return True          # a real code in any letter case: "sv1", "TWM"
+    if code.upper() in _NOT_SET_CODES or not any(ch.isalpha() for ch in code):
+        return False
+    return code == code.upper()   # unknown but shaped like one (a new set)
+
+
+def parse_decklist(text: str, set_codes: Optional["SetCodes"] = None) -> dict[str, Any]:
     """Parse a pasted decklist. Returns {"cards": [...], "total": int,
-    "warnings": [...]}; each card is {section, count, name, set, number}."""
+    "warnings": [...]}; each card is {section, count, name, set, number}.
+
+    `set_codes`, when given, lets a real set code be recognised in any letter
+    case. A list with no Pokémon/Trainer/Energy headers gets section
+    "unknown" on every non-energy line (and a warning): the matcher then
+    refuses to assume a substitute printing is the same card.
+    """
     cards: list[dict] = []
     warnings: list[str] = []
     section: Optional[str] = None
+    saw_header = False
 
     for raw in (text or "").splitlines():
-        line = raw.strip()
+        line = _LEAD_RE.sub("", raw).strip()
         if not line or line.lower().startswith("total cards"):
             continue
         m = _SECTION_RE.match(line)
         if m:
             section = _SECTION_KEY[unicodedata.normalize("NFKD", m.group(1))[:3].lower()]
+            saw_header = True
             continue
         m = _CARD_RE.match(line)
-        if m and any(ch.isalpha() for ch in m.group(3)):
+        if m and _looks_like_set_code(m.group(3), set_codes):
             count, name, set_code, number = m.groups()
+            set_code = set_code.upper()
         else:
             m = _NAME_ONLY_RE.match(line)
             if not m:
@@ -167,7 +194,7 @@ def parse_decklist(text: str) -> dict[str, Any]:
         name = name.strip()
         sec = section
         if sec is None:
-            sec = "energy" if is_basic_energy(name) else "pokemon"
+            sec = "energy" if is_basic_energy(name) else "unknown"
         cards.append({
             "section": sec,
             "count": count_i,
@@ -177,6 +204,9 @@ def parse_decklist(text: str) -> dict[str, Any]:
         })
 
     total = sum(c["count"] for c in cards)
+    if cards and not saw_header:
+        warnings.append("no Pokémon / Trainer / Energy headings found, so cards "
+                        "only count as owned when the exact printing matches")
     if cards and total != 60:
         warnings.append(f"list has {total} cards, a legal deck has 60")
     return {"cards": cards, "total": total, "warnings": warnings}
@@ -201,6 +231,13 @@ def format_decklist(cards: Iterable[dict], only_missing: bool = False) -> str:
 # Matching a deck against a library
 # ----------------------------------------------------------------------
 
+def any_printing_plays(card: dict) -> bool:
+    """Trainers and Energy play the same whatever the printing. Pokémon do
+    not: two cards with one name, even inside one set, can be different
+    cards (a set often prints two different Basics of the same Pokémon)."""
+    return card.get("section") in ("trainer", "energy") or is_basic_energy(card["name"])
+
+
 def match_deck(cards: list[dict], owned: list[dict],
                set_codes: Optional[SetCodes] = None) -> dict[str, Any]:
     """Work out which deck cards the library covers.
@@ -209,13 +246,14 @@ def match_deck(cards: list[dict], owned: list[dict],
 
     A library copy is spent once, so two deck lines for the same card cannot
     both claim it. Per deck line:
-      have_exact  copies of this exact printing
-      have_other  copies of another printing that is safe to play instead:
-                  any printing of a Trainer or Energy, or the same Pokemon
-                  name from the same set (an alternate art)
-      maybe       copies of a same-named Pokemon from a different set. Same
-                  name does not mean same card for Pokemon, so these do not
-                  count toward the deck; the UI asks the user to check.
+      have_exact  copies of this exact printing (set and number)
+      have_other  copies of another printing, counted only where any printing
+                  plays the same: Trainers and Energy
+      maybe       copies of a same-named card that might or might not be this
+                  one: a Pokémon with a different set or number, or any
+                  same-named card when the list has no section headings.
+                  These do not count toward the deck; the UI asks the user
+                  to check. Each copy is offered to one line only.
       missing     count - have_exact - have_other
     """
     sc = set_codes or SetCodes()
@@ -249,22 +287,17 @@ def match_deck(cards: list[dict], owned: list[dict],
         entries = [o for o in pool.get(norm_name(c["name"]), ()) if is_exact(c, o)]
         c["have_exact"] = take(entries, c["count"])
 
-    # Pass 2: substitutes for whatever is still short.
+    # Pass 2: substitutes for whatever is still short. `take` spends the
+    # copies either way, so a stray copy is counted, or flagged, only once.
     for c in out:
         need = c["count"] - c["have_exact"]
         if need <= 0:
             continue
         entries = [o for o in pool.get(norm_name(c["name"]), ()) if o["_left"] > 0]
-        any_printing = c.get("section") in ("trainer", "energy") or is_basic_energy(c["name"])
-        if any_printing or not c.get("set"):
+        if any_printing_plays(c):
             c["have_other"] = take(entries, need)
         else:
-            same_set = [o for o in entries
-                        if sc.same_set(c["set"], o.get("set_code"), o.get("set_name"))]
-            c["have_other"] = take(same_set, need)
-            need -= c["have_other"]
-            if need > 0:
-                c["maybe"] = min(need, sum(o["_left"] for o in entries))
+            c["maybe"] = take(entries, need)
 
     total = have = 0
     for c in out:

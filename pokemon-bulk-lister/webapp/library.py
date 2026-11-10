@@ -8,6 +8,7 @@ happened somewhere else (eBay, a card show, a trade night).
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Optional
 
@@ -47,12 +48,18 @@ def _money(value, field: str) -> Optional[float]:
     if value in (None, ""):
         return None
     try:
-        amount = round(float(value), 2)
+        amount = float(value)
     except (TypeError, ValueError):
         raise ValueError(f"{field} must be a number")
-    if amount < 0:
-        raise ValueError(f"{field} cannot be negative")
-    return amount
+    if not math.isfinite(amount):   # "nan" and "inf" parse as floats
+        raise ValueError(f"{field} must be a number")
+    if amount < 0 or amount > 1_000_000:
+        raise ValueError(f"{field} must be between 0 and 1,000,000")
+    return round(amount, 2)
+
+
+def _note(value) -> Optional[str]:
+    return str(value)[:500] if value not in (None, "") else None
 
 
 def _quantity(value) -> int:
@@ -220,7 +227,7 @@ def record_sale(item_id: int):
             channel=channel, quantity=quantity, unit_price=price,
             unit_cost=item.acquired_price, fees=fees, condition=item.condition,
             image_url=item.image_url, crop_path=item.source_crop_path,
-            note=body.get("note"), occurred_at=_parse_date(body.get("sold_on")),
+            note=_note(body.get("note")), occurred_at=_parse_date(body.get("sold_on")),
         )
         # The row stays at quantity 0 rather than being deleted: it keeps a
         # re-import of the same scan from putting a sold card back.
@@ -279,13 +286,13 @@ def add_card():
         item = InventoryItem(
             user_id=uid, catalog_card_id=cc.id, quantity=quantity,
             condition=condition, acquired_price=price, acquired_at=when,
-            notes=body.get("note") or None,
+            notes=_note(body.get("note")),
         )
         s.add(item)
         log_event(
             s, uid, cc.id, "purchased" if purchased else "added",
             channel=channel, quantity=quantity, unit_price=price,
-            condition=condition, note=body.get("note"), occurred_at=when,
+            condition=condition, note=_note(body.get("note")), occurred_at=when,
         )
         s.commit()
         out = _item_dict(s, item)

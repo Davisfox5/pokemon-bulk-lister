@@ -21,7 +21,7 @@ async function loadLists() {
     el.textContent = "No popular decks loaded. Click Refresh to pull them from Limitless.";
   } else {
     const events = src.tournaments
-      .map((t) => `${esc(t.name)} (${esc(t.date)}, ${t.players} players)`).join("; ");
+      .map((t) => `${esc(t.name)} (${esc(t.date)}, ${esc(t.players)} players)`).join("; ");
     el.innerHTML = `Source: ${esc(src.source)}, ${esc((src.format || "").toLowerCase())} format.
       Share = part of the decks entered in ${src.tournaments.length} tournament${src.tournaments.length === 1 ? "" : "s"}:
       ${events}. ${src.origin === "bundled" ? "Snapshot shipped with the app" : "Refreshed"}
@@ -102,15 +102,15 @@ async function loadDetail() {
   if (d.pricing_running) dk.pollTimer = setTimeout(() => loadDetail().catch(() => {}), 5000);
 }
 
-const SECTION_LABELS = { pokemon: "Pokémon", trainer: "Trainers", energy: "Energy" };
+const SECTION_LABELS = { pokemon: "Pokémon", trainer: "Trainers", energy: "Energy", unknown: "Cards (list had no headings)" };
 
 function sourceLine(d) {
   const s = d.meta && d.meta.sample;
   if (!s) return d.source === "paste" ? "Imported decklist." : "";
-  const place = s.placing ? `placed ${s.placing} of ${s.tournament_players}` : "played";
+  const place = s.placing ? `placed ${esc(s.placing)} of ${esc(s.tournament_players)}` : "played";
   return `List by ${esc(s.player)}, who ${place} (${esc(s.record)}) at
     <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.tournament)}</a>, ${esc(s.tournament_date)}.
-    ${d.meta.share_pct != null ? `${d.meta.share_pct}% of decks entered. ` : ""}Source: ${esc(d.meta.source || "Limitless TCG")}.`;
+    ${d.meta.share_pct != null ? `${esc(d.meta.share_pct)}% of decks entered. ` : ""}Source: ${esc(d.meta.source || "Limitless TCG")}.`;
 }
 
 function renderDetail() {
@@ -121,7 +121,7 @@ function renderDetail() {
     : !covers ? "only basic energy is missing"
     : `covers ${c.priced_missing} of ${covers} missing cards${c.basic_energy_missing ? ", basic energy left out" : ""}`;
 
-  const sections = ["pokemon", "trainer", "energy"].map((sec) => {
+  const sections = ["pokemon", "trainer", "energy", "unknown"].map((sec) => {
     const rows = d.cards.filter((card) => card.section === sec && (!dk.missingOnly || card.missing > 0 || card.maybe > 0));
     if (!rows.length) return "";
     const all = d.cards.filter((card) => card.section === sec);
@@ -158,7 +158,7 @@ function renderDetail() {
       <div class="tile ${s.maybe ? "flag" : ""}">
         <div class="tile-label">Check the printing</div>
         <div class="tile-value">${s.maybe}</div>
-        <div class="tile-sub">${s.maybe ? "same name, different set; not counted" : "nothing to check"}</div>
+        <div class="tile-sub">${s.maybe ? "same name, different printing; not counted" : "nothing to check"}</div>
       </div>
       <div class="tile">
         <div class="tile-label">Estimated cost to finish</div>
@@ -193,7 +193,7 @@ function cardRow(card) {
   const other = card.have_other
     ? `<div class="inv-set">${card.have_other} from another printing</div>` : "";
   const maybe = card.maybe
-    ? `<span class="flag-note">You own ${card.maybe} “${esc(card.name)}” from a different set. Same name is not always the same card; check before counting it.</span>` : "";
+    ? `<span class="flag-note">You own ${card.maybe} “${esc(card.name)}” in a different printing. Same name is not always the same card; check before counting it.</span>` : "";
   const price = card.basic_energy
     ? '<span class="prov">basic energy, not priced</span>'
     : card.price
@@ -206,7 +206,7 @@ function cardRow(card) {
     const onPlatform = best
       ? `<span>${fmtUsd(best.price)} ${esc(best.condition)} from ${esc(best.seller)}${
           best.exact ? "" : ` (${esc([best.set_name, best.card_number ? "#" + best.card_number : ""].filter(Boolean).join(" "))})`}</span>
-         ${best.check_printing ? '<span class="pill warn">different set, check the card</span>' : ""}
+         ${best.check_printing ? '<span class="pill warn">different printing, check the card</span>' : ""}
          <button class="btn btn-primary" data-act="buy" data-card="${idx}">Buy</button>
          ${card.listing_count > 1
            ? `<a href="/market?q=${encodeURIComponent(card.name)}">${card.listing_count - 1} more</a>` : ""}`

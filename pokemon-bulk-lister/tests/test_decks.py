@@ -94,10 +94,76 @@ def test_match_same_name_pokemon_from_another_set_is_only_a_maybe():
     assert m["maybe"] == 2
 
 
-def test_match_alternate_art_in_the_same_set_counts():
+def test_match_same_set_different_number_pokemon_is_not_assumed_to_be_the_card():
+    # A set often prints two different Basics with one name (Tinkatink PAL
+    # 101 and 102), so a different number never counts on its own.
     owned = [{"name": "Dragapult ex", "set_code": "sv6", "card_number": "200", "quantity": 1}]
     m = decks.match_deck([_card("pokemon", 2, "Dragapult ex", "TWM", "130")], owned, SC)
-    assert (m["cards"][0]["have_other"], m["cards"][0]["missing"]) == (1, 1)
+    c = m["cards"][0]
+    assert (c["have"], c["maybe"], c["missing"]) == (0, 1, 2)
+
+
+def test_match_offers_a_stray_copy_to_one_line_only():
+    owned = [{"name": "Ralts", "set_code": "sv1", "card_number": "84", "quantity": 1}]
+    m = decks.match_deck([
+        _card("pokemon", 2, "Ralts", "TWM", "60"),
+        _card("pokemon", 2, "Ralts", "PAF", "27"),
+    ], owned, SC)
+    assert m["maybe"] == 1 and m["have"] == 0
+
+
+def test_match_name_only_pokemon_line_is_a_maybe_but_a_trainer_counts():
+    owned = [
+        {"name": "Pikachu", "set_code": "sv6", "card_number": "57", "quantity": 1},
+        {"name": "Ultra Ball", "set_code": "sv1", "card_number": "196", "quantity": 1},
+    ]
+    m = decks.match_deck([_card("pokemon", 1, "Pikachu"), _card("trainer", 1, "Ultra Ball")], owned, SC)
+    assert (m["cards"][0]["have"], m["cards"][0]["maybe"]) == (0, 1)
+    assert m["cards"][1]["have"] == 1
+
+
+def test_list_without_headings_only_counts_exact_printings():
+    parsed = decks.parse_decklist("4 Ultra Ball SVI 196\n2 Fire Energy MEE 10\n", SC)
+    assert [c["section"] for c in parsed["cards"]] == ["unknown", "energy"]
+    assert any("headings" in w for w in parsed["warnings"])
+    other = [{"name": "Ultra Ball", "set_code": "sv4pt5", "card_number": "91", "quantity": 4}]
+    m = decks.match_deck(parsed["cards"], other, SC)
+    assert (m["cards"][0]["have"], m["cards"][0]["maybe"]) == (0, 4)
+    exact = [{"name": "Ultra Ball", "set_code": "sv1", "card_number": "196", "quantity": 4}]
+    assert decks.match_deck(parsed["cards"], exact, SC)["cards"][0]["have"] == 4
+
+
+def test_parse_does_not_mistake_name_suffixes_for_set_codes():
+    parsed = decks.parse_decklist("Pokémon: 2\n2 Charizard EX 12\n1 Mewtwo VSTAR 31\n", SC)
+    assert [(c["name"], c["set"]) for c in parsed["cards"]] == [
+        ("Charizard EX 12", None), ("Mewtwo VSTAR 31", None)]
+
+
+def test_parse_accepts_the_number_and_marker_variants_sites_use():
+    text = "\n".join([
+        "12 Pokémon",
+        "1 Pikachu V PR-SW SWSH061",
+        "1 Mimikyu CEL 97A",
+        "1 Bloodmoon Ursaluna ex PRE 168/131",
+        "3 Nest Ball svi 181",          # known code in lower case
+        "* 4 Arven SVI 166",
+        "4 x Iono PAL 185",
+        "2 Xatu PAR 72",
+        "## Energy - 2",
+        "2 Fire Energy MEE 10",
+    ])
+    cards = decks.parse_decklist(text, SC)["cards"]
+    assert [(c["count"], c["name"], c["set"], c["number"]) for c in cards] == [
+        (1, "Pikachu V", "PR-SW", "SWSH061"),
+        (1, "Mimikyu", "CEL", "97A"),
+        (1, "Bloodmoon Ursaluna ex", "PRE", "168"),
+        (3, "Nest Ball", "SVI", "181"),
+        (4, "Arven", "SVI", "166"),
+        (4, "Iono", "PAL", "185"),
+        (2, "Xatu", "PAR", "72"),
+        (2, "Fire Energy", "MEE", "10"),
+    ]
+    assert [c["section"] for c in cards] == ["pokemon"] * 7 + ["energy"]
 
 
 def test_match_never_spends_one_copy_twice():

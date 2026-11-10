@@ -625,7 +625,7 @@ async function loadRules() {
   const ul = $("#rules-list");
   ul.innerHTML = data.rules.map((r) => `
     <li>
-      <span>${RULE_LABELS[r.kind] ? RULE_LABELS[r.kind](r) : r.kind}
+      <span>${RULE_LABELS[r.kind] ? RULE_LABELS[r.kind](r) : esc(r.kind)}
         <span class="muted"> — ${r.card_name ? esc(r.card_name) : "all cards"}</span></span>
       <button class="btn btn-ghost rule-del" data-id="${r.id}">✕</button>
     </li>`).join("") || '<li class="muted">No rules.</li>';
@@ -690,7 +690,8 @@ async function loadMarket() {
   // the Sold and Purchased tabs.
   for (const o of data.sales.filter((o) => o.status === "pending_payment")) {
     const action = o.payment_provider === "offline"
-      ? `<button class="btn mk-paid" data-id="${o.order_id}" data-card="${esc(o.card)}" data-amount="${o.amount}">Mark paid</button>` : "";
+      ? `<button class="btn mk-paid" data-id="${o.order_id}" data-card="${esc(o.card)}" data-amount="${o.amount}">Mark paid</button>
+         <button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}" title="The buyer never paid">Cancel order</button>` : "";
     rows.push(`<li>
       <span>Buyer waiting: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
         <span class="muted">you get ${fmtUsd(o.seller_proceeds)} after the ${fmtUsd(o.platform_fee)} fee</span>
@@ -700,7 +701,9 @@ async function loadMarket() {
   }
   for (const o of data.purchases.filter((o) => ["pending_payment", "paid"].includes(o.status))) {
     const action = o.status === "paid"
-      ? `<button class="btn mk-complete" data-id="${o.order_id}">Card arrived</button>` : "";
+      ? `<button class="btn mk-complete" data-id="${o.order_id}">Card arrived</button>`
+      : o.payment_provider === "offline"
+        ? `<button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}">Cancel order</button>` : "";
     rows.push(`<li>
       <span>Buying: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)} ${ORDER_STATUS[o.status]}
         ${o.status === "pending_payment" ? '<span class="muted">pay the seller; they confirm it</span>' : ""}</span>
@@ -729,6 +732,16 @@ $("#market-list").addEventListener("click", async (e) => {
       if (!ok) return;
       await postJson(`/api/market/orders/${btn.dataset.id}/mark-paid`);
       toast("Sale recorded. The card is now in the buyer's library.");
+    } else if (btn.classList.contains("mk-void")) {
+      const { ok } = await askConfirm({
+        title: "Cancel this order?",
+        html: `<p>The order for <strong>${esc(btn.dataset.card)}</strong> is cancelled. No sale is recorded
+               and the card goes back on the marketplace for other buyers.</p>`,
+        confirm: "Cancel order",
+      });
+      if (!ok) return;
+      await postJson(`/api/market/orders/${btn.dataset.id}/cancel`);
+      toast("Order cancelled.");
     } else if (btn.classList.contains("mk-complete")) {
       await postJson(`/api/market/orders/${btn.dataset.id}/complete`);
       toast("Order completed.");

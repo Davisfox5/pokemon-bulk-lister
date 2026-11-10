@@ -297,7 +297,9 @@ async function addToLibrary() {
     confirm: "Add to library",
   });
   if (!ok) return;
-  const body = picked.length ? { card_ids: ready.map(c => c.id) } : { all_priced: true };
+  // Send exactly the cards the dialog counted, never "everything priced":
+  // with a filter on, the table shows only part of the bench.
+  const body = { card_ids: ready.map(c => c.id) };
   const res = await api("/api/inventory/promote", { method: "POST", body: JSON.stringify(body) });
   $("#upload-status").innerHTML =
     `Added ${plural(res.promoted, "card")} to your library` +
@@ -628,7 +630,7 @@ function setupToolbar() {
 
   $("#run-pricing-btn").addEventListener("click", async () => {
     const useTerapeak = $("#use-terapeak").checked ? "1" : "0";
-    const n = state.cards.filter(c => c.name).length;
+    const n = state.stats.identified ?? 0;  // whole bench, not the filtered view
     const { ok } = await askConfirm({
       title: `Re-price ${plural(n, "card")}?`,
       html: `<p>This looks up every identified card again, including the ones already priced, and
@@ -739,41 +741,57 @@ function setupPublish() {
       alert(err.message);
       return;
     }
-    const c = status.counts;
+    const c = status.counts[site];
     if (!status[site].ready) {
       $("#publish-msg").textContent = `${SITE_NAMES[site]} is not set up: ${status[site].reason || "see the note above"}.`;
       return;
     }
-    let skipFlagged = false;
+    const WHY_LEFT_OUT = {
+      ebay: "without a hosted image (Edit, then “Push to Cloudinary”)",
+      tcgplayer: "without a TCGplayer product id (they did not match a TCGplayer product when priced)",
+    };
+    const leftOut = c.left_out
+      ? `<p class="muted">${plural(c.left_out, "priced card")} ${WHY_LEFT_OUT[site]} will be left out.</p>` : "";
+    if (!c.count) {
+      $("#publish-msg").textContent = status.counts.priced
+        ? `Nothing to send to ${SITE_NAMES[site]}: ${plural(c.left_out, "priced card")} ${WHY_LEFT_OUT[site]}.`
+        : "Nothing to publish: no cards are priced yet.";
+      return;
+    }
+    const money = v => `$${v.toFixed(2)}`;
+    let skipFlagged = false, expected = null;
     if (site === "ebay") {
-      if (!c.ebay_eligible) {
-        $("#publish-msg").textContent = c.priced
-          ? `Nothing to list: ${plural(c.ebay_missing_image, "priced card")} still need a hosted image (Edit, then “Push to Cloudinary”).`
-          : "Nothing to list: no cards are priced yet.";
-        return;
-      }
+      // Flagged prices stay off eBay unless the user opts them in, the same
+      // default the library's bulk list uses.
+      const clean = c.count - c.flagged;
       const answer = await askConfirm({
-        title: `Publish ${plural(c.ebay_eligible, "live eBay listing")}?`,
-        html: `<p>${plural(c.ebay_eligible, "card")} will be listed live on your eBay account at their final
-          prices, $${c.ebay_total.toFixed(2)} in total. Buyers can purchase them as soon as this finishes.
-          Cards already on eBay are updated, not duplicated.</p>
-          ${c.ebay_missing_image ? `<p class="muted">${plural(c.ebay_missing_image, "priced card")} without a hosted image will be skipped.</p>` : ""}
-          ${c.ebay_flagged ? `<p class="flag-text">${plural(c.ebay_flagged, "of these card")} ${c.ebay_flagged === 1 ? "has a price" : "have prices"} flagged for review.</p>` : ""}`,
+        title: c.flagged
+          ? `Publish live eBay listings for ${plural(clean, "card")}?`
+          : `Publish ${plural(c.count, "live eBay listing")}?`,
+        html: `<p>${plural(clean, "card")} will be listed live on your eBay account at their final
+          prices, ${money(c.total - c.flagged_total)} in total. Buyers can purchase them as soon as this
+          finishes. Cards already on eBay are updated, not duplicated.</p>
+          ${leftOut}
+          ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "more card")} (${money(c.flagged_total)})
+            ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review and will not be listed
+            unless you tick the box.</p>` : ""}`,
         confirm: "Publish to eBay",
-        checkbox: c.ebay_flagged ? `Leave out the ${c.ebay_flagged} flagged` : null,
+        checkbox: c.flagged ? `Also list the ${c.flagged} flagged` : null,
       });
       if (!answer.ok) return;
-      skipFlagged = answer.checked;
-    } else {
-      if (!c.priced) {
-        $("#publish-msg").textContent = "Nothing to upload: no cards are priced yet.";
+      skipFlagged = !answer.checked;
+      expected = answer.checked ? c.count : clean;
+      if (!expected) {
+        $("#publish-msg").textContent = "Nothing listed: every eligible card has a flagged price.";
         return;
       }
+    } else {
       const answer = await askConfirm({
-        title: `Upload ${plural(c.priced, "card")} to ${SITE_NAMES[site]}?`,
-        html: `<p>A CSV with ${plural(c.priced, "priced card")}, $${c.priced_total.toFixed(2)} in total, will be
+        title: `Upload ${plural(c.count, "card")} to ${SITE_NAMES[site]}?`,
+        html: `<p>A CSV with ${plural(c.count, "priced card")}, ${money(c.total)} in total, will be
           generated and submitted through your ${SITE_NAMES[site]} seller portal session.</p>
-          ${c.priced_flagged ? `<p class="flag-text">${plural(c.priced_flagged, "of these card")} ${c.priced_flagged === 1 ? "has a price" : "have prices"} flagged for review. Fix or re-price them first if they should not go out as is.</p>` : ""}`,
+          ${leftOut}
+          ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "of these card")} ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review. Fix or re-price them first if they should not go out as is.</p>` : ""}`,
         confirm: `Upload to ${SITE_NAMES[site]}`,
       });
       if (!answer.ok) return;
@@ -781,7 +799,7 @@ function setupPublish() {
     btn.disabled = true;
     const endpoint = site === "ebay" ? "/api/publish/ebay" : "/api/publish/portal";
     const opts = site === "ebay"
-      ? { method: "POST", body: JSON.stringify({ skip_flagged: skipFlagged }) }
+      ? { method: "POST", body: JSON.stringify({ skip_flagged: skipFlagged, expected }) }
       : { method: "POST", body: JSON.stringify({ site }) };
     try {
       await api(endpoint, opts);

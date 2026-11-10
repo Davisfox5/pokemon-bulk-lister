@@ -177,8 +177,7 @@ def _is_exact(card: dict, cc: CatalogCard) -> bool:
     )
 
 
-def _any_printing(card: dict) -> bool:
-    return card.get("section") in ("trainer", "energy") or deck_lib.is_basic_energy(card["name"])
+_any_printing = deck_lib.any_printing_plays
 
 
 def _price_for(card: dict, candidates: list[CatalogCard]) -> Optional[dict]:
@@ -233,9 +232,8 @@ def _listings_for(s, uid: int, cards: list[dict],
             if deck_lib.norm_name(cc.name) != deck_lib.norm_name(card["name"]):
                 continue
             exact = _is_exact(card, cc)
-            same_set = set_codes().same_set(card.get("set"), cc.set_code, cc.set_name)
-            # A same-named Pokemon from another set may be a different card.
-            playable = exact or _any_printing(card) or same_set or not card.get("set")
+            # A same-named Pokemon in another printing may be a different card.
+            playable = exact or _any_printing(card)
             found.append({
                 "listing_id": listing.id,
                 "price": listing.price,
@@ -395,12 +393,12 @@ def create_deck():
             name, cards, source = resolved["name"], resolved["cards"], "popular"
             meta = resolved["meta"]
         else:
-            parsed = deck_lib.parse_decklist(body.get("text") or "")
+            parsed = deck_lib.parse_decklist(str(body.get("text") or ""), set_codes())
             cards, warnings = parsed["cards"], parsed["warnings"]
             if not cards:
                 return jsonify({"error": "no cards found. Paste a list with one card per "
                                          "line, like: 4 Dragapult ex TWM 130"}), 400
-            name = (body.get("name") or "").strip() or "Imported deck"
+            name = str(body.get("name") or "").strip() or "Imported deck"
             source, meta = "paste", {}
         deck = Deck(user_id=uid, name=name[:200], source=source,
                     source_meta=json.dumps(meta) if meta else None)

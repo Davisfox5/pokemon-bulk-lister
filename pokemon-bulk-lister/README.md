@@ -106,7 +106,8 @@ Three tabs over one ledger:
 
 Cards get into the library three ways: **Import scanned cards** (from Scan),
 buying on the marketplace, or **Add a card** for anything bought elsewhere or
-already owned. They leave it by selling on the marketplace or by **Sold
+already owned. An unpaid marketplace order can be cancelled by either side
+under **Listings & open orders**. They leave it by selling on the marketplace or by **Sold
 elsewhere**, which records an off-site sale (eBay, a card show) with its
 price, fees and date. The ✕ button removes a card without recording a sale.
 
@@ -125,10 +126,11 @@ names the player, placing, tournament and date.
 
 Open a deck to see it card by card:
 
-- **Have / Missing** per card. Any printing of a Trainer or Energy counts. For
-  Pokémon, the exact printing or another printing from the same set counts. A
-  same-named Pokémon from a different set is shown as "check the printing"
-  and is not counted, because same name does not always mean same card.
+- **Have / Missing** per card. Any printing of a Trainer or Energy counts. A
+  Pokémon counts only when the set and number match. A same-named Pokémon in
+  another printing is shown as "check the printing" and is not counted,
+  because same name does not always mean same card (sets often print two
+  different Basics of one Pokémon).
 - **Price each** from the catalog, with the same provenance line as the
   library. **Price the unpriced missing cards** looks up the rest in the
   background.

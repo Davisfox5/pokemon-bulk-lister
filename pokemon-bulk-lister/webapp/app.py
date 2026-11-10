@@ -279,11 +279,16 @@ def _unique_upload_name(name: str) -> str:
     """Phone cameras reuse names like image.jpg; a second upload with the same
     name must not overwrite the first photo or collide with its crops."""
     path = Path(name)
-    candidate, n = name, 1
-    while (INPUT_DIR / candidate).exists():
+    # Crops and grid rows are keyed by the stem, so IMG_1.jpg and IMG_1.png
+    # collide too. Compare stems, case-insensitively.
+    taken = {p.stem.lower() for p in INPUT_DIR.iterdir()} | {
+        p.stem.lower() for p in (OUTPUT_DIR / "pages").glob("*")
+    }
+    stem, n = path.stem, 1
+    while stem.lower() in taken:
         n += 1
-        candidate = f"{path.stem}-{n}{path.suffix}"
-    return candidate
+        stem = f"{path.stem}-{n}"
+    return f"{stem}{path.suffix}"
 
 
 def _record_single(sg, photo_path: Path) -> int:
@@ -908,12 +913,13 @@ def api_scan_process():
 
     def worker():
         try:
-            identified = _identify_job()
+            _identify_job()
+            # Keep the identify outcome (including a failure) in the final
+            # message; pricing would otherwise overwrite it.
             id_message = _job_state["message"]
             _job_state.update(progress=0, total=0, message="pricing…")
             _pricing_job(False, only_unpriced=True)
-            if identified is not None:
-                _job_state["message"] = f"{id_message}; {_job_state['message']}"
+            _job_state["message"] = f"{id_message}; {_job_state['message']}"
         finally:
             _job_state["running"] = False
 
@@ -1222,16 +1228,27 @@ def api_publish_status():
     # words before anything goes live.
     with db.connect(DB_PATH) as conn:
         cards = db.list_cards(conn, sort="newest")
-    priced = [c for c in cards if c.get("name") and c.get("final_price")]
-    ebay_eligible = [c for c in priced if c.get("image_url")]
+    # Each site's filter mirrors what its publish path really sends:
+    # eBay needs a hosted image, the TCGplayer CSV drops rows with no
+    # TCGplayer product id, Whatnot takes every priced card.
+    priced = [c for c in cards if c.get("final_price")]
+
+    def _group(rows: list[dict]) -> dict:
+        flagged = [c for c in rows if c.get("needs_review")]
+        return {
+            "count": len(rows),
+            "total": round(sum(c["final_price"] for c in rows), 2),
+            "flagged": len(flagged),
+            "flagged_total": round(sum(c["final_price"] for c in flagged), 2),
+        }
+
+    ebay_rows = [c for c in priced if c.get("image_url")]
+    tcg_rows = [c for c in priced if c.get("tcgplayer_product_id")]
     counts = {
         "priced": len(priced),
-        "priced_flagged": sum(1 for c in priced if c.get("needs_review")),
-        "priced_total": round(sum(c["final_price"] for c in priced), 2),
-        "ebay_eligible": len(ebay_eligible),
-        "ebay_flagged": sum(1 for c in ebay_eligible if c.get("needs_review")),
-        "ebay_total": round(sum(c["final_price"] for c in ebay_eligible), 2),
-        "ebay_missing_image": len(priced) - len(ebay_eligible),
+        "ebay": {**_group(ebay_rows), "left_out": len(priced) - len(ebay_rows)},
+        "tcgplayer": {**_group(tcg_rows), "left_out": len(priced) - len(tcg_rows)},
+        "whatnot": {**_group(priced), "left_out": 0},
     }
 
     return jsonify({
@@ -1251,8 +1268,14 @@ def api_publish_job_status():
 @app.route("/api/publish/ebay", methods=["POST"])
 def api_publish_ebay():
     """Publish every eligible card as a live eBay listing (background job).
-    Body: {"skip_flagged": true} leaves out cards whose price needs review."""
-    skip_flagged = bool((request.get_json(silent=True) or {}).get("skip_flagged"))
+
+    Body: {"skip_flagged": true} leaves out cards whose price needs review.
+    {"expected": N} is the count the user confirmed; if the eligible set has
+    changed size since (a pricing job finished in between), nothing is
+    listed and the job says so."""
+    body = request.get_json(silent=True) or {}
+    skip_flagged = bool(body.get("skip_flagged"))
+    expected = body.get("expected")
     with _publish_lock:
         if _publish_state["running"]:
             return jsonify({"error": "a publish job is already running"}), 409
@@ -1273,6 +1296,12 @@ def api_publish_ebay():
             eligible = [c for c in cards if c.get("final_price") and c.get("image_url")]
             if skip_flagged:
                 eligible = [c for c in eligible if not c.get("needs_review")]
+            if expected is not None and len(eligible) != int(expected):
+                _publish_state["message"] = (
+                    f"nothing listed: {len(eligible)} cards are eligible now, "
+                    f"you confirmed {int(expected)}. Check the list and publish again."
+                )
+                return
             _publish_state["total"] = len(eligible)
 
             done = 0

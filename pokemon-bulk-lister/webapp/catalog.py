@@ -8,6 +8,7 @@ the promoting user.
 """
 from __future__ import annotations
 
+import math
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -19,6 +20,7 @@ from webapp.auth import current_user_id, login_required
 from webapp.models import (
     CatalogCard,
     InventoryItem,
+    LibraryEvent,
     MarketListing,
     Order,
     get_or_create_catalog_card,
@@ -74,11 +76,17 @@ def promote():
                 record_price(s, cc, card)
 
             crop = card.get("crop_path")
-            dup = (
+            # "Already imported" is judged by the ledger as well as by current
+            # holdings: a card sold on the marketplace moves to the buyer's
+            # row, and must not come back on the next import.
+            dup = crop and (
                 s.query(InventoryItem)
                 .filter_by(user_id=uid, catalog_card_id=cc.id, source_crop_path=crop)
-                .one_or_none()
-            ) if crop else None
+                .first()
+                or s.query(LibraryEvent)
+                .filter_by(user_id=uid, kind="added", channel="scan", crop_path=crop)
+                .first()
+            )
             if dup:
                 skipped_dup += 1
                 continue
@@ -191,13 +199,31 @@ def patch_inventory(item_id: int):
         if item is None:
             abort(404)
         if "quantity" in patch:
-            item.quantity = max(0, int(patch["quantity"]))
+            try:
+                quantity = int(patch["quantity"])
+            except (TypeError, ValueError):
+                return jsonify({"error": "quantity must be a whole number"}), 400
+            if quantity < 0 or quantity > 9999:
+                return jsonify({"error": "quantity must be between 0 and 9999"}), 400
+            if quantity == 0:
+                # An empty row cannot stay listed: a buyer would pay for nothing.
+                blocked = release_listings(s, item)
+                if blocked:
+                    return jsonify({"error": blocked}), 409
+            item.quantity = quantity
         if "condition" in patch:
             item.condition = str(patch["condition"]).upper()[:20]
         if "notes" in patch:
-            item.notes = patch["notes"]
+            item.notes = str(patch["notes"])[:2000] if patch["notes"] not in (None, "") else None
         if "acquired_price" in patch:
-            item.acquired_price = float(patch["acquired_price"]) if patch["acquired_price"] not in (None, "") else None
+            raw = patch["acquired_price"]
+            try:
+                paid = float(raw) if raw not in (None, "") else None
+            except (TypeError, ValueError):
+                return jsonify({"error": "price paid must be a number"}), 400
+            if paid is not None and not (math.isfinite(paid) and 0 <= paid <= 1_000_000):
+                return jsonify({"error": "price paid must be between 0 and 1,000,000"}), 400
+            item.acquired_price = paid
         s.commit()
         out = _item_dict(s, item)
     finally:
