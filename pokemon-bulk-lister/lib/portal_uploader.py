@@ -19,6 +19,7 @@ candidates for the file input and submit control.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,178 @@ _STEALTH_INIT = (
     "Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});"
     "window.chrome = {runtime: {}};"
 )
+
+
+_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36"
+)
+_LAUNCH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--no-default-browser-check",
+    "--no-first-run",
+]
+
+# Where each portal's sign-in starts, and where its session file lives.
+PORTALS = {
+    "tcgplayer": {
+        "label": "TCGplayer",
+        "login_url": "https://store.tcgplayer.com/login",
+        "default_state": "output/cache/tcgplayer_state.json",
+        "state_env": "TCGPLAYER_STATE_PATH",
+    },
+    "whatnot": {
+        "label": "Whatnot",
+        "login_url": "https://www.whatnot.com/login",
+        "default_state": "output/cache/whatnot_state.json",
+        "state_env": "WHATNOT_STATE_PATH",
+    },
+}
+
+
+def portal_state_path(site: str, root: Optional[Path] = None) -> Path:
+    cfg = PORTALS[site]
+    path = Path(os.getenv(cfg["state_env"], cfg["default_state"]))
+    return path if path.is_absolute() or root is None else root / path
+
+
+def _launch_kwargs(headless: bool) -> dict:
+    kwargs: dict = {
+        "headless": headless,
+        "args": _LAUNCH_ARGS,
+        "ignore_default_args": ["--enable-automation"],
+    }
+    # For machines whose Chromium is not the build Playwright expects.
+    exe = os.getenv("PLAYWRIGHT_CHROMIUM_PATH")
+    if exe:
+        kwargs["executable_path"] = exe
+    return kwargs
+
+
+class LoginCapture:
+    """Sign in to a seller portal in a real browser window and keep the session.
+
+    `start()` opens a visible Chromium window at the portal's login page on a
+    worker thread and returns at once. The person signs in there (password,
+    2FA, captcha: all theirs to do, nothing is typed for them). `finish()`
+    saves the browser's session to the portal's state file and closes the
+    window; `cancel()` closes it and saves nothing. The headless uploader then
+    reuses that session.
+
+    One capture per site at a time. `status()` is safe to poll from any
+    thread; the browser itself is only ever touched by the worker thread,
+    which is what Playwright's sync API requires.
+
+    state: idle -> opening -> waiting -> saved | cancelled | error
+    """
+
+    TIMEOUT_SECONDS = 15 * 60
+
+    def __init__(self, site: str, state_path: Path, headless: bool = False,
+                 login_url: Optional[str] = None) -> None:
+        self.site = site
+        self.state_path = Path(state_path)
+        self.headless = headless
+        self.login_url = login_url or PORTALS[site]["login_url"]
+        self._lock = threading.Lock()
+        self._decision = threading.Event()
+        self._save = False
+        self._thread: Optional[threading.Thread] = None
+        self._state = "idle"
+        self._detail = ""
+
+    def status(self) -> dict:
+        with self._lock:
+            return {"state": self._state, "detail": self._detail}
+
+    def _set(self, state: str, detail: str = "") -> None:
+        with self._lock:
+            self._state, self._detail = state, detail
+
+    def active(self) -> bool:
+        return self.status()["state"] in ("opening", "waiting")
+
+    def start(self) -> None:
+        if self.active():
+            raise PortalUploadError(f"a {self.site} sign-in window is already open")
+        self._decision.clear()
+        self._save = False
+        self._set("opening", "opening a browser window")
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"{self.site}-login")
+        self._thread.start()
+
+    def finish(self, timeout: float = 30) -> dict:
+        """Save the session. Blocks until the worker has written the file."""
+        if self.status()["state"] != "waiting":
+            raise PortalUploadError("no sign-in window is waiting to be saved")
+        self._save = True
+        self._decision.set()
+        if self._thread is not None:
+            self._thread.join(timeout)
+        return self.status()
+
+    def cancel(self, timeout: float = 15) -> dict:
+        if self.active():
+            self._save = False
+            self._decision.set()
+            if self._thread is not None:
+                self._thread.join(timeout)
+        return self.status()
+
+    def _run(self) -> None:
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(**_launch_kwargs(self.headless))
+                try:
+                    context = browser.new_context(
+                        viewport={"width": 1440, "height": 900},
+                        user_agent=_USER_AGENT, locale="en-US",
+                        timezone_id="America/Los_Angeles",
+                    )
+                    context.add_init_script(_STEALTH_INIT)
+                    page = context.new_page()
+                    try:
+                        page.goto(self.login_url, wait_until="domcontentloaded", timeout=60000)
+                    except Exception as exc:
+                        # The window is open; the person can navigate by hand.
+                        self._set("waiting", f"could not load the login page ({exc}); "
+                                             "navigate to it in the window")
+                    else:
+                        self._set("waiting", "sign in in the browser window, then come back here")
+
+                    deadline = time.time() + self.TIMEOUT_SECONDS
+                    while not self._decision.is_set():
+                        if time.time() > deadline:
+                            self._set("cancelled", "timed out waiting for sign-in; nothing saved")
+                            return
+                        try:
+                            # Also pumps browser events, so a closed window is noticed.
+                            page.wait_for_timeout(400)
+                        except Exception:
+                            self._set("cancelled", "the browser window was closed; nothing saved")
+                            return
+
+                    if not self._save:
+                        self._set("cancelled", "cancelled; nothing saved")
+                        return
+                    self.state_path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = self.state_path.with_suffix(".tmp")
+                    context.storage_state(path=str(tmp))
+                    tmp.replace(self.state_path)
+                    try:
+                        self.state_path.chmod(0o600)   # it holds live session cookies
+                    except OSError:
+                        pass
+                    self._set("saved", f"session saved to {self.state_path}")
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+        except Exception as exc:
+            self._set("error", f"could not open a browser window: {exc}")
 
 
 class PortalNotLoggedIn(RuntimeError):
@@ -111,26 +284,14 @@ class PortalUploader:
         if self._pw is not None:
             return
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--no-default-browser-check",
-                "--no-first-run",
-            ],
-            ignore_default_args=["--enable-automation"],
-        )
+        self._browser = self._pw.chromium.launch(**_launch_kwargs(self.headless))
 
     def _new_context(self) -> BrowserContext:
         self._start_browser()
         assert self._browser is not None
         ctx = self._browser.new_context(
             storage_state=str(self.state_path),
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36"
-            ),
+            user_agent=_USER_AGENT,
             viewport={"width": 1440, "height": 900},
             locale="en-US",
             timezone_id="America/Los_Angeles",
@@ -177,6 +338,41 @@ class PortalUploader:
         page = context.new_page()
         try:
             return self._do_upload(page, csv_file)
+        finally:
+            try:
+                context.close()
+            except Exception:
+                pass
+
+    def verify_session(self) -> dict:
+        """Open the import page with the saved session and report what is
+        there, without uploading anything.
+
+        Returns {"ok", "signed_in", "detail"}. ok means a real upload has
+        what it needs: the session is still signed in and the page has a
+        file input to attach the CSV to.
+        """
+        context = self._new_context()
+        page = context.new_page()
+        try:
+            page.goto(self.upload_url, wait_until="domcontentloaded", timeout=60000)
+            if self.login_redirect_token and self.login_redirect_token in page.url:
+                return {"ok": False, "signed_in": False,
+                        "detail": f"the saved session has expired ({self.site} sent us to "
+                                  f"its login page). Sign in again."}
+            try:
+                page.wait_for_load_state("networkidle", timeout=20000)
+            except PWTimeoutError:
+                pass
+            if self._find_first(page, self.file_input_selectors, want_visible=False) is None:
+                self._dump_debug(page, "verify-no-file-input")
+                return {"ok": False, "signed_in": True,
+                        "detail": f"signed in, but no file upload field was found at "
+                                  f"{self.upload_url}. The page layout may have changed: set "
+                                  f"{self.site.upper()}_UPLOAD_URL, or upload the CSV by hand. "
+                                  f"A screenshot is in output/cache/{self.site}_debug/."}
+            return {"ok": True, "signed_in": True,
+                    "detail": "signed in and the import page has an upload field"}
         finally:
             try:
                 context.close()

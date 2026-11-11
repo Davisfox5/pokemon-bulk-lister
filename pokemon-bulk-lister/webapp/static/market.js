@@ -100,6 +100,12 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Sent back here by Stripe when the buyer backs out of checkout.
+if (new URLSearchParams(location.search).get("payment") === "cancelled") {
+  history.replaceState(null, "", location.pathname);
+  setTimeout(() => toast("Checkout was cancelled. You were not charged, and the card is for sale again."), 300);
+}
+
 // Deep link from the deck page: /market?q=Dragapult+ex
 const preset = new URLSearchParams(location.search).get("q");
 if (preset) $("#mk-search").value = preset;

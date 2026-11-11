@@ -96,6 +96,15 @@ app = Flask(
 )
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB
 
+
+
+# The bench has no login, so keep other websites from driving it through the
+# operator's browser (see connections.same_origin_only).
+from webapp.connections import same_origin_only  # noqa: E402
+
+app.before_request(same_origin_only)
+
+
 # Lazy singletons
 _tcg_client: Optional[TCGPlayerClient] = None
 _ebay_client: Optional[EbayClient] = None
@@ -1208,29 +1217,23 @@ def api_upload_card_image(card_id: int):
 
 @app.route("/api/publish/status")
 def api_publish_status():
-    """Readiness probe for each site + the current publish job state."""
-    # eBay: official API — are we authorized?
-    try:
-        from lib.ebay_lister import preflight
-        ebay = preflight()
-    except Exception as exc:  # pragma: no cover - import/runtime guard
-        ebay = {"ready": False, "reason": str(exc)}
+    """Readiness of each site, and what a publish would send right now, so
+    the UI can say it in plain words before anything goes live."""
+    from webapp import connections
 
-    # TCGPlayer / Whatnot: headless portal upload — is a session saved?
-    def _portal_ready(env_key: str, default: str) -> dict:
-        path = ROOT / os.getenv(env_key, default)
-        return {
-            "ready": path.exists(),
-            "reason": "" if path.exists() else "no saved session — run python -m webapp.setup_portal",
-        }
+    conn_status = {
+        "ebay": connections._ebay_status(),
+        "tcgplayer": connections._portal_status("tcgplayer"),
+        "whatnot": connections._portal_status("whatnot"),
+    }
+    can_upload = connections.cloudinary_ready()
 
-    # What a publish would touch right now, so the UI can say it in plain
-    # words before anything goes live.
     with db.connect(DB_PATH) as conn:
         cards = db.list_cards(conn, sort="newest")
-    # Each site's filter mirrors what its publish path really sends:
-    # eBay needs a hosted image, the TCGplayer CSV drops rows with no
-    # TCGplayer product id, Whatnot takes every priced card.
+    # Each site's filter mirrors what its publish path really sends: eBay
+    # needs a hosted photo (uploaded on the way when Cloudinary is set up),
+    # the TCGplayer CSV drops rows with no TCGplayer product id, Whatnot
+    # takes every priced card.
     priced = [c for c in cards if c.get("final_price")]
 
     def _group(rows: list[dict]) -> dict:
@@ -1242,19 +1245,28 @@ def api_publish_status():
             "flagged_total": round(sum(c["final_price"] for c in flagged), 2),
         }
 
-    ebay_rows = [c for c in priced if c.get("image_url")]
+    ebay_rows = [c for c in priced if c.get("image_url") or can_upload]
     tcg_rows = [c for c in priced if c.get("tcgplayer_product_id")]
     counts = {
         "priced": len(priced),
-        "ebay": {**_group(ebay_rows), "left_out": len(priced) - len(ebay_rows)},
+        "ebay": {
+            **_group(ebay_rows), "left_out": len(priced) - len(ebay_rows),
+            "to_upload": sum(1 for c in ebay_rows if not c.get("image_url")),
+            "to_upload_unflagged": sum(1 for c in ebay_rows
+                                       if not c.get("image_url") and not c.get("needs_review")),
+        },
         "tcgplayer": {**_group(tcg_rows), "left_out": len(priced) - len(tcg_rows)},
         "whatnot": {**_group(priced), "left_out": 0},
     }
 
+    def _site(name: str) -> dict:
+        st = conn_status[name]
+        return {"ready": st["ready"], "reason": "" if st["ready"] else st.get("next", "")}
+
     return jsonify({
-        "ebay": ebay,
-        "tcgplayer": _portal_ready("TCGPLAYER_STATE_PATH", "output/cache/tcgplayer_state.json"),
-        "whatnot": _portal_ready("WHATNOT_STATE_PATH", "output/cache/whatnot_state.json"),
+        "ebay": _site("ebay"),
+        "tcgplayer": _site("tcgplayer"),
+        "whatnot": _site("whatnot"),
         "job": _publish_state,
         "counts": counts,
     })
@@ -1285,15 +1297,18 @@ def api_publish_ebay():
         try:
             from lib.ebay_lister import EbayLister, EbayListingError
             from lib.ebay_oauth import EbayUserNotAuthorized
+            from webapp import connections
             try:
-                lister = EbayLister()
+                lister = EbayLister(auth=connections._ebay_auth())
             except Exception as exc:
                 _publish_state["message"] = f"cannot start: {exc}"
                 return
 
+            can_upload = connections.cloudinary_ready()
             with db.connect(DB_PATH) as conn:
                 cards = _cards_payload(db.list_cards(conn, sort="newest"))
-            eligible = [c for c in cards if c.get("final_price") and c.get("image_url")]
+            eligible = [c for c in cards
+                        if c.get("final_price") and (c.get("image_url") or can_upload)]
             if skip_flagged:
                 eligible = [c for c in eligible if not c.get("needs_review")]
             if expected is not None and len(eligible) != int(expected):
@@ -1304,10 +1319,19 @@ def api_publish_ebay():
                 return
             _publish_state["total"] = len(eligible)
 
-            done = 0
+            done = listed = 0
+            failures: list[str] = []
             for card in eligible:
                 title = card.get("name") or Path(card.get("crop_path", "")).stem
                 try:
+                    if not card.get("image_url"):
+                        # eBay needs the photo at a public URL; host it now
+                        # instead of making the operator do it card by card.
+                        from lib import cloudinary_client
+                        _publish_state["message"] = f"uploading photo {done + 1}/{len(eligible)}"
+                        card["image_url"] = cloudinary_client.upload(str(ROOT / card["crop_path"]))
+                        with db.connect(DB_PATH) as conn:
+                            db.update_card(conn, int(card["id"]), {"image_url": card["image_url"]})
                     result = lister.publish_card(card)
                     patch = {
                         "ebay_listing_id": result.get("listing_id"),
@@ -1318,20 +1342,31 @@ def api_publish_ebay():
                     }
                     with db.connect(DB_PATH) as conn:
                         db.update_card(conn, int(card["id"]), patch)
+                    listed += 1
                 except EbayUserNotAuthorized as exc:
-                    _publish_state["message"] = str(exc)
+                    _publish_state["message"] = (
+                        f"stopped after {listed} listed: eBay is not connected ({exc})")
                     return
                 except EbayListingError as exc:
                     print(f"[publish ebay] FAILED {title}: {exc}", file=sys.stderr)
+                    failures.append(f"{title}: {exc}")
                     with db.connect(DB_PATH) as conn:
                         db.update_card(conn, int(card["id"]), {"ebay_listing_status": f"error: {exc}"[:200]})
-                except Exception as exc:  # pragma: no cover
+                except Exception as exc:
                     print(f"[publish ebay] error {title}: {exc}", file=sys.stderr)
+                    failures.append(f"{title}: {exc}")
+                    with db.connect(DB_PATH) as conn:
+                        db.update_card(conn, int(card["id"]), {"ebay_listing_status": f"error: {exc}"[:200]})
                 finally:
                     done += 1
                     _publish_state["progress"] = done
-                    _publish_state["message"] = f"listed {done}/{len(eligible)}"
-            _publish_state["message"] = f"done — {done} processed"
+                    _publish_state["message"] = f"{listed} listed, {len(failures)} failed, {done}/{len(eligible)} done"
+            # Say plainly how it went; the first error is usually the one
+            # that explains all of them (a missing policy, a bad category).
+            message = f"done: {listed} of {len(eligible)} listed on eBay"
+            if failures:
+                message += f", {len(failures)} failed. First error: {failures[0][:300]}"
+            _publish_state["message"] = message
         finally:
             _publish_state["running"] = False
 
@@ -1368,7 +1403,8 @@ def api_publish_portal():
             _write_csv(path, rows_fn(payload))
 
             _publish_state["message"] = f"uploading {filename} to {site}…"
-            with Lister() as lister:
+            from lib.portal_uploader import portal_state_path
+            with Lister(state_path=str(portal_state_path(site, ROOT))) as lister:
                 result = lister.upload_csv(str(path))
             _publish_state["progress"] = 1
             _publish_state["message"] = (
@@ -1450,6 +1486,11 @@ from webapp.library import backfill_order_events, library_bp  # noqa: E402
 app.register_blueprint(library_bp)
 app.register_blueprint(decks_bp)
 backfill_order_events()
+
+# Setup and health checks for eBay, Stripe, TCGplayer, Whatnot, Cloudinary.
+from webapp.connections import connections_bp  # noqa: E402
+
+app.register_blueprint(connections_bp)
 
 
 @app.route("/api/session")

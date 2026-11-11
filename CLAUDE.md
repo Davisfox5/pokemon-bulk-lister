@@ -2,7 +2,9 @@
 
 Repo: **pokemon-bulk-lister** — Python 3.11 Flask 3 web app (`pokemon-bulk-lister/webapp/`) plus a 7-step CLI pipeline (`pokemon-bulk-lister/scripts/`) that turns binder-page photos into priced bulk card listings for TCGPlayer, Whatnot, and eBay. Business logic in `pokemon-bulk-lister/lib/`; SQLite state in `webapp/db.py`; tests in `pokemon-bulk-lister/tests/`.
 
-Two data layers share one SQLite file. The scan bench (`webapp/db.py`, raw sqlite3, `cards` table) is single-user and unauthenticated. The multi-user layer (`webapp/models.py`, SQLAlchemy) holds users, the shared price catalog, inventory, the `library_events` ledger (every add, purchase and sale), decks and the marketplace. `models.py` has no column migrations (`create_all` only adds tables), so add tables there, not columns.
+Two data layers share one SQLite file. The scan bench (`webapp/db.py`, raw sqlite3, `cards` table) is single-user and unauthenticated. The multi-user layer (`webapp/models.py`, SQLAlchemy) holds users, the shared price catalog, inventory, the `library_events` ledger (every add, purchase and sale), decks and the marketplace. `models.py` has no column migrations (`create_all` only adds tables), so add tables there, not columns. An index on an existing table goes in `models._ensure_indexes`, which runs on every launch.
+
+Outside services (eBay, Cloudinary, TCGplayer and Whatnot portal sessions, Stripe) are set up and checked from Scan → Connections (`webapp/connections.py`). Secrets stay in `.env`; no endpoint returns or stores one. The scan bench has no login, so `connections.same_origin_only` refuses cross-site POSTs; keep new bench routes behind it (it is a `before_request` hook on the app).
 
 Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also runs `python -m compileall -q lib webapp scripts`. There is no deployment — the app runs locally only; no branch auto-deploys anywhere.
 

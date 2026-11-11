@@ -82,8 +82,9 @@ running one half on its own, and **Use Terapeak** adds the 365-day eBay comps
 to a re-price.
 
 Every publish button says what it is about to do, with counts and a total,
-and waits for a yes. The eBay one lets you leave out cards whose price is
-flagged for review.
+and waits for a yes. The eBay one leaves out cards whose price is flagged
+for review unless you tick the box. Set the sites up under **Connections**
+(see below).
 
 Data lives at `output/db.sqlite` (auto-created; auto-imports any existing
 `output/cards.json` / `output/cards_priced.json` on first launch). The CLI
@@ -107,9 +108,14 @@ Three tabs over one ledger:
 Cards get into the library three ways: **Import scanned cards** (from Scan),
 buying on the marketplace, or **Add a card** for anything bought elsewhere or
 already owned. An unpaid marketplace order can be cancelled by either side
-under **Listings & open orders**. They leave it by selling on the marketplace or by **Sold
+under **Listings & open orders**.
+
+A fourth tab, **Activity**, lists every event in order. The ✕ button and
+quantity edits are recorded there as removed or added, so cards in minus
+cards out always equals what you hold. They leave it by selling on the marketplace or by **Sold
 elsewhere**, which records an off-site sale (eBay, a card show) with its
-price, fees and date. The ✕ button removes a card without recording a sale.
+price, fees and date. The ✕ button takes a card out with no sale (it shows
+as removed under Activity).
 
 The ledger is the `library_events` table. A sale on the marketplace writes a
 row for both the seller and the buyer, so history survives the card changing
@@ -254,53 +260,120 @@ python scripts/07_publish_listings.py --site tcgplayer --site whatnot
 python scripts/07_publish_listings.py --all --dry-run
 ```
 
-## Publishing listings
+## Connections: eBay, TCGplayer, Whatnot, Stripe
 
-The three sites are not equal — only eBay exposes a usable listing API for a
-typical seller, so the publish step uses two mechanisms:
+Everything outside the app is set up and checked in one place: **Scan →
+Connections**. Each service shows whether it is connected and what the next
+step is. Keys go in `.env` (restart the app after editing it); the panel never
+shows or stores a key.
 
-### eBay — official Sell API (recommended)
-Each priced + image-uploaded card becomes a live fixed-price listing via the
-Inventory API (`inventory_item` → `offer` → `publishOffer`). No scraping.
+### eBay (official Sell API)
 
-One-time setup:
-1. Create a **RuName** under developer.ebay.com → *User Tokens → Get a Token
-   from eBay via Your Application*; set its accepted redirect URL. Put the
-   RuName in `EBAY_REDIRECT_URI`.
-2. Authorize once:
-   ```bash
-   python -m webapp.setup_ebay
-   ```
-   Sign in, approve the `sell.inventory` / `sell.account` scopes, and paste the
-   redirected URL back. The refresh token is cached at `EBAY_USER_TOKEN_PATH`
-   and listing then runs headlessly until it expires (~18 months).
-3. Publishing needs payment/return/fulfillment **business policies** and an
-   inventory location. We auto-pick the account's first of each; pin specific
-   IDs with `EBAY_*_POLICY_ID` / `EBAY_MERCHANT_LOCATION_KEY` if you have
-   several. Opt into Business Policies in eBay account settings if you haven't.
+Each priced card becomes a live fixed-price listing through the Inventory API
+(`inventory_item` → `offer` → `publishOffer`). No scraping.
 
-Listing IDs are written back to `cards_priced.json` (CLI) and the SQLite DB
-(web UI), so re-runs update existing offers rather than duplicating them.
+1. At developer.ebay.com create a keyset, and under *User Tokens → Get a Token
+   from eBay via Your Application* create a **RuName** with an accepted URL.
+   Put `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` and `EBAY_REDIRECT_URI` (the
+   RuName, not a URL) in `.env`. Set `EBAY_ENV=sandbox` to rehearse against
+   eBay's sandbox first.
+2. In Connections, click **Open eBay consent page**, approve, copy the address
+   of the page eBay sends you to, paste it, click **Connect**. The refresh
+   token is saved at `EBAY_USER_TOKEN_PATH` and lasts about 18 months.
+3. Click **Check account**. It reads (and changes nothing): that a token can
+   be minted, that the account has payment, return and shipping **business
+   policies**, the inventory location, and photo hosting. Opt into Business
+   Policies in eBay account settings if the check says none exist. Pin
+   specific ones with `EBAY_*_POLICY_ID` / `EBAY_MERCHANT_LOCATION_KEY` if you
+   have several.
+4. Add the three `CLOUDINARY_` values so card photos are hosted. With those
+   set, **List on eBay** uploads any photo that is not hosted yet as part of
+   the publish; there is no per-card step.
 
-### TCGPlayer & Whatnot — headless CSV upload (⚠️ TOS-grey)
-Neither offers a public listing API to typical sellers. The supported path is
-the bulk-inventory CSV this app already generates; this step just drives the
-seller portal in a headless browser to submit it for you — the same Playwright
-pattern as the Terapeak scraper. **This is against their Terms, is fragile (DOM
-changes break it), and use is at your own risk** — keep it to a
-personal/secondary account, or just upload the CSVs by hand.
+**List on eBay** then says how many cards and how much, leaves out flagged
+prices unless you tick the box, and reports how many listed and the first
+error if any failed. Listing ids are written back to the database, so a
+second run updates offers instead of duplicating them.
 
-```bash
-pip install playwright && playwright install chromium
-python -m webapp.setup_portal --site tcgplayer   # sign in once; session saved
-python -m webapp.setup_portal --site whatnot
-```
+Not covered: the app does not read sales back from eBay. When a card sells
+there, record it in the library with **Sold elsewhere**.
 
-On parse failure the uploader dumps a screenshot + HTML to
-`output/cache/<site>_debug/` and the upload URL/selectors can be overridden via
-`TCGPLAYER_UPLOAD_URL` / `WHATNOT_UPLOAD_URL` in `.env`.
+`python -m webapp.setup_ebay` still does step 2 from a terminal.
 
-All of this is also wired into the web UI's **Publish** panel.
+### TCGplayer and Whatnot (CSV upload through your seller portal)
+
+Neither site has a listing API for regular sellers. The supported route is
+the bulk CSV this app generates (**Export CSVs**), uploaded by hand. The
+automated route drives the seller portal in a browser to submit that CSV for
+you. **That is against their terms and breaks when they change the page; use
+it at your own risk, or upload by hand.**
+
+1. `pip install playwright && playwright install chromium` (once).
+2. In Connections, click **Sign in to Whatnot** (or TCGplayer). A Chromium
+   window opens on the computer running the app. Sign in there yourself,
+   including any 2FA.
+3. Back in the app, click **I'm signed in, save it**. The session is saved to
+   `output/cache/<site>_state.json`. Closing the window or clicking Cancel
+   saves nothing.
+4. Click **Check session**. It opens the import page in the background with
+   the saved session and confirms you are still signed in and the upload field
+   is there. It uploads nothing.
+
+**Upload to Whatnot / TCGplayer** then confirms the row count and total first.
+TCGplayer's CSV only includes cards that matched a TCGplayer product, and the
+dialog says how many are left out. If an upload fails, a screenshot and the
+page HTML are written to `output/cache/<site>_debug/`; the import URL can be
+changed with `WHATNOT_UPLOAD_URL` / `TCGPLAYER_UPLOAD_URL`.
+
+The sign-in, session check and upload were tested end to end against a
+stand-in portal page, not against the real sites, which need an account. The
+real import URLs and form fields are the part most likely to need adjusting
+on first use.
+
+`python -m webapp.setup_portal --site whatnot` still does steps 2 and 3 from a
+terminal.
+
+### Stripe (card payments on the marketplace)
+
+Without Stripe, a buyer and seller settle directly and the seller clicks
+**Mark paid**. With it, **Buy** sends the buyer to Stripe Checkout and the
+card moves when the payment clears.
+
+1. `pip install -r requirements.txt` (includes `stripe`).
+2. Put `STRIPE_SECRET_KEY` in `.env`. Start with a test key (`sk_test_...`):
+   buyers can then pay with the test card `4242 4242 4242 4242`, any future
+   expiry, any CVC, and no money moves.
+3. In Connections, click **Check key**.
+
+How an order gets settled, whichever comes first (settling twice is harmless):
+
+- The buyer's browser returns from Checkout and the app asks Stripe whether
+  that session was paid. This needs no public URL, so it works on a local
+  install.
+- A signed webhook, if the app is reachable from the internet: point Stripe at
+  `/api/market/stripe-webhook` for the `checkout.session.*` events and put the
+  signing secret in `STRIPE_WEBHOOK_SECRET`. Without the secret the endpoint
+  is off; unsigned events are never accepted.
+- A sweep when the listing or the seller's orders are next looked at, for a
+  buyer who paid and closed the tab.
+
+An unfinished Checkout expires after `STRIPE_CHECKOUT_MINUTES` (31, Stripe's
+minimum is 30) and the card goes back on sale. Backing out of Checkout frees
+it at once. Either side can cancel an unpaid order. If a payment arrives for
+a card that is no longer there, it is refunded.
+
+**Where the money goes.** Payments land in the Stripe account whose key is in
+`.env`. The platform fee (`PLATFORM_FEE_PCT`, default 10) stays there and the
+rest is owed to the seller. The operator sees **Seller balances** on the
+Library page and records each payout made (Venmo, cash, bank) with **Record
+payout**; sellers see what they are owed under **Listings & open orders**.
+The operator is the first account registered, or the addresses in
+`ADMIN_EMAILS`. Paying sellers out automatically (Stripe Connect) is not
+built.
+
+Card payments were tested with the real Stripe library's objects and
+signature check against an in-memory stand-in for Stripe's API, not against
+Stripe itself. Do one test-mode purchase before going live.
 
 ## Pricing aggregation
 
@@ -375,7 +448,8 @@ pokemon-bulk-lister/
 │  ├─ catalog.py               # inventory CRUD + import from the bench
 │  ├─ library.py               # sold / purchased ledger, record a sale, add a card
 │  ├─ decks.py                 # deck endpoints
-│  ├─ marketplace.py           # list, buy, orders
+│  ├─ marketplace.py           # list, buy, orders, Stripe checkout, payouts
+│  ├─ connections.py           # setup + checks for eBay, portals, Stripe
 │  ├─ portfolio.py             # valuation, price history, alerts
 │  └─ templates/, static/      # index, portfolio, decks, market, login, register
 ├─ data/

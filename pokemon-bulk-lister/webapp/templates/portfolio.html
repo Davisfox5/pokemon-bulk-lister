@@ -100,6 +100,7 @@
           <button class="tab active" role="tab" data-tab="have">Have <span id="n-have" class="count"></span></button>
           <button class="tab" role="tab" data-tab="sold">Sold <span id="n-sold" class="count"></span></button>
           <button class="tab" role="tab" data-tab="purchased">Purchased <span id="n-purchased" class="count"></span></button>
+          <button class="tab" role="tab" data-tab="activity" title="Every card added, bought, sold or removed">Activity</button>
         </div>
         <div class="head-actions">
           <button id="btn-add" class="btn">Add a card</button>
@@ -152,7 +153,25 @@
         <h2>Listings &amp; open orders</h2>
         <span id="fee-note" class="muted"></span>
       </div>
+      <div id="money-line" class="totals-strip hidden"></div>
       <ul id="market-list" class="rules-list"><li class="muted">Nothing yet.</li></ul>
+    </section>
+
+    <!-- Operator only: what each seller is owed from card payments -->
+    <section class="panel hidden" id="operator-panel">
+      <div class="panel-head">
+        <h2>Seller balances</h2>
+        <span class="muted">Card payments land in your Stripe account. This tracks what you owe each seller.</span>
+      </div>
+      <div class="table-scroll">
+        <table class="inv-table">
+          <thead><tr>
+            <th>Seller</th><th class="num">Card sales, their share</th><th class="num">Paid out</th>
+            <th class="num">You owe them</th><th class="num">Fees they owe you</th><th></th>
+          </tr></thead>
+          <tbody id="operator-body"></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- Advanced settings (hidden until ⚙ Advanced is clicked) -->
@@ -238,6 +257,29 @@
       <div class="dialog-row">
         <button type="button" class="btn" data-close-dialog>Cancel</button>
         <button type="submit" class="btn btn-primary">Record sale</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Operator: record a payout to a seller -->
+  <dialog id="payout-dialog">
+    <form method="dialog" id="payout-form">
+      <h2 id="payout-title">Record a payout</h2>
+      <p class="muted">This records money you already sent. It does not send any.</p>
+      <div class="form-grid">
+        <label>Amount (USD)
+          <input name="amount" type="number" step="0.01" min="0.01" required>
+        </label>
+        <label>How you paid
+          <input name="method" placeholder="Venmo, PayPal, cash" maxlength="40">
+        </label>
+        <label class="span-2">Note
+          <input name="note" maxlength="200">
+        </label>
+      </div>
+      <div class="dialog-row">
+        <button type="button" class="btn" data-close-dialog>Cancel</button>
+        <button type="submit" class="btn btn-primary">Record payout</button>
       </div>
     </form>
   </dialog>

@@ -210,6 +210,17 @@ def patch_inventory(item_id: int):
                 blocked = release_listings(s, item)
                 if blocked:
                     return jsonify({"error": blocked}), 409
+            # A hand edit still goes in the ledger, so the history adds up:
+            # copies taken out are 'removed', copies put in are 'added'.
+            delta = quantity - item.quantity
+            if delta:
+                log_event(
+                    s, item.user_id, item.catalog_card_id,
+                    "added" if delta > 0 else "removed",
+                    channel="manual", quantity=abs(delta), condition=item.condition,
+                    image_url=item.image_url, crop_path=item.source_crop_path,
+                    note="quantity edited",
+                )
             item.quantity = quantity
         if "condition" in patch:
             item.condition = str(patch["condition"]).upper()[:20]
@@ -246,6 +257,12 @@ def delete_inventory(item_id: int):
         blocked = release_listings(s, item)
         if blocked:
             return jsonify({"error": blocked}), 409
+        if item.quantity > 0:
+            log_event(
+                s, item.user_id, item.catalog_card_id, "removed",
+                channel="manual", quantity=item.quantity, condition=item.condition,
+                image_url=item.image_url, crop_path=item.source_crop_path,
+            )
         if s.query(MarketListing).filter_by(inventory_item_id=item.id).count():
             item.quantity = 0
         else:

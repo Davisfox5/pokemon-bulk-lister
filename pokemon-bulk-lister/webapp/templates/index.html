@@ -76,12 +76,12 @@
       <button id="publish-ebay-btn" data-site="ebay">List on eBay <span class="muted small pub-status" id="pub-ebay">…</span></button>
       <button id="publish-tcg-btn" data-site="tcgplayer">Upload to TCGplayer <span class="muted small pub-status" id="pub-tcgplayer">…</span></button>
       <button id="publish-whatnot-btn" data-site="whatnot">Upload to Whatnot <span class="muted small pub-status" id="pub-whatnot">…</span></button>
+      <button id="connections-btn-2" type="button">Connections</button>
     </div>
     <div class="muted small">
-      eBay lists each priced card live via the official Sell API (needs
-      <code>python -m webapp.setup_ebay</code> once). TCGplayer &amp; Whatnot upload the
-      generated CSV through the seller portal via a headless browser (needs
-      <code>python -m webapp.setup_portal --site &lt;name&gt;</code> once).
+      eBay lists each priced card live through the official Sell API. TCGplayer and Whatnot
+      get the generated CSV uploaded through your seller portal session.
+      <button id="connections-btn" type="button" class="linkish">Set up and check connections</button>
     </div>
     <div id="publish-msg" class="muted"></div>
   </section>
@@ -151,6 +151,21 @@
     </div>
   </div>
 
+
+  <!-- Connections: set up and check eBay, TCGplayer, Whatnot, Stripe -->
+  <div id="conn-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="conn-title">
+    <div class="modal-card conn-card">
+      <header>
+        <h2 id="conn-title">Connections</h2>
+        <button id="conn-close" aria-label="Close">×</button>
+      </header>
+      <div class="modal-body conn-body">
+        <p class="muted small">Keys live in the <code>.env</code> file next to the app, never in this page.
+          After editing <code>.env</code>, restart the app.</p>
+        <div id="conn-list">Loading…</div>
+      </div>
+    </div>
+  </div>
 
   <!-- Confirm modal: shown before anything goes live or leaves the bench -->
   <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">

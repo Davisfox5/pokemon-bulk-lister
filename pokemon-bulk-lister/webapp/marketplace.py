@@ -3,13 +3,21 @@
 The platform records a fee on every sale (PLATFORM_FEE_PCT of the sale price,
 default 10%). Two payment paths, same ledger:
 
-  stripe    If STRIPE_SECRET_KEY is set (and the `stripe` package installed),
-            "buy" returns a Stripe Checkout URL; the webhook marks the order
-            paid. Money lands in the platform's Stripe account; seller_proceeds
-            accrue to the seller's balance (paid out off-platform for now).
-  offline   No Stripe configured: the order is created pending_payment, buyer
-            and seller settle directly (Venmo/cash/trade night), and the seller
-            clicks "mark paid" — the fee is recorded as owed to the platform.
+  stripe    STRIPE_SECRET_KEY set: "buy" returns a Stripe Checkout URL. The
+            buyer pays the platform's Stripe account. The order is settled
+            three ways, whichever happens first, and settling is idempotent:
+              1. the buyer's browser returns from Checkout and the server
+                 asks Stripe whether the session was paid (works on a local
+                 install with no public URL)
+              2. the signed webhook, if STRIPE_WEBHOOK_SECRET is set
+              3. a sweep of stale orders the next time the listing or the
+                 seller's orders are looked at
+            An unpaid Checkout session expires after STRIPE_CHECKOUT_MINUTES
+            and frees the card. The seller's proceeds accrue as a balance the
+            operator pays out (see Payout).
+  offline   No Stripe key: the order is created pending_payment, buyer and
+            seller settle directly (Venmo/cash/trade night), and the seller
+            clicks "mark paid". The fee is recorded as owed to the platform.
 
 On payment the card actually changes hands in the database: the inventory item
 moves from seller to buyer (with the sale price as the buyer's cost basis), so
@@ -20,7 +28,11 @@ from __future__ import annotations
 import math
 import os
 import sys
-from flask import Blueprint, abort, jsonify, render_template, request
+import time
+from datetime import timedelta
+
+from flask import Blueprint, abort, jsonify, redirect, render_template, request
+from sqlalchemy.exc import IntegrityError
 
 from webapp.auth import current_user_id, login_required
 from webapp.catalog import price_provenance
@@ -29,6 +41,7 @@ from webapp.models import (
     InventoryItem,
     MarketListing,
     Order,
+    Payout,
     User,
     get_session,
     log_event,
@@ -38,6 +51,9 @@ from webapp.models import (
 market_bp = Blueprint("market", __name__)
 
 PLATFORM_FEE_PCT = float(os.getenv("PLATFORM_FEE_PCT", "10"))
+# How long a buyer has to finish paying before the card is freed. Stripe's
+# own minimum for a Checkout session is 30 minutes.
+STRIPE_CHECKOUT_MINUTES = max(31, int(os.getenv("STRIPE_CHECKOUT_MINUTES", "31")))
 
 
 def _fee(amount: float) -> float:
@@ -50,16 +66,7 @@ def _mask_email(email: str) -> str:
 
 
 def _stripe():
-    """Return a configured stripe module, or None when not set up.
-
-    TODO(launch): wire up Stripe before launch — decision 2026-07-22 is to ship
-    offline settlement until then. Launch checklist: create the platform Stripe
-    account, set STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET, `pip install
-    stripe`, register the /api/market/stripe-webhook endpoint in the Stripe
-    dashboard, sandbox-test the checkout path (it is code-complete but has
-    never run against a real key), and decide on Stripe Connect for automated
-    seller payouts vs. manual payouts from the balance ledger.
-    """
+    """Return a configured stripe module, or None when not set up."""
     if not os.getenv("STRIPE_SECRET_KEY"):
         return None
     try:
@@ -130,7 +137,13 @@ def list_for_sale(item_id: int):
                 return jsonify({"error": "price must be a number greater than 0"}), 400
 
         listing = _create_listing(s, item, price)
-        s.commit()
+        try:
+            s.commit()
+        except IntegrityError:
+            # Lost a race with another request listing the same card; the
+            # unique index on active listings refused the second one.
+            s.rollback()
+            return jsonify({"error": "already listed"}), 409
         out = {"listing_id": listing.id, "price": listing.price,
                "fee_on_sale": _fee(listing.price), "fee_pct": PLATFORM_FEE_PCT}
     finally:
@@ -177,10 +190,15 @@ def bulk_list_for_sale():
             elif price_provenance(cc)["flagged"] and not include_flagged:
                 out["skipped_flagged"] += 1
             else:
+                if not dry_run:
+                    try:
+                        with s.begin_nested():
+                            _create_listing(s, item, price)
+                    except IntegrityError:
+                        out["skipped_already_listed"] += 1
+                        continue
                 out["to_list"] += 1
                 out["total"] += price
-                if not dry_run:
-                    _create_listing(s, item, price)
         if not dry_run:
             s.commit()
         out["total"] = round(out["total"], 2)
@@ -315,6 +333,12 @@ def buy(listing_id: int):
             abort(404)
         if listing.seller_id == uid:
             return jsonify({"error": "that's your own listing"}), 400
+        # An abandoned card checkout must not block the next buyer forever.
+        _sweep_stripe_orders(
+            s, s.query(Order).filter_by(listing_id=listing.id, status="pending_payment").all())
+        s.refresh(listing)
+        if listing.status != "active":
+            return jsonify({"error": "this card just sold"}), 409
         if s.query(Order).filter_by(listing_id=listing.id, status="pending_payment").count():
             return jsonify({"error": "another buyer already has a pending order"}), 409
         item = s.get(InventoryItem, listing.inventory_item_id)
@@ -340,23 +364,35 @@ def buy(listing_id: int):
             s.add(order)
             s.commit()
             base = request.host_url.rstrip("/")
-            session_obj = stripe.checkout.Session.create(
-                mode="payment",
-                line_items=[{
-                    "quantity": 1,
-                    "price_data": {
-                        "currency": "usd",
-                        "unit_amount": int(round(amount * 100)),
-                        "product_data": {"name": listing.catalog_card.name},
-                    },
-                }],
-                metadata={"order_id": str(order.id)},
-                success_url=f"{base}/portfolio?order={order.id}&paid=1",
-                cancel_url=f"{base}/market?cancelled={order.id}",
-            )
-            order.payment_ref = session_obj.id
+            try:
+                session_obj = stripe.checkout.Session.create(
+                    mode="payment",
+                    line_items=[{
+                        "quantity": 1,
+                        "price_data": {
+                            "currency": "usd",
+                            "unit_amount": _cents(amount),
+                            "product_data": {"name": listing.catalog_card.name},
+                        },
+                    }],
+                    metadata={"order_id": str(order.id)},
+                    client_reference_id=str(order.id),
+                    # Stripe substitutes the session id into the template.
+                    success_url=(f"{base}/market/orders/{order.id}/return"
+                                 "?session_id={CHECKOUT_SESSION_ID}"),
+                    cancel_url=f"{base}/market/orders/{order.id}/abandon",
+                    expires_at=int(time.time()) + STRIPE_CHECKOUT_MINUTES * 60,
+                )
+            except Exception as exc:
+                # No session, so nothing can ever settle this order: do not
+                # leave it holding the card.
+                order.status = "cancelled"
+                s.commit()
+                print(f"[market] stripe checkout failed: {exc}", file=sys.stderr)
+                return jsonify({"error": f"could not start card payment: {exc}"}), 502
+            order.payment_ref = session_obj["id"]
             s.commit()
-            return jsonify({"order_id": order.id, "checkout_url": session_obj.url})
+            return jsonify({"order_id": order.id, "checkout_url": session_obj["url"]})
 
         # Offline settlement: order awaits the seller confirming payment.
         s.add(order)
@@ -442,6 +478,158 @@ def _apply_payment(s, order: Order) -> None:
     ).update({"status": "cancelled"}, synchronize_session=False)
 
 
+def _cents(amount: float) -> int:
+    return int(round(amount * 100))
+
+
+def _settle_stripe_order(s, stripe, order: Order) -> str:
+    """Ask Stripe what happened to an order's Checkout session and act on it.
+
+    Returns the order's resulting status: 'paid', 'cancelled' or
+    'pending_payment'. Commits. Trusts only what Stripe's API says about the
+    session this server created, never a query string.
+    """
+    if order.status != "pending_payment":
+        return order.status
+    if not order.payment_ref:
+        order.status = "cancelled"   # checkout never started
+        s.commit()
+        return "cancelled"
+    session_obj = stripe.checkout.Session.retrieve(order.payment_ref)
+    return _apply_stripe_session(s, order, session_obj)
+
+
+def _apply_stripe_session(s, order: Order, session_obj) -> str:
+    """Settle `order` from a Checkout session object (fetched or delivered
+    by a verified webhook). Commits."""
+    if order.status != "pending_payment":
+        return order.status
+    if session_obj["id"] != order.payment_ref:
+        raise PaymentError("this payment belongs to a different order")
+    if session_obj["payment_status"] == "paid":
+        if int(session_obj["amount_total"]) != _cents(order.amount):
+            raise PaymentError(
+                f"Stripe charged {session_obj['amount_total']} cents but the order is "
+                f"for {_cents(order.amount)}; not settling it automatically")
+        try:
+            _apply_payment(s, order)
+        except PaymentError:
+            # The buyer was charged but there is no card to hand over (the
+            # order was cancelled by _apply_payment). Send the money back.
+            _refund(session_obj, order)
+            raise
+        s.commit()
+        return "paid"
+    if session_obj["status"] == "expired":
+        order.status = "cancelled"
+        s.commit()
+        return "cancelled"
+    return "pending_payment"
+
+
+def _refund(session_obj, order: Order) -> None:
+    stripe = _stripe()
+    try:
+        stripe.Refund.create(payment_intent=session_obj["payment_intent"])
+        print(f"[market] refunded order {order.id}: card no longer available", file=sys.stderr)
+    except Exception as exc:
+        print(f"[market] REFUND NEEDED for order {order.id} "
+              f"(session {session_obj['id']}): {exc}", file=sys.stderr)
+
+
+def _void_stripe_order(s, stripe, order: Order) -> str:
+    """Cancel an unpaid card order. The Checkout session is expired first so
+    the buyer cannot pay for a card that has been released; if the payment
+    already went through, the order is settled instead. Commits."""
+    status = _settle_stripe_order(s, stripe, order)
+    if status != "pending_payment":
+        return status
+    try:
+        stripe.checkout.Session.expire(order.payment_ref)
+    except Exception as exc:
+        # Expiring fails when the session completed a moment ago: look again.
+        status = _settle_stripe_order(s, stripe, order)
+        if status == "pending_payment":
+            raise PaymentError(f"could not cancel the card payment: {exc}")
+        return status
+    order.status = "cancelled"
+    s.commit()
+    return "cancelled"
+
+
+def _sweep_stripe_orders(s, orders) -> None:
+    """Settle or release card orders whose checkout window has passed. Called
+    where a stale order would otherwise be in the way."""
+    cutoff = utcnow() - timedelta(minutes=STRIPE_CHECKOUT_MINUTES + 1)
+    stale = [o for o in orders
+             if o.status == "pending_payment" and o.payment_provider == "stripe"
+             and o.created_at < cutoff]
+    if not stale:
+        return
+    stripe = _stripe()
+    if stripe is None:
+        return
+    for order in stale:
+        try:
+            if _settle_stripe_order(s, stripe, order) == "pending_payment":
+                _void_stripe_order(s, stripe, order)
+        except Exception as exc:
+            s.rollback()
+            print(f"[market] sweep order {order.id}: {exc}", file=sys.stderr)
+
+
+@market_bp.route("/market/orders/<int:order_id>/return")
+@login_required
+def stripe_return(order_id: int):
+    """Where Stripe sends the buyer after paying. Settles the order by asking
+    Stripe directly, so card payments work without a webhook."""
+    stripe = _stripe()
+    s = get_session()
+    try:
+        order = s.query(Order).filter_by(id=order_id, buyer_id=current_user_id()).one_or_none()
+        if order is None or order.payment_provider != "stripe":
+            abort(404)
+        if stripe is None:
+            return redirect(f"/portfolio?payment=unknown&order={order_id}")
+        try:
+            status = _settle_stripe_order(s, stripe, order)
+        except PaymentError as exc:
+            print(f"[market] stripe return order {order_id}: {exc}", file=sys.stderr)
+            return redirect(f"/portfolio?payment=problem&order={order_id}")
+        except Exception as exc:
+            print(f"[market] stripe return order {order_id}: {exc}", file=sys.stderr)
+            return redirect(f"/portfolio?payment=unknown&order={order_id}")
+    finally:
+        s.close()
+    outcome = {"paid": "paid", "completed": "paid", "cancelled": "cancelled"}.get(status, "pending")
+    return redirect(f"/portfolio?payment={outcome}&order={order_id}")
+
+
+@market_bp.route("/market/orders/<int:order_id>/abandon")
+@login_required
+def stripe_abandon(order_id: int):
+    """Where Stripe sends a buyer who backs out of Checkout. Releases the
+    card straight away instead of waiting for the session to expire."""
+    stripe = _stripe()
+    s = get_session()
+    try:
+        order = s.query(Order).filter_by(id=order_id, buyer_id=current_user_id()).one_or_none()
+        if order is None or order.payment_provider != "stripe":
+            abort(404)
+        status = order.status
+        if stripe is not None and status == "pending_payment":
+            try:
+                status = _void_stripe_order(s, stripe, order)
+            except Exception as exc:
+                s.rollback()
+                print(f"[market] stripe abandon order {order_id}: {exc}", file=sys.stderr)
+    finally:
+        s.close()
+    if status in ("paid", "completed"):
+        return redirect(f"/portfolio?payment=paid&order={order_id}")
+    return redirect(f"/market?payment=cancelled&order={order_id}")
+
+
 @market_bp.route("/api/market/orders/<int:order_id>/mark-paid", methods=["POST"])
 @login_required
 def mark_paid(order_id: int):
@@ -469,20 +657,36 @@ def mark_paid(order_id: int):
 def cancel_order(order_id: int):
     """Either side can back out of an unpaid order. Without this, a buyer who
     clicks Buy and never pays would hold the seller's card indefinitely.
-    Orders being paid through Stripe are left alone: the payment may already
-    be in flight."""
+
+    For a card order the Checkout session is expired first; if the payment
+    turns out to have gone through already, the order is settled instead and
+    this returns 409."""
     uid = current_user_id()
     s = get_session()
     try:
         order = s.query(Order).filter(
             Order.id == order_id, Order.status == "pending_payment",
-            Order.payment_provider == "offline",
             (Order.buyer_id == uid) | (Order.seller_id == uid),
         ).one_or_none()
         if order is None:
             abort(404)
-        order.status = "cancelled"
-        s.commit()
+        if order.payment_provider == "stripe":
+            stripe = _stripe()
+            if stripe is None:
+                return jsonify({"error": "card payments are not configured on this server, "
+                                         "so this order cannot be checked with Stripe"}), 409
+            try:
+                status = _void_stripe_order(s, stripe, order)
+            except PaymentError as exc:
+                return jsonify({"error": str(exc)}), 409
+            except Exception as exc:
+                s.rollback()
+                return jsonify({"error": f"could not reach Stripe: {exc}"}), 502
+            if status != "cancelled":
+                return jsonify({"error": "this order has already been paid", "status": status}), 409
+        else:
+            order.status = "cancelled"
+            s.commit()
     finally:
         s.close()
     return jsonify({"order_id": order_id, "status": "cancelled"})
@@ -509,34 +713,46 @@ def complete_order(order_id: int):
 
 @market_bp.route("/api/market/stripe-webhook", methods=["POST"])
 def stripe_webhook():
-    stripe = _stripe()
-    if stripe is None:
-        abort(404)
-    payload = request.get_data()
-    secret = os.getenv("STRIPE_WEBHOOK_SECRET")
-    try:
-        if secret:
-            event = stripe.Webhook.construct_event(
-                payload, request.headers.get("Stripe-Signature", ""), secret
-            )
-        else:
-            event = stripe.Event.construct_from(request.get_json(force=True), stripe.api_key)
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 400
+    """Optional second path to settlement, for installs Stripe can reach.
 
-    if event["type"] == "checkout.session.completed":
-        order_id = int(event["data"]["object"]["metadata"]["order_id"])
-        s = get_session()
-        try:
-            order = s.query(Order).filter_by(id=order_id, status="pending_payment").one_or_none()
-            if order is not None:
-                try:
-                    _apply_payment(s, order)
+    Only signed events are accepted. Without STRIPE_WEBHOOK_SECRET this
+    endpoint is off: an unsigned "payment completed" from anyone on the
+    network would otherwise hand over cards for free.
+    """
+    stripe = _stripe()
+    secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+    if stripe is None or not secret:
+        abort(404)
+    try:
+        event = stripe.Webhook.construct_event(
+            request.get_data(), request.headers.get("Stripe-Signature", ""), secret
+        )
+    except Exception as exc:
+        return jsonify({"error": f"signature check failed: {exc}"}), 400
+
+    kind = event["type"]
+    if not kind.startswith("checkout.session."):
+        return jsonify({"received": True})
+    session_obj = event["data"]["object"]
+    s = get_session()
+    try:
+        order = s.query(Order).filter_by(
+            payment_ref=session_obj["id"], payment_provider="stripe"
+        ).one_or_none()
+        if order is not None and order.status == "pending_payment":
+            try:
+                if kind in ("checkout.session.completed",
+                            "checkout.session.async_payment_succeeded",
+                            "checkout.session.expired"):
+                    _apply_stripe_session(s, order, session_obj)
+                elif kind == "checkout.session.async_payment_failed":
+                    order.status = "cancelled"
                     s.commit()
-                except PaymentError as exc:
-                    print(f"[market] stripe order {order_id}: {exc}", file=sys.stderr)
-        finally:
-            s.close()
+            except PaymentError as exc:
+                s.rollback()
+                print(f"[market] stripe webhook order {order.id}: {exc}", file=sys.stderr)
+    finally:
+        s.close()
     return jsonify({"received": True})
 
 
@@ -585,22 +801,123 @@ def my_market():
         buying = (s.query(Order).filter_by(buyer_id=uid)
                   .order_by(Order.created_at.desc()).limit(50).all())
 
-        balance = round(sum(
-            o.seller_proceeds for o in selling if o.status in ("paid", "completed")
-        ), 2)
-        fees_recorded = round(sum(
-            o.platform_fee for o in selling if o.status in ("paid", "completed")
-        ), 2)
+        _sweep_stripe_orders(s, [o for o in selling + buying if o.status == "pending_payment"])
+        money = seller_balance(s, uid)
 
         out = {
             "active_listings": active_out,
             "sales": [_order_dict(s, o) for o in selling],
             "purchases": [_order_dict(s, o) for o in buying],
-            "balance": balance,
-            "fees_recorded": fees_recorded,
+            **money,
             "fee_pct": PLATFORM_FEE_PCT,
             "payments": "stripe" if _stripe() else "offline",
+            "is_operator": is_operator(s, uid),
         }
+    finally:
+        s.close()
+    return jsonify(out)
+
+
+# ----------------------------------------------------------------------
+# Balances and payouts
+# ----------------------------------------------------------------------
+
+def seller_balance(s, seller_id: int) -> dict:
+    """Where a seller stands with the platform.
+
+    card_proceeds  their share of sales paid by card (the money is in the
+                   operator's Stripe account)
+    paid_out       what the operator has already sent them
+    balance        card_proceeds - paid_out: what the operator still owes
+    fees_owed      platform fees on sales the seller was paid for directly
+    """
+    settled = (s.query(Order)
+               .filter(Order.seller_id == seller_id, Order.status.in_(("paid", "completed")))
+               .all())
+    card = sum(o.seller_proceeds for o in settled if o.payment_provider == "stripe")
+    fees_owed = sum(o.platform_fee for o in settled if o.payment_provider != "stripe")
+    paid_out = sum(p.amount for p in s.query(Payout).filter_by(seller_id=seller_id).all())
+    return {
+        "card_proceeds": round(card, 2),
+        "paid_out": round(paid_out, 2),
+        "balance": round(card - paid_out, 2),
+        "fees_owed": round(fees_owed, 2),
+        "fees_recorded": round(sum(o.platform_fee for o in settled), 2),
+    }
+
+
+def is_operator(s, uid) -> bool:
+    """The operator runs the install and holds the Stripe account. Set
+    ADMIN_EMAILS (comma separated) to name them; otherwise it is the first
+    account registered."""
+    if not uid:
+        return False
+    user = s.get(User, uid)
+    if user is None:
+        return False
+    admins = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
+    if admins:
+        return user.email.lower() in admins
+    first = s.query(User).order_by(User.id.asc()).first()
+    return first is not None and first.id == user.id
+
+
+@market_bp.route("/api/admin/balances")
+@login_required
+def admin_balances():
+    """Operator only: every seller with money moving, and what is owed."""
+    s = get_session()
+    try:
+        if not is_operator(s, current_user_id()):
+            abort(403)
+        seller_ids = {row[0] for row in s.query(Order.seller_id)
+                      .filter(Order.status.in_(("paid", "completed"))).distinct().all()}
+        seller_ids |= {row[0] for row in s.query(Payout.seller_id).distinct().all()}
+        rows = []
+        for sid in sorted(seller_ids):
+            user = s.get(User, sid)
+            rows.append({"seller_id": sid, "email": user.email if user else "?",
+                         **seller_balance(s, sid)})
+        payouts = [{
+            "id": p.id, "seller_id": p.seller_id, "amount": p.amount, "method": p.method,
+            "note": p.note, "created_at": p.created_at.isoformat() + "Z",
+        } for p in s.query(Payout).order_by(Payout.created_at.desc()).limit(100).all()]
+    finally:
+        s.close()
+    rows.sort(key=lambda r: -r["balance"])
+    return jsonify({"sellers": rows, "payouts": payouts})
+
+
+@market_bp.route("/api/admin/payouts", methods=["POST"])
+@login_required
+def record_payout():
+    """Operator only. Body: {seller_id, amount, method?, note?}. Records that
+    the operator sent a seller money; it does not move any money itself."""
+    body = request.get_json(silent=True) or {}
+    amount = _parse_price(body.get("amount"))
+    if amount is None:
+        return jsonify({"error": "amount must be a number greater than 0"}), 400
+    s = get_session()
+    try:
+        uid = current_user_id()
+        if not is_operator(s, uid):
+            abort(403)
+        try:
+            seller = s.get(User, int(body.get("seller_id")))
+        except (TypeError, ValueError):
+            seller = None
+        if seller is None:
+            return jsonify({"error": "unknown seller"}), 400
+        owed = seller_balance(s, seller.id)["balance"]
+        if amount > owed + 0.005:
+            return jsonify({"error": f"that is more than the ${owed:.2f} owed to this seller"}), 400
+        s.add(Payout(
+            seller_id=seller.id, amount=amount, recorded_by=uid,
+            method=str(body.get("method") or "")[:40] or None,
+            note=str(body.get("note") or "")[:500] or None,
+        ))
+        s.commit()
+        out = {"seller_id": seller.id, **seller_balance(s, seller.id)}
     finally:
         s.close()
     return jsonify(out)

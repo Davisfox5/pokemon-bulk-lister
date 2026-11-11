@@ -4,7 +4,7 @@
 
 const lib = {
   items: [],            // current holdings
-  events: { sold: null, purchased: null },
+  events: { sold: null, purchased: null, activity: null },
   totals: null,         // ledger totals
   tab: "have",
   selected: new Set(),  // inventory ids ticked for bulk listing
@@ -54,13 +54,11 @@ async function loadSummary() {
 }
 
 async function loadLedger() {
-  const [sold, purchased] = await Promise.all([
-    api("/api/library/events?kind=sold"),
-    api("/api/library/events?kind=purchased"),
-  ]);
-  lib.events.sold = sold.events;
-  lib.events.purchased = purchased.events;
-  lib.totals = sold.totals;
+  const all = await api("/api/library/events");
+  lib.events.activity = all.events;
+  lib.events.sold = all.events.filter((e) => e.kind === "sold");
+  lib.events.purchased = all.events.filter((e) => e.kind === "purchased");
+  lib.totals = all.totals;
   const t = lib.totals;
   $("#n-sold").textContent = t.sold_cards;
   $("#n-purchased").textContent = t.purchased_cards;
@@ -181,6 +179,23 @@ function renderLedger(kind) {
   const rows = events.filter((e) => matches(e, q));
   $("#lib-count").textContent = events.length ? `${rows.length} of ${events.length} records` : "";
   const t = lib.totals || {};
+
+  if (kind === "activity") {
+    const WHAT = { added: "Added", purchased: "Purchased", sold: "Sold", removed: "Removed" };
+    strip.innerHTML = `
+      <span><strong>${t.added_cards}</strong> added</span>
+      <span><strong>${t.purchased_cards}</strong> purchased</span>
+      <span><strong>${t.sold_cards}</strong> sold</span>
+      <span><strong>${t.removed_cards}</strong> removed without a sale</span>`;
+    head.innerHTML = `<tr><th>Date</th><th></th><th>Card</th><th>What</th><th>Where</th>
+      <th class="num">Qty</th><th class="num">Each</th></tr>`;
+    body.innerHTML = rows.map((e) => `<tr>
+      <td>${shortDate(e.occurred_at)}</td><td>${thumbHtml(e)}</td><td>${cardLine(e)}${noteHtml(e)}</td>
+      <td>${WHAT[e.kind] || esc(e.kind)}</td><td>${CHANNELS[e.channel] || esc(e.channel)}</td>
+      <td class="num">${e.quantity}</td><td class="num">${fmtUsd(e.unit_price)}</td>
+    </tr>`).join("") || emptyRow(7, events.length ? "Nothing matches this search." : "Nothing has happened yet.");
+    return;
+  }
 
   if (kind === "sold") {
     const gainNote = t.sold_with_cost < t.sold_cards
@@ -673,6 +688,19 @@ async function loadMarket() {
   $("#fee-note").textContent = `platform fee ${data.fee_pct}% of each sale · payments: ${
     data.payments === "stripe" ? "card (Stripe)" : "settled directly with the other person"}`;
 
+  const money = $("#money-line");
+  const hasMoney = data.card_proceeds || data.paid_out || data.fees_owed;
+  money.classList.toggle("hidden", !hasMoney);
+  if (hasMoney) {
+    money.innerHTML = `
+      <span>Your share of card sales <strong>${fmtUsd(data.card_proceeds)}</strong></span>
+      <span>Paid out to you <strong>${fmtUsd(data.paid_out)}</strong></span>
+      <span>Still owed to you <strong>${fmtUsd(data.balance)}</strong></span>
+      ${data.fees_owed ? `<span>Fees you owe on sales settled directly <strong>${fmtUsd(data.fees_owed)}</strong></span>` : ""}`;
+  }
+  $("#operator-panel").classList.toggle("hidden", !data.is_operator);
+  if (data.is_operator) loadOperator().catch(console.error);
+
   lib.listings = {};
   for (const l of data.active_listings) lib.listings[l.inventory_item_id] = l;
   for (const id of [...lib.selected]) if (lib.listings[id]) lib.selected.delete(id);
@@ -689,9 +717,10 @@ async function loadMarket() {
   // Orders stay here only while someone has to act; finished ones live in
   // the Sold and Purchased tabs.
   for (const o of data.sales.filter((o) => o.status === "pending_payment")) {
+    const cancelBtn = `<button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}" title="The buyer never paid">Cancel order</button>`;
     const action = o.payment_provider === "offline"
-      ? `<button class="btn mk-paid" data-id="${o.order_id}" data-card="${esc(o.card)}" data-amount="${o.amount}">Mark paid</button>
-         <button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}" title="The buyer never paid">Cancel order</button>` : "";
+      ? `<button class="btn mk-paid" data-id="${o.order_id}" data-card="${esc(o.card)}" data-amount="${o.amount}">Mark paid</button>${cancelBtn}`
+      : `<span class="muted">paying by card</span> ${cancelBtn}`;
     rows.push(`<li>
       <span>Buyer waiting: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
         <span class="muted">you get ${fmtUsd(o.seller_proceeds)} after the ${fmtUsd(o.platform_fee)} fee</span>
@@ -702,11 +731,12 @@ async function loadMarket() {
   for (const o of data.purchases.filter((o) => ["pending_payment", "paid"].includes(o.status))) {
     const action = o.status === "paid"
       ? `<button class="btn mk-complete" data-id="${o.order_id}">Card arrived</button>`
-      : o.payment_provider === "offline"
-        ? `<button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}">Cancel order</button>` : "";
+      : `<button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}">Cancel order</button>`;
     rows.push(`<li>
       <span>Buying: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)} ${ORDER_STATUS[o.status]}
-        ${o.status === "pending_payment" ? '<span class="muted">pay the seller; they confirm it</span>' : ""}</span>
+        ${o.status === "pending_payment" ? `<span class="muted">${o.payment_provider === "stripe"
+          ? "card checkout not finished; cancel and buy again to restart it"
+          : "pay the seller; they confirm it"}</span>` : ""}</span>
       <span>${action}<span class="alert-time"> ${shortDate(o.created_at)}</span></span>
     </li>`);
   }
@@ -857,6 +887,67 @@ async function listOnEbay(item, btn) {
     btn.disabled = false;
   }
 }
+
+/* ---------------- operator: seller balances and payouts ---------------- */
+
+let payoutSeller = null;
+
+async function loadOperator() {
+  const data = await api("/api/admin/balances");
+  $("#operator-body").innerHTML = data.sellers.map((r) => `<tr data-seller="${r.seller_id}">
+      <td>${esc(r.email)}</td>
+      <td class="num">${fmtUsd(r.card_proceeds)}</td>
+      <td class="num">${fmtUsd(r.paid_out)}</td>
+      <td class="num"><strong>${fmtUsd(r.balance)}</strong></td>
+      <td class="num">${r.fees_owed ? fmtUsd(r.fees_owed) : "—"}</td>
+      <td><div class="row-actions">${r.balance > 0
+        ? `<button class="btn" data-act="payout" data-email="${esc(r.email)}" data-balance="${r.balance}">Record payout</button>` : ""}</div></td>
+    </tr>`).join("") || emptyRow(6, "No sales have been paid for yet.");
+}
+
+$("#operator-body").addEventListener("click", (e) => {
+  const btn = e.target.closest('[data-act="payout"]');
+  if (!btn) return;
+  payoutSeller = Number(btn.closest("tr").dataset.seller);
+  const form = $("#payout-form");
+  form.reset();
+  $("#payout-title").textContent = `Record a payout to ${btn.dataset.email}`;
+  form.amount.value = btn.dataset.balance;
+  form.amount.max = btn.dataset.balance;
+  openDialog($("#payout-dialog"));
+});
+
+$("#payout-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try {
+    const res = await postJson("/api/admin/payouts", { ...f, seller_id: payoutSeller });
+    $("#payout-dialog").close();
+    toast(`Payout recorded. ${fmtUsd(res.balance)} still owed.`);
+    loadMarket().catch(console.error);
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- coming back from card checkout ---------------- */
+
+(function paymentOutcome() {
+  const params = new URLSearchParams(location.search);
+  const outcome = params.get("payment");
+  if (!outcome) return;
+  const messages = {
+    paid: ["Payment received. The card is in your library, under Purchased.", "ok"],
+    pending: ["Stripe has not confirmed the payment yet. The order stays open; this page updates when it clears.", "ok"],
+    cancelled: ["Checkout was cancelled. You were not charged.", "ok"],
+    problem: ["The payment could not be matched to the order, so the card was not transferred. If you were charged for a card that was no longer available, it is refunded automatically; otherwise contact the seller.", "err"],
+    unknown: ["Could not reach Stripe to confirm the payment. The order stays open and is checked again shortly.", "err"],
+  };
+  const [text, kind] = messages[outcome] || messages.unknown;
+  history.replaceState(null, "", location.pathname);
+  // After the first paint, so the status line is not lost in the page load.
+  setTimeout(() => toast(text, kind), 300);
+})();
 
 /* ---------------- boot ---------------- */
 

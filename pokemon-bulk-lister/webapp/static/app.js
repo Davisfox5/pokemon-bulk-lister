@@ -725,7 +725,7 @@ function setupPublish() {
       if (el) {
         el.textContent = ready ? "(ready)" : "(setup needed)";
         el.style.color = ready ? "#15803d" : "#b45309";
-        if (!ready && s[site] && s[site].reason) buttons[site].title = s[site].reason;
+        buttons[site].title = ready ? "" : (s[site] && s[site].reason) || "";
       }
     }
   }
@@ -743,11 +743,12 @@ function setupPublish() {
     }
     const c = status.counts[site];
     if (!status[site].ready) {
-      $("#publish-msg").textContent = `${SITE_NAMES[site]} is not set up: ${status[site].reason || "see the note above"}.`;
+      $("#publish-msg").textContent = `${SITE_NAMES[site]} is not connected yet.`;
+      openConnections(site);
       return;
     }
     const WHY_LEFT_OUT = {
-      ebay: "without a hosted image (Edit, then “Push to Cloudinary”)",
+      ebay: "without a hosted photo (Cloudinary is not set up; see Connections)",
       tcgplayer: "without a TCGplayer product id (they did not match a TCGplayer product when priced)",
     };
     const leftOut = c.left_out
@@ -771,6 +772,7 @@ function setupPublish() {
         html: `<p>${plural(clean, "card")} will be listed live on your eBay account at their final
           prices, ${money(c.total - c.flagged_total)} in total. Buyers can purchase them as soon as this
           finishes. Cards already on eBay are updated, not duplicated.</p>
+          ${c.to_upload ? `<p class="muted">Card photos that are not hosted yet (${c.flagged ? `${c.to_upload_unflagged}, or ${c.to_upload} with the flagged cards` : c.to_upload}) are uploaded to Cloudinary first.</p>` : ""}
           ${leftOut}
           ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "more card")} (${money(c.flagged_total)})
             ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review and will not be listed
@@ -814,6 +816,187 @@ function setupPublish() {
     if (btn) btn.addEventListener("click", () => publish(site));
   });
   refreshStatus();
+  refreshPublishStatus = refreshStatus;
+}
+
+let refreshPublishStatus = () => {};
+
+// ---------------------------------------------------------------- connections
+// One panel that says, for each outside service, whether it is connected and
+// what the next step is, and runs that step where it can.
+const conn = { data: null, results: {}, focus: null, timer: null };
+
+async function loadConnections() {
+  conn.data = await api("/api/connections");
+  renderConnections();
+  refreshPublishStatus();
+  // Keep polling while a sign-in window is open.
+  clearTimeout(conn.timer);
+  const busy = ["tcgplayer", "whatnot"].some(s =>
+    ["opening", "waiting"].includes(conn.data[s].login.state));
+  if (busy && !$("#conn-modal").classList.contains("hidden")) {
+    conn.timer = setTimeout(() => loadConnections().catch(() => {}), 1500);
+  }
+}
+
+function openConnections(focus = null) {
+  conn.focus = focus;
+  $("#conn-modal").classList.remove("hidden");
+  $("#conn-list").textContent = "Loading…";
+  loadConnections().catch(err => { $("#conn-list").textContent = `Could not load: ${err.message}`; });
+}
+
+function closeConnections() {
+  $("#conn-modal").classList.add("hidden");
+  clearTimeout(conn.timer);
+}
+
+function connItem(key, name, state, cls, next, actions = "", note = "") {
+  const res = conn.results[key];
+  const steps = res && res.steps
+    ? res.steps.map(s => `<li class="${s.ok ? "ok" : "bad"}"><strong>${escapeHtml(s.name)}:</strong> ${escapeHtml(s.detail)}</li>`).join("")
+    : res ? `<li class="${res.ok ? "ok" : "bad"}">${escapeHtml(res.detail || res.error || "")}</li>` : "";
+  return `<section class="conn-item" data-conn="${key}">
+    <div class="conn-head"><strong>${name}</strong><span class="conn-state ${cls}">${state}</span></div>
+    <p class="conn-next">${escapeHtml(next || "")}</p>
+    ${actions ? `<div class="conn-actions">${actions}</div>` : ""}
+    ${steps ? `<ul class="conn-result">${steps}</ul>` : ""}
+    ${note ? `<p class="conn-note">${note}</p>` : ""}
+  </section>`;
+}
+
+function portalItem(key, name) {
+  const d = conn.data[key];
+  const login = d.login.state;
+  let actions;
+  if (!d.playwright) actions = "";
+  else if (login === "opening") actions = `<span class="muted">Opening a browser window…</span>`;
+  else if (login === "waiting") {
+    actions = `<button class="primary" data-act="portal-finish">I'm signed in, save it</button>
+               <button data-act="portal-cancel">Cancel</button>`;
+  } else if (d.session) {
+    actions = `<button data-act="portal-check">Check session</button>
+               <button data-act="portal-login">Sign in again</button>
+               <button data-act="portal-disconnect">Forget session</button>`;
+  } else {
+    actions = `<button class="primary" data-act="portal-login">Sign in to ${name}</button>`;
+  }
+  const problem = ["error", "cancelled"].includes(login) && d.login.detail
+    ? ` Last attempt: ${d.login.detail}.` : "";
+  return connItem(key, name,
+    d.session ? "session saved" : "not connected", d.session ? "ok" : "todo",
+    d.next + problem, actions,
+    `${name} has no listing API for regular sellers, so this drives your seller portal in a browser.
+     That is against ${name}'s terms and can break when they change the page. Uploading the exported CSV by hand always works.`);
+}
+
+function renderConnections() {
+  const d = conn.data;
+  const e = d.ebay;
+  let ebayActions = "";
+  if (e.configured && !e.authorized) {
+    ebayActions = `<button class="primary" data-act="ebay-consent">1. Open eBay consent page</button>
+      <input id="ebay-redirect-input" placeholder="2. Paste the URL eBay sent you to" aria-label="Redirect URL from eBay" />
+      <button data-act="ebay-authorize">3. Connect</button>`;
+  } else if (e.authorized) {
+    ebayActions = `<button data-act="ebay-check">Check account</button>
+                   <button data-act="ebay-disconnect">Disconnect</button>`;
+  }
+  const s = d.stripe;
+  $("#conn-list").innerHTML = [
+    connItem("identify", "Card identification (Anthropic)", d.identify.ready ? "ready" : "needs setup",
+      d.identify.ready ? "ok" : "todo", d.identify.next),
+    connItem("ebay", `eBay${e.env === "sandbox" ? " (sandbox)" : ""}`,
+      e.ready ? "connected" : "needs setup", e.ready ? "ok" : "todo", e.next + (e.error ? ` (${e.error})` : ""),
+      ebayActions,
+      e.authorized ? "" : "After you approve, eBay sends the browser to your RuName's accepted URL. That page can be anything; copy its full address from the address bar."),
+    connItem("cloudinary", "Photo hosting (Cloudinary)", d.cloudinary.ready ? "ready" : "needs setup",
+      d.cloudinary.ready ? "ok" : "todo", d.cloudinary.next),
+    portalItem("tcgplayer", "TCGplayer"),
+    portalItem("whatnot", "Whatnot"),
+    connItem("stripe", "Card payments (Stripe)",
+      !s.configured ? "off" : s.mode === "test" ? "test mode" : "live", s.ready ? "ok" : "todo", s.next,
+      s.ready ? `<button data-act="stripe-check">Check key</button>` : "",
+      s.mode === "test" ? "Test card: 4242 4242 4242 4242, any future expiry, any CVC." : ""),
+  ].join("");
+  if (conn.focus) {
+    const el = $(`[data-conn="${conn.focus}"]`);
+    if (el) el.scrollIntoView({ block: "center" });
+    conn.focus = null;
+  }
+}
+
+function setupConnections() {
+  ["#connections-btn", "#connections-btn-2"].forEach(sel => $(sel).addEventListener("click", () => openConnections()));
+  $("#conn-close").addEventListener("click", closeConnections);
+  $("#conn-modal").addEventListener("click", ev => { if (ev.target.id === "conn-modal") closeConnections(); });
+
+  $("#conn-list").addEventListener("click", async ev => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const key = btn.closest("[data-conn]").dataset.conn;
+    const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+    const label = btn.textContent;
+    btn.disabled = true;
+    delete conn.results[key];
+    try {
+      switch (btn.dataset.act) {
+        case "ebay-consent": {
+          const { url } = await post("/api/connections/ebay/consent-url");
+          window.open(url, "_blank", "noopener");
+          break;
+        }
+        case "ebay-authorize": {
+          const redirect = $("#ebay-redirect-input").value.trim();
+          if (!redirect) { conn.results.ebay = { ok: false, detail: "Paste the URL from the browser's address bar first." }; break; }
+          await post("/api/connections/ebay/authorize", { redirect });
+          conn.results.ebay = { ok: true, detail: "eBay account connected." };
+          break;
+        }
+        case "ebay-check":
+          btn.textContent = "Checking…";
+          conn.results.ebay = await post("/api/connections/ebay/check");
+          break;
+        case "ebay-disconnect": {
+          const { ok } = await askConfirm({
+            title: "Disconnect eBay?",
+            html: "<p>The saved authorization is deleted. Listings already live on eBay stay up; you can reconnect at any time.</p>",
+            confirm: "Disconnect",
+          });
+          if (ok) await post("/api/connections/ebay/disconnect");
+          break;
+        }
+        case "stripe-check":
+          btn.textContent = "Checking…";
+          conn.results.stripe = await post("/api/connections/stripe/check");
+          break;
+        case "portal-login":
+          await post(`/api/connections/portal/${key}/login`);
+          break;
+        case "portal-finish":
+          btn.textContent = "Saving…";
+          await post(`/api/connections/portal/${key}/login/finish`);
+          conn.results[key] = { ok: true, detail: "Session saved. Run “Check session” to confirm it works." };
+          break;
+        case "portal-cancel":
+          await post(`/api/connections/portal/${key}/login/cancel`);
+          break;
+        case "portal-check":
+          btn.textContent = "Checking… (opens the import page in the background)";
+          conn.results[key] = await post(`/api/connections/portal/${key}/check`);
+          break;
+        case "portal-disconnect":
+          await post(`/api/connections/portal/${key}/disconnect`);
+          break;
+      }
+    } catch (err) {
+      conn.results[key] = { ok: false, detail: err.message };
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+      loadConnections().catch(() => {});
+    }
+  });
 }
 
 async function pollPublishJob() {
@@ -847,6 +1030,7 @@ function setupKeyboard() {
     if (ev.key === "Escape") {
       closeEdit();
       closeBundle();
+      if ($("#confirm-modal").classList.contains("hidden")) closeConnections();
     }
   });
 }
@@ -857,5 +1041,6 @@ setupModal();
 setupBundleModal();
 setupToolbar();
 setupPublish();
+setupConnections();
 setupKeyboard();
 loadCards();

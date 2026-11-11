@@ -287,6 +287,8 @@ class LibraryEvent(Base):
     (a sold card moves to the buyer; the seller keeps the event).
 
     kind:    'added' (scanned or entered, no purchase) | 'purchased' | 'sold'
+             | 'removed' (taken out by hand with no sale: a correction, a
+             gift, a lost card)
     channel: where it happened: 'scan', 'manual', 'market' (this platform),
              'ebay', 'tcgplayer', 'whatnot', 'in_person', 'other'
     unit_price: per-card price paid or received. unit_cost: per-card cost
@@ -319,10 +321,33 @@ class LibraryEvent(Base):
 
 Index("idx_library_events_user_kind", LibraryEvent.user_id, LibraryEvent.kind)
 
-EVENT_KINDS = ("added", "purchased", "sold")
+EVENT_KINDS = ("added", "purchased", "sold", "removed")
 EVENT_CHANNELS = (
     "scan", "manual", "market", "ebay", "tcgplayer", "whatnot", "in_person", "other",
 )
+
+
+class Payout(Base):
+    """Money the platform operator has paid out to a seller.
+
+    Card payments land in the operator's Stripe account, so each sale leaves
+    the operator owing the seller their proceeds. A row here settles part of
+    that. Seller balance = card-payment proceeds - fees owed on sales settled
+    directly - payouts.
+    """
+
+    __tablename__ = "payouts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    seller_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    method: Mapped[Optional[str]] = mapped_column(String(40))
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    recorded_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+Index("idx_payouts_seller", Payout.seller_id)
 
 
 class Deck(Base):
@@ -400,7 +425,36 @@ def init_models(url: Optional[str] = None) -> None:
             cur.execute("PRAGMA foreign_keys=ON")
             cur.close()
     Base.metadata.create_all(_engine)
+    _ensure_indexes(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+
+def _ensure_indexes(engine) -> None:
+    """Indexes on tables that already exist in older databases.
+
+    `create_all` only creates missing tables, so an index added to an
+    existing table has to be applied here. Each step is idempotent and runs
+    on every launch.
+
+    uq_active_listing: a card can have one active marketplace listing. The
+    check-then-insert in the listing endpoints cannot guarantee that under
+    concurrent requests; this partial unique index can. Duplicates left by an
+    older build are cancelled first (the oldest listing is kept), or the
+    index could not be created.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE market_listings SET status = 'cancelled' "
+            "WHERE status = 'active' AND id NOT IN ("
+            "  SELECT MIN(id) FROM market_listings WHERE status = 'active' "
+            "  GROUP BY inventory_item_id)"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_listing "
+            "ON market_listings (inventory_item_id) WHERE status = 'active'"
+        ))
 
 
 def get_session() -> Session:

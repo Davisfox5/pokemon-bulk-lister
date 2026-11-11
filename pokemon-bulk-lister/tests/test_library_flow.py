@@ -417,3 +417,21 @@ def test_decks_are_private_and_popular_decks_can_be_saved(app):
     assert kept["saved"] and kept["source"] == "popular"
     assert kept["meta"]["sample"]["tournament"] == detail["meta"]["sample"]["tournament"]
     assert me.get("/api/decks/p-does-not-exist").status_code == 404
+
+
+def test_removing_or_editing_quantity_by_hand_goes_in_the_ledger(app):
+    c = _user(app, "a@example.com")
+    item = _add(c, quantity=3)
+    c.patch(f"/api/inventory/{item['id']}", json={"quantity": 5})
+    c.patch(f"/api/inventory/{item['id']}", json={"quantity": 4})
+    c.patch(f"/api/inventory/{item['id']}", json={"quantity": 4})      # no change, no row
+    assert c.delete(f"/api/inventory/{item['id']}").status_code == 200
+
+    data = _events(c)
+    assert [(e["kind"], e["quantity"]) for e in reversed(data["events"])] == [
+        ("added", 3), ("added", 2), ("removed", 1), ("removed", 4)]
+    totals = data["totals"]
+    # in minus out equals what is held now
+    assert totals["added_cards"] - totals["removed_cards"] - totals["sold_cards"] == 0
+    assert c.get("/api/inventory").get_json()["items"] == []
+    assert [e["kind"] for e in _events(c, "removed")["events"]] == ["removed", "removed"]

@@ -147,7 +147,7 @@ def backfill_order_events() -> int:
 @library_bp.route("/api/library/events")
 @login_required
 def list_events():
-    """?kind=sold|purchased|added (omit for everything)."""
+    """?kind=sold|purchased|added|removed (omit for everything)."""
     kind = request.args.get("kind")
     uid = current_user_id()
     s = get_session()
@@ -163,7 +163,7 @@ def list_events():
             "sold_cards": 0, "sold_gross": 0.0, "sold_fees": 0.0, "sold_net": 0.0,
             "realized_gain": 0.0, "sold_with_cost": 0,
             "purchased_cards": 0, "purchased_spend": 0.0, "purchased_unpriced": 0,
-            "added_cards": 0,
+            "added_cards": 0, "removed_cards": 0,
         }
         for e in all_events:
             gross = (e.unit_price or 0) * e.quantity
@@ -181,6 +181,8 @@ def list_events():
                     totals["purchased_unpriced"] += e.quantity
             elif e.kind == "added":
                 totals["added_cards"] += e.quantity
+            elif e.kind == "removed":
+                totals["removed_cards"] += e.quantity
         totals["sold_net"] = totals["sold_gross"] - totals["sold_fees"]
         totals = {k: round(v, 2) if isinstance(v, float) else v for k, v in totals.items()}
     finally:

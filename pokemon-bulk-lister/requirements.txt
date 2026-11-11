@@ -9,8 +9,9 @@ Flask>=3.0.0
 anthropic>=0.70.0
 SQLAlchemy>=2.0.0
 
-# Optional: marketplace card payments via Stripe Checkout (set STRIPE_SECRET_KEY)
-# stripe>=7.0.0
+# Marketplace card payments via Stripe Checkout. Inactive until
+# STRIPE_SECRET_KEY is set.
+stripe>=8.0.0
 
 # Optional: only needed if you turn on Terapeak headless scraping
 # (--terapeak or ENABLE_TERAPEAK=1). After install, run:
