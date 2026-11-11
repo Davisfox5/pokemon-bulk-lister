@@ -83,6 +83,55 @@ def same_origin_only():
     return None
 
 
+# Bench routes anyone signed in or not may reach under a public host: card
+# photos (the library and marketplace show them) and the health check.
+_PUBLIC_BENCH_PREFIXES = ("/crops/", "/output/crops/", "/static/")
+_PUBLIC_BENCH_PATHS = ("/healthz", "/api/session")
+
+
+def operator_only_when_public():
+    """before_request hook, after same_origin_only.
+
+    On localhost the Scan page and Connections have no login, which is fine
+    for a tool on your own machine. Served under a real domain they are on
+    the internet, and they can publish listings, spend API credit and read
+    connection status. So under any host that is not local, every bench
+    route (the routes on the app itself, and Connections) needs a signed-in
+    operator. The library, decks, marketplace and login pages keep their own
+    rules.
+    """
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(f"//{request.host}").hostname or "").lower()
+    if host in LOCAL_HOSTS or request.blueprint not in (None, "connections"):
+        return None
+    path = request.path
+    if path in _PUBLIC_BENCH_PATHS or path.startswith(_PUBLIC_BENCH_PREFIXES):
+        return None
+
+    from flask import redirect
+
+    from webapp.auth import current_user_id, is_operator
+    from webapp.models import get_session
+
+    wants_json = path.startswith("/api/") or request.method != "GET"
+    uid = current_user_id()
+    if not uid:
+        if wants_json:
+            return jsonify({"error": "login required"}), 401
+        return redirect(f"/login?next={path}")
+    s = get_session()
+    try:
+        allowed = is_operator(s, uid)
+    finally:
+        s.close()
+    if allowed:
+        return None
+    if wants_json:
+        return jsonify({"error": "operator only"}), 403
+    return redirect("/portfolio")
+
+
 def _has(*names: str) -> bool:
     return all(bool(os.getenv(n)) for n in names)
 

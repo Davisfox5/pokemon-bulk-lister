@@ -3,6 +3,8 @@ import json
 import time
 from contextlib import contextmanager
 
+from pathlib import Path
+
 import pytest
 from flask import Flask
 
@@ -335,3 +337,53 @@ def test_a_browser_that_hangs_while_saving_does_not_block_the_next_sign_in(monke
     assert status["state"] == "error" and not capture.active()
     capture.start()                                                    # a fresh attempt is allowed
     capture.cancel()
+
+
+def test_under_a_real_domain_the_bench_needs_a_signed_in_operator(tmp_path, monkeypatch, mail_outbox):
+    from conftest import verify_link
+    from webapp import auth, models
+
+    models.init_models(f"sqlite:///{tmp_path / 'app.sqlite'}")
+    monkeypatch.setenv("ADMIN_EMAILS", "op@example.com")
+    monkeypatch.setenv("ALLOWED_HOSTS", "cards.example.com")
+    templates = Path(__file__).resolve().parent.parent / "webapp" / "templates"
+    app = Flask(__name__, template_folder=str(templates))
+    app.secret_key = "test"
+    app.before_request(connections.same_origin_only)
+    app.before_request(connections.operator_only_when_public)
+    app.register_blueprint(connections.connections_bp)
+    app.register_blueprint(auth.auth_bp)
+    app.add_url_rule("/", "bench", lambda: "bench")
+    app.add_url_rule("/api/cards", "cards", lambda: "[]")
+    app.add_url_rule("/crops/<path:name>", "crop", lambda name: "img")
+    app.add_url_rule("/healthz", "healthz", lambda: "ok")
+    public = {"Host": "cards.example.com"}
+
+    def user(email, verify=True):
+        c = app.test_client()
+        assert c.post("/register", json={"email": email, "password": "password123"}, headers=public).status_code == 200
+        if verify:
+            c.get(verify_link(mail_outbox, email), headers=public)
+        return c
+
+    anon = app.test_client()
+    # On this machine nothing changes: no login.
+    assert anon.get("/").status_code == 200 and anon.get("/api/connections").status_code == 200
+
+    # Under the domain, a stranger gets nothing from the bench.
+    r = anon.get("/", headers=public)
+    assert r.status_code == 302 and r.headers["Location"] == "/login?next=/"
+    assert anon.get("/api/cards", headers=public).status_code == 401
+    assert anon.get("/api/connections", headers=public).status_code == 401
+    assert anon.post("/api/connections/ebay/disconnect", headers=public).status_code == 401
+    # Card photos, the login page and the health check stay reachable.
+    assert anon.get("/crops/a.jpg", headers=public).status_code == 200
+    assert anon.get("/healthz", headers=public).status_code == 200
+    assert anon.get("/login", headers=public).status_code == 200
+
+    # A signed-in account that is not the operator is turned away too.
+    seller = user("seller@example.com")
+    assert seller.get("/api/cards", headers=public).status_code == 403
+    assert seller.get("/", headers=public).headers["Location"] == "/portfolio"
+    # So is the operator's address before it is confirmed.
+    assert user("op@example.com", verify=False).get("/api/cards", headers=public).status_code == 403

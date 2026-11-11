@@ -100,9 +100,27 @@ app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB
 
 # The bench has no login, so keep other websites from driving it through the
 # operator's browser (see connections.same_origin_only).
-from webapp.connections import same_origin_only  # noqa: E402
+from webapp.connections import operator_only_when_public, same_origin_only  # noqa: E402
 
 app.before_request(same_origin_only)
+# Under a real domain the bench is on the internet: operator login required.
+app.before_request(operator_only_when_public)
+
+# Behind a reverse proxy that terminates HTTPS (a hosting platform, nginx,
+# Caddy). Without this the app thinks it is served over plain http, so the
+# links it mails and the URLs it gives Stripe would be wrong.
+if os.getenv("TRUST_PROXY") == "1":
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_SAMESITE="Lax",
+                      PREFERRED_URL_SCHEME="https")
+
+
+@app.route("/healthz")
+def healthz():
+    """For a hosting platform's health check. Says nothing about the data."""
+    return jsonify({"ok": True})
 
 
 # Lazy singletons

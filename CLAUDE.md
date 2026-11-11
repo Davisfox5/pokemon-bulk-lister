@@ -6,9 +6,9 @@ Two data layers share one SQLite file. The scan bench (`webapp/db.py`, raw sqlit
 
 Accounts must confirm their email before listing, buying or payouts (`auth.verified_required`); the operator is a confirmed address in `ADMIN_EMAILS`. Sales made on other sites come back through `webapp/sales_sync.py` (eBay orders API, CSV exports) and are matched to cards by SKU, which is the crop file stem. Seller payouts are Stripe Connect transfers (`webapp/payouts.py`). Cards already listed on other sites are read into the library by `webapp/listing_import.py` (eBay Trading API, TCGplayer and Whatnot CSVs); it never guesses which card a listing is, and unmatched ones wait in `external_listings` for a person.
 
-Outside services (eBay, Cloudinary, TCGplayer and Whatnot portal sessions, Stripe) are set up and checked from Scan → Connections (`webapp/connections.py`). Secrets stay in `.env`; no endpoint returns or stores one. The scan bench has no login, so `connections.same_origin_only` refuses cross-site POSTs; keep new bench routes behind it (it is a `before_request` hook on the app).
+Outside services (eBay, Cloudinary, TCGplayer and Whatnot portal sessions, Stripe) are set up and checked from Scan → Connections (`webapp/connections.py`). Secrets stay in `.env`; no endpoint returns or stores one. The scan bench has no login, so `connections.same_origin_only` refuses cross-site POSTs; keep new bench routes behind it (it is a `before_request` hook on the app). A bench route that must stay reachable without the operator under a public host has to be listed in `connections._PUBLIC_BENCH_PREFIXES` / `_PUBLIC_BENCH_PATHS`.
 
-Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also runs `python -m compileall -q lib webapp scripts`. There is no deployment — the app runs locally only; no branch auto-deploys anywhere.
+Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also runs `python -m compileall -q lib webapp scripts`. The app runs locally by default; no branch auto-deploys anywhere. `pokemon-bulk-lister/Dockerfile` serves it under a domain (gunicorn, one worker, data on `/data`). Under a non-local host `connections.operator_only_when_public` puts every bench route behind the operator login.
 
 ## Model routing (dev)
 

@@ -549,6 +549,41 @@ and signature check against an in-memory stand-in for Stripe's API, not
 against Stripe itself. The calls follow Stripe's published docs. In test
 mode, do one purchase and one payout setup before going live.
 
+## Hosting it under a real domain
+
+The app is built to run on your own machine. It can also be served under a
+domain. The `Dockerfile` in this directory runs it with gunicorn.
+
+What the host needs:
+
+- **A container host with a persistent disk mounted at `/data`.** Everything
+  the app writes lives there (the SQLite file, card photos, the eBay token,
+  the session key). Without the disk every deploy starts empty.
+- **One instance.** The app keeps job state and locks in memory and uses
+  SQLite, so it cannot be scaled to several copies.
+- **HTTPS in front**, which every hosting platform provides. The image sets
+  `TRUST_PROXY=1` so links and cookies use https.
+- **Environment variables**: `ALLOWED_HOSTS=your.domain` (requests for any
+  other host are refused), `SECRET_KEY` (optional; one is generated on the
+  disk), `ADMIN_EMAILS`, `SMTP_*` so confirmation and reset links are mailed
+  (without SMTP they are only printed in the server log), plus whichever of
+  `ANTHROPIC_API_KEY`, `POKEMONTCG_API_KEY`, `CLOUDINARY_*`, `EBAY_*` and
+  `STRIPE_*` you use.
+- **DNS**: point the domain at the host as the host's instructions say.
+- Health check path: `/healthz`.
+
+What changes under a domain:
+
+- **Scan and Connections need the operator.** On localhost they have no
+  login. Under any other host they answer only to a signed-in, confirmed
+  `ADMIN_EMAILS` account. Everyone else can use the Library, Decks and
+  Marketplace, add cards by hand and import listings, but cannot scan:
+  the scan bench is a single shared workspace.
+- **TCGplayer and Whatnot sign-in does not work on a server.** It opens a
+  Chromium window on the machine the app runs on. Uploading the TCGplayer
+  export and downloading the CSVs still works.
+- Set the Stripe webhook and the eBay redirect to the domain.
+
 ## Pricing aggregation
 
 For each card we collect up to five numbers:
