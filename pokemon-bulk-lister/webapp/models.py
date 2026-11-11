@@ -423,6 +423,43 @@ class ExternalSale(Base):
 Index("uq_external_sale", ExternalSale.source, ExternalSale.external_id, unique=True)
 
 
+class ExternalListing(Base):
+    """A card listed for sale on another site (eBay, TCGplayer, Whatnot),
+    read in so the library knows about it.
+
+    (user_id, source, external_id) is unique, so reading the same listings
+    twice records each once. status:
+      imported   identified; a library row was added (inventory_item_id)
+      linked     its SKU is a card the library already held; nothing added
+      unmatched  not tied to exactly one card; a person assigns or dismisses
+      dismissed  a person said to ignore it
+    """
+
+    __tablename__ = "external_listings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    sku: Mapped[Optional[str]] = mapped_column(String(200))
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    price: Mapped[Optional[float]] = mapped_column(Float)
+    condition: Mapped[Optional[str]] = mapped_column(String(20))
+    url: Mapped[Optional[str]] = mapped_column(Text)
+    image_url: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="unmatched")
+    detail: Mapped[Optional[str]] = mapped_column(Text)
+    inventory_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("inventory_items.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+Index("uq_external_listing", ExternalListing.user_id, ExternalListing.source,
+      ExternalListing.external_id, unique=True)
+
+
 class SellerPayoutAccount(Base):
     """A seller's Stripe connected account, for automatic payouts."""
 

@@ -183,6 +183,10 @@ def list_inventory():
             .all()
         )
         payload = [_item_dict(s, i) for i in items]
+        from webapp.listing_import import listed_on
+        elsewhere = listed_on(s, [i.id for i in items])
+        for row in payload:
+            row["listed_on"] = elsewhere.get(row["id"], [])
     finally:
         s.close()
     payload.sort(key=lambda d: (d["value"] is None, -(d["value"] or 0)))

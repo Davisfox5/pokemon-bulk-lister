@@ -142,7 +142,10 @@ function haveRow(it) {
     <td class="sel"><input type="checkbox" data-act="select" ${lib.selected.has(it.id) ? "checked" : ""}
         ${listing ? "disabled" : ""} aria-label="Select ${esc(it.name)}"></td>
     <td>${thumbHtml(it)}</td>
-    <td>${cardLine(it)}</td>
+    <td>${cardLine(it)}${(it.listed_on || []).map((l) =>
+        `<${l.url ? `a href="${esc(l.url)}" target="_blank" rel="noopener"` : "span"} class="pill"
+          title="Listed on ${esc(l.site)}${l.price == null ? "" : ` at ${fmtUsd(l.price)}`}">${esc(l.site)}${
+          l.price == null ? "" : " " + fmtUsd(l.price)}</${l.url ? "a" : "span"}>`).join(" ")}</td>
     <td>${esc(it.condition)}</td>
     <td class="num">${it.quantity}</td>
     <td class="num price-cell">${fmtUsd(it.price)}${provenanceHtml(it.provenance)}</td>
@@ -426,10 +429,26 @@ $("#sale-form").addEventListener("submit", async (e) => {
 
 /* ---------------- add a card by hand ---------------- */
 
-$("#btn-add").addEventListener("click", () => {
-  $("#add-form").reset();
+// When set, the add-card form is answering "which card is this listing?".
+let assignTarget = null;
+const ADD_INTRO = $("#add-intro").innerHTML;
+
+function openAddDialog(target = null) {
+  const form = $("#add-form");
+  form.reset();
+  assignTarget = target;
+  $("#add-title").textContent = target ? "Which card is this?" : "Add a card";
+  $("#add-intro").innerHTML = target
+    ? `<strong>${esc(target.title)}</strong><br>${esc(target.site)} listing, quantity ${target.quantity}${
+        target.price == null ? "" : `, ${fmtUsd(target.price)}`}. Start typing the card name and pick it if it is offered.`
+    : ADD_INTRO;
+  for (const name of ["quantity", "price", "channel", "acquired_on"]) {
+    form[name].closest("label").classList.toggle("hidden", !!target);
+  }
   openDialog($("#add-dialog"));
-});
+}
+
+$("#btn-add").addEventListener("click", () => openAddDialog());
 
 let suggestTimer = null;
 let suggestions = [];
@@ -465,6 +484,18 @@ $("#add-form").addEventListener("submit", async (e) => {
   const f = Object.fromEntries(new FormData(e.target));
   f.is_holo = e.target.is_holo.checked;
   f.purchased = f.channel !== "manual";
+  if (assignTarget) {
+    try {
+      const done = await postJson(`/api/listings/external/${assignTarget.id}/assign`, f);
+      $("#add-dialog").close();
+      toast(`Added ${done.quantity} × ${done.name} to your library.`);
+      loadListingImport().catch(() => {});
+      refreshAll();
+    } catch (err) {
+      toast(err.message, "err");
+    }
+    return;
+  }
   try {
     const item = await postJson("/api/inventory/add", f);
     $("#add-dialog").close();
@@ -472,6 +503,134 @@ $("#add-form").addEventListener("submit", async (e) => {
       ? `Added ${item.name}. No price on file yet; “Refresh prices” looks it up.`
       : `Added ${item.name} at ${fmtUsd(item.price)} market price.`);
     refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- import listings from other sites ---------------- */
+
+let listingImport = { unmatched: [] };
+
+async function loadListingImport() {
+  const data = await api("/api/listings/external");
+  listingImport = data;
+  $("#btn-li-ebay").disabled = !data.ebay_connected;
+  $("#li-ebay-note").textContent = data.ebay_connected
+    ? "your active listings, read from the connected account"
+    : "not connected for this account; connect eBay first";
+  $("#li-unmatched-wrap").classList.toggle("hidden", !data.unmatched_total);
+  $("#li-unmatched-count").textContent = data.unmatched_total || "";
+  $("#li-unmatched").innerHTML = data.unmatched.map((u) => `<li data-id="${u.id}">
+      <span><span class="pill">${esc(u.site)}</span> <strong>${esc(u.title || "(no title)")}</strong>
+        <span class="muted small">qty ${u.quantity}${u.price == null ? "" : ` · listed at ${fmtUsd(u.price)}`}
+          · ${esc(u.detail || "not identified")}</span></span>
+      <span class="row-actions">
+        <button class="btn" data-li="assign">Choose card</button>
+        <button class="btn btn-ghost" data-li="dismiss" title="Not a card, or not mine">Dismiss</button>
+      </span></li>`).join("");
+}
+
+function listingPreviewHtml(site, p) {
+  return `<p>${esc(site)} has <strong>${p.listings}</strong> listing${p.listings === 1 ? "" : "s"}.</p>
+    <ul>
+      <li><strong>${p.new}</strong> new (${p.new_cards} card${p.new_cards === 1 ? "" : "s"}) will be identified and added to your library</li>
+      <li>${p.already_in_library} already in your library (matched by SKU); nothing added</li>
+      <li>${p.already_imported} imported before; skipped</li>
+    </ul>
+    <p class="muted small">Any listing that cannot be tied to exactly one card is kept under “Needs a look”, not added.</p>`;
+}
+
+function listingResultText(site, r) {
+  return `${site}: added ${r.added} listing${r.added === 1 ? "" : "s"} (${r.cards} card${r.cards === 1 ? "" : "s"})`
+    + (r.linked ? `, ${r.linked} already in your library` : "")
+    + (r.unmatched ? `, ${r.unmatched} need a look` : "")
+    + (r.duplicates ? `, ${r.duplicates} imported before` : "") + ".";
+}
+
+async function runListingImport(site, send) {
+  try {
+    const p = await send(true);
+    if (!p.new && !p.already_in_library) {
+      toast(`${site}: ${p.listings} listing${p.listings === 1 ? "" : "s"} read, nothing new to import.`);
+      return;
+    }
+    const { ok } = await askConfirm({
+      title: `Import ${p.new} ${site} listing${p.new === 1 ? "" : "s"}?`,
+      html: listingPreviewHtml(site, p), confirm: "Import",
+    });
+    if (!ok) return;
+    const r = await send(false);
+    toast(listingResultText(site, r));
+    await loadListingImport();
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+async function postListingFile(source, file, dryRun) {
+  const fd = new FormData();
+  fd.append("source", source);
+  fd.append("file", file);
+  if (dryRun) fd.append("dry_run", "1");
+  const res = await fetch("/api/listings/import", { method: "POST", body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+$("#btn-import-listings").addEventListener("click", () => {
+  openDialog($("#listings-dialog"));
+  loadListingImport().catch((err) => toast(err.message, "err"));
+});
+
+$("#btn-li-ebay").addEventListener("click", () =>
+  runListingImport("eBay", (dryRun) => postJson("/api/listings/import/ebay", { dry_run: dryRun })));
+
+$("#listing-sources").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-li-file]");
+  if (!btn) return;
+  const input = $("#li-file");
+  input.value = "";
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) return;
+    const source = btn.dataset.liFile;
+    runListingImport(source === "tcgplayer" ? "TCGplayer" : "Whatnot",
+      (dryRun) => postListingFile(source, file, dryRun));
+  };
+  input.click();
+});
+
+$("#btn-li-rematch").addEventListener("click", async () => {
+  const btn = $("#btn-li-rematch");
+  btn.disabled = true;
+  try {
+    const r = await postJson("/api/listings/external/rematch");
+    toast(`Identified ${r.added} more listing${r.added === 1 ? "" : "s"}. ${r.still_unmatched} still need a look`
+      + (r.waiting ? ` (${r.waiting} not looked up yet; click again)` : "") + ".");
+    await loadListingImport();
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#li-unmatched").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-li]");
+  if (!btn) return;
+  const row = listingImport.unmatched.find((u) => u.id === Number(btn.closest("li").dataset.id));
+  if (!row) return;
+  if (btn.dataset.li === "assign") {
+    openAddDialog(row);
+    return;
+  }
+  try {
+    await postJson(`/api/listings/external/${row.id}/dismiss`);
+    await loadListingImport();
   } catch (err) {
     toast(err.message, "err");
   }

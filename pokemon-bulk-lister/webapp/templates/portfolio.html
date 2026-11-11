@@ -113,6 +113,7 @@
         </div>
         <div class="head-actions">
           <button id="btn-add" class="btn">Add a card</button>
+          <button id="btn-import-listings" class="btn" title="Bring in cards you already list on eBay, TCGplayer or Whatnot">Import listings</button>
           <button id="btn-promote" class="btn btn-primary">Import scanned cards</button>
         </div>
       </div>
@@ -298,11 +299,37 @@
     </form>
   </dialog>
 
+  <!-- Cards already listed on other sites -->
+  <dialog id="listings-dialog" class="wide">
+    <h2>Import listings from other sites</h2>
+    <p class="muted">Adds the cards you already list elsewhere to this library. Nothing changes on the
+      other site, and nothing is put up for sale here. Reading the same listings again adds nothing.
+      Cards you added by hand before are not recognised, so remove one copy if a card shows twice.</p>
+    <ul class="rules-list" id="listing-sources">
+      <li><span><strong>eBay</strong> <span id="li-ebay-note" class="muted small"></span></span>
+        <button class="btn" id="btn-li-ebay">Read my eBay listings</button></li>
+      <li><span><strong>TCGplayer</strong> <span class="muted small">the pricing export from the seller portal (Pricing, Export). Rows with a quantity are your listings.</span></span>
+        <button class="btn" data-li-file="tcgplayer">Upload export</button></li>
+      <li><span><strong>Whatnot</strong> <span class="muted small">a CSV of your listings with Title, Quantity, Price and SKU columns.</span></span>
+        <button class="btn" data-li-file="whatnot">Upload CSV</button></li>
+    </ul>
+    <input id="li-file" type="file" accept=".csv,text/csv" hidden>
+    <div id="li-unmatched-wrap" class="hidden">
+      <h2 style="margin-top:14px">Needs a look <span id="li-unmatched-count" class="count"></span>
+        <button class="btn btn-ghost" id="btn-li-rematch" title="Look the remaining titles up again">Try matching again</button></h2>
+      <p class="muted small">These could not be tied to exactly one card. Say which card each is, or dismiss it.</p>
+      <ul class="rules-list" id="li-unmatched"></ul>
+    </div>
+    <div class="dialog-row">
+      <button type="button" class="btn" data-close-dialog>Close</button>
+    </div>
+  </dialog>
+
   <!-- Add a card by hand -->
   <dialog id="add-dialog">
     <form method="dialog" id="add-form">
-      <h2>Add a card</h2>
-      <p class="muted">For cards you bought or already own. To add from photos, use <a href="/">Scan</a>.</p>
+      <h2 id="add-title">Add a card</h2>
+      <p class="muted" id="add-intro">For cards you bought or already own. To add from photos, use <a href="/">Scan</a>.</p>
       <div class="form-grid">
         <label class="span-2">Card name
           <input name="name" required list="add-suggestions" autocomplete="off">

@@ -421,6 +421,47 @@ A partial refund at eBay lowers the recorded sale to what you kept.
 Limit: Whatnot's real export column names have not been seen, only inferred,
 so the first import may report a missing column.
 
+### Import listings you already have (eBay, TCGplayer, Whatnot)
+
+**Library, Import listings** adds the cards you already list on other sites
+to your library. Nothing changes on the other site, and nothing is put up for
+sale on this app's marketplace. Each import shows a count first and waits for
+a yes. Reading the same listings again adds nothing.
+
+- **eBay**: read straight from the connected account (Trading API,
+  `GetMyeBaySelling`), including listings made on eBay's own site.
+- **TCGplayer**: upload the pricing export from the seller portal (Pricing,
+  Export). It is the same file that supplies TCGplayer Ids. Rows with a
+  quantity above zero are your listings; the rest of the file is ignored.
+  TCGplayer has no API for sellers, so the file is the only way in.
+- **Whatnot**: upload a CSV of your listings with Title, Quantity, Price and
+  SKU columns (the layout of Whatnot's bulk upload template). Whatnot has no
+  public seller API.
+
+How a listing becomes a card:
+
+- A listing whose SKU is a card this app scanned and listed is already in the
+  library. It is linked, not added again.
+- A TCGplayer row states its set, name, number, condition and printing, so it
+  is added as that card.
+- An eBay or Whatnot listing only has a title. The title must contain a
+  collector number written as number/total (`130/167`). The card is the one
+  with that number, in a set of that size, whose name appears in the title
+  (looked up on pokemontcg.io). Condition is read from the title and is NM
+  when the title does not say.
+- Anything else (no number, a lot, several possible cards, a sealed product,
+  a listing with variations) goes under **Needs a look**, where you pick the
+  card or dismiss it. Lookups are rationed per import; **Try matching again**
+  continues.
+
+Imported cards carry a tag in the Have tab showing the site and asking price.
+A card you had already added by hand is not recognised and will show twice.
+Later changes on the other site (sold out, new quantity) do not update the
+library; sales come back through the sales read-back above.
+
+Not checked against the real sites: that eBay accepts this app's OAuth token
+for the Trading call, and the column names of a real Whatnot listings file.
+
 ### Stripe (card payments on the marketplace)
 
 Without Stripe, a buyer and seller settle directly and the seller clicks
@@ -574,6 +615,7 @@ pokemon-bulk-lister/
 │  ├─ whatnot_lister.py        # Whatnot Seller Hub CSV upload
 │  ├─ decks.py                 # decklist parser, library matching, Limitless popular decks
 │  ├─ ebay_orders.py           # eBay Fulfillment API: read sold orders
+│  ├─ ebay_listings.py         # eBay Trading API: read active listings
 │  ├─ tcgplayer_catalog.py     # real TCGplayer Ids from the seller's export
 │  ├─ mailer.py                # SMTP, or the console when SMTP is not set
 │  └─ cloudinary_client.py
@@ -587,6 +629,7 @@ pokemon-bulk-lister/
 │  ├─ marketplace.py           # list, buy, orders, Stripe checkout, payouts
 │  ├─ connections.py           # setup + checks for eBay, portals, Stripe
 │  ├─ sales_sync.py            # sales read back: eBay orders, CSV exports
+│  ├─ listing_import.py        # listings on other sites read into the library
 │  ├─ payouts.py               # Stripe Connect onboarding + automatic transfers
 │  ├─ refunds.py               # refunds and disputes after a sale settled
 │  ├─ portfolio.py             # valuation, price history, alerts

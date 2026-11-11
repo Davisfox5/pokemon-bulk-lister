@@ -56,6 +56,10 @@ def summary():
                  .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0)
                  .join(CatalogCard).all())
         rows = [_item_dict(s, i) for i in items]
+        from webapp.listing_import import listed_on
+        elsewhere = listed_on(s, [i.id for i in items])
+        for row in rows:
+            row["listed_on"] = elsewhere.get(row["id"], [])
         total_value = round(sum(r["value"] or 0 for r in rows), 2)
         total_cost = round(
             sum((i.acquired_price or 0) * i.quantity for i in items if i.acquired_price), 2

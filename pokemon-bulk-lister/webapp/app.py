@@ -1604,6 +1604,11 @@ from webapp.refunds import refunds_bp  # noqa: E402
 app.register_blueprint(sales_sync.sales_bp)
 app.register_blueprint(payouts_bp)
 app.register_blueprint(refunds_bp)
+
+# Cards already listed on eBay, TCGplayer or Whatnot, read into the library.
+from webapp.listing_import import listings_bp  # noqa: E402
+
+app.register_blueprint(listings_bp)
 sales_sync.start_background()
 
 
