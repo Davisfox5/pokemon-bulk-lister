@@ -1,13 +1,25 @@
-"""SQLite layer for the Pokémon bulk-lister web UI.
+"""Storage for the scan bench: one row per crop (cards table) plus a small
+grids table for the upload provenance. All fields nullable; the pipeline
+fills them in across multiple steps.
 
-One row per crop (cards table) plus a small grids table for the upload provenance.
-All fields nullable — the pipeline fills them in across multiple steps.
+Two backends behind the same functions:
+
+  SQLite    the default. A file on this machine (output/db.sqlite).
+  Postgres  when DATABASE_URL (or BENCH_DATABASE_URL) is a postgres URL. For
+            hosts with no disk that persists, such as Vercel. The db_path
+            argument is then ignored.
+
+Callers use `with connect(path) as conn:` and `conn.execute(sql, params)`
+with `?` placeholders either way; rows read like dicts.
 """
 from __future__ import annotations
 
 import json
+import os
+import queue
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -109,8 +121,88 @@ EDITABLE_ID_FIELDS = (
 )
 
 
+def pg_url() -> Optional[str]:
+    """The Postgres URL the bench should use, in the plain form the driver
+    takes, or None to use the SQLite file."""
+    url = (os.getenv("BENCH_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+    for prefix in ("postgresql+psycopg://", "postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql://" + url[len(prefix):]
+    return None
+
+
+def _now() -> str:
+    """UTC, in the same text form SQLite's datetime('now') writes."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _pg_schema() -> list[str]:
+    """SCHEMA in Postgres's spelling, one statement per entry."""
+    sql = (SCHEMA
+           .replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+           # SQLite's REAL is 8 bytes; Postgres's is 4 and would blur prices.
+           .replace(" REAL", " DOUBLE PRECISION")
+           .replace("(datetime('now'))", "(to_char(timezone('utc', now()), 'YYYY-MM-DD HH24:MI:SS'))"))
+    lines = [line.split("--")[0] for line in sql.splitlines()]
+    return [s.strip() for s in "\n".join(lines).split(";") if s.strip()]
+
+
+class _PgConnection:
+    """The slice of sqlite3.Connection this app uses, over psycopg: `?`
+    placeholders, rows that read like dicts, every statement committed."""
+
+    def __init__(self, raw) -> None:
+        self.raw = raw
+
+    def execute(self, sql: str, params=()):
+        return self.raw.execute(sql.replace("%", "%%").replace("?", "%s"), tuple(params))
+
+
+# Opening a connection to a hosted Postgres costs a TLS handshake, so a few
+# are kept open between requests.
+_pg_idle: "queue.LifoQueue" = queue.LifoQueue(maxsize=4)
+
+
 @contextmanager
-def connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
+def _pg_connect(url: str) -> Iterator[_PgConnection]:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    raw = None
+    while raw is None:
+        try:
+            kept_url, candidate = _pg_idle.get_nowait()
+        except queue.Empty:
+            break
+        if kept_url == url and not candidate.closed and not candidate.broken:
+            raw = candidate
+        else:
+            candidate.close()
+    if raw is None:
+        raw = psycopg.connect(url, autocommit=True, row_factory=dict_row)
+    try:
+        yield _PgConnection(raw)
+    except BaseException:
+        raw.close()
+        raise
+    else:
+        try:
+            _pg_idle.put_nowait((url, raw))
+        except queue.Full:
+            raw.close()
+
+
+# Any 64-bit number; it only has to be the same everywhere this app runs.
+_PG_SCHEMA_LOCK = 7_203_114_905
+
+
+@contextmanager
+def connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[Any]:
+    url = pg_url()
+    if url:
+        with _pg_connect(url) as conn:
+            yield conn
+        return
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -128,6 +220,17 @@ def connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
 
 def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
     with connect(db_path) as conn:
+        if isinstance(conn, _PgConnection):
+            # Two instances starting at once must not both create the tables.
+            # The schema above already has every column, so the SQLite
+            # migrations below have nothing to do here.
+            conn.execute("SELECT pg_advisory_lock(?)", (_PG_SCHEMA_LOCK,))
+            try:
+                for statement in _pg_schema():
+                    conn.execute(statement)
+            finally:
+                conn.execute("SELECT pg_advisory_unlock(?)", (_PG_SCHEMA_LOCK,))
+            return
         conn.executescript(SCHEMA)
         _apply_migrations(conn)
 
@@ -143,6 +246,13 @@ def get_or_create_grid(conn: sqlite3.Connection, filename: str, original_path: s
     row = conn.execute("SELECT id FROM grids WHERE filename = ?", (filename,)).fetchone()
     if row:
         return int(row["id"])
+    if isinstance(conn, _PgConnection):
+        made = conn.execute(
+            "INSERT INTO grids (filename, original_path) VALUES (?, ?) "
+            "ON CONFLICT (filename) DO UPDATE SET filename = EXCLUDED.filename RETURNING id",
+            (filename, original_path),
+        ).fetchone()
+        return int(made["id"])
     cur = conn.execute(
         "INSERT INTO grids (filename, original_path) VALUES (?, ?)",
         (filename, original_path),
@@ -157,6 +267,16 @@ def insert_card_stub(
     row: int,
     col: int,
 ) -> int:
+    if isinstance(conn, _PgConnection):
+        made = conn.execute(
+            "INSERT INTO cards (grid_id, crop_path, row, col) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (crop_path) DO NOTHING RETURNING id",
+            (grid_id, crop_path, row, col),
+        ).fetchone()
+        if made:
+            return int(made["id"])
+        existing = conn.execute("SELECT id FROM cards WHERE crop_path = ?", (crop_path,)).fetchone()
+        return int(existing["id"])
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO cards (grid_id, crop_path, row, col)
@@ -219,9 +339,9 @@ def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any]) -
         if bool_field in safe:
             safe[bool_field] = 1 if safe[bool_field] else 0
     cols = ", ".join(f"{k} = ?" for k in safe.keys())
-    values = list(safe.values()) + [card_id]
+    values = list(safe.values()) + [_now(), card_id]
     conn.execute(
-        f"UPDATE cards SET {cols}, updated_at = datetime('now') WHERE id = ?",
+        f"UPDATE cards SET {cols}, updated_at = ? WHERE id = ?",
         values,
     )
     return get_card(conn, card_id)

@@ -540,6 +540,15 @@ _engine = None
 _SessionLocal = None
 
 
+def normalize_url(url: str) -> str:
+    """Hosted Postgres hands out postgres:// URLs. SQLAlchemy wants the
+    driver named, and this app uses psycopg 3."""
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 def init_models(url: Optional[str] = None) -> None:
     """Create the engine and any missing tables. Passing `url` rebinds to a
     different database (the test suite points this at a temp file)."""
@@ -548,10 +557,14 @@ def init_models(url: Optional[str] = None) -> None:
         return
     if _engine is not None:
         _engine.dispose()
-    db_url = url or DATABASE_URL
+    db_url = normalize_url(url or DATABASE_URL)
     kwargs: dict[str, Any] = {"future": True}
     if db_url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        # A hosted Postgres drops idle connections, and a serverless instance
+        # can sit frozen for minutes: check each one before use, keep few.
+        kwargs.update(pool_pre_ping=True, pool_size=2, max_overflow=3, pool_recycle=300)
     _engine = create_engine(db_url, **kwargs)
     if db_url.startswith("sqlite"):
         # The legacy bench (raw sqlite3) and the scheduler write concurrently;
@@ -566,8 +579,21 @@ def init_models(url: Optional[str] = None) -> None:
             cur.execute("PRAGMA busy_timeout=5000")
             cur.execute("PRAGMA foreign_keys=ON")
             cur.close()
-    Base.metadata.create_all(_engine)
-    _ensure_indexes(_engine)
+    if db_url.startswith("sqlite"):
+        Base.metadata.create_all(_engine)
+        _ensure_indexes(_engine)
+    else:
+        # Two instances starting at once must not both create the tables.
+        from sqlalchemy import text
+
+        with _engine.connect() as lock:
+            lock.execute(text("SELECT pg_advisory_lock(7203114906)"))
+            try:
+                Base.metadata.create_all(_engine)
+                _ensure_indexes(_engine)
+            finally:
+                lock.execute(text("SELECT pg_advisory_unlock(7203114906)"))
+                lock.commit()
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
 
 

@@ -1,7 +1,10 @@
 """SQLite listing-column migration + write/read/stats."""
 from __future__ import annotations
 
+import os
 import sqlite3
+
+import pytest
 
 from webapp import db
 
@@ -15,6 +18,8 @@ def _columns(path: str) -> set[str]:
     return {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(cards)").fetchall()}
 
 
+@pytest.mark.skipif(bool(os.getenv("TEST_DATABASE_URL")),
+                    reason="builds a legacy SQLite file; a Postgres bench starts with every column")
 def test_migration_adds_listing_columns_to_legacy_db(tmp_path):
     path = str(tmp_path / "legacy.sqlite")
     # Pre-listing schema: grids + cards.grid_id, no listing columns, has updated_at.
