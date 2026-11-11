@@ -5,22 +5,26 @@ Two ways in, one recorder:
   eBay       the Fulfillment API (lib/ebay_orders.py), for the operator's
              account and for each user who connected their own. Runs on a
              timer and from "Sync eBay sales" on the Scan page.
-  Whatnot / TCGplayer
-             neither has an orders API for regular sellers, so sales come in
-             as the CSV each site lets a seller export. "Import sales CSV".
+  Whatnot    no orders API for regular sellers, so sales come in as the CSV
+             a seller exports there. "Import sales CSV".
 
 Every listing this app creates carries a SKU: the card photo's file stem
 (page01_r0c2). That SKU is how a sale finds its card. For each sale line:
 
   1. Already seen (source + external id)? Skip. Reading twice records once.
-  2. Find the library card with that SKU. Take the copies out, cancel its
-     marketplace listing and any unpaid order on it (the card is gone), and
-     write a 'sold' row in the ledger with the price and fees.
-  3. No library card? Keep the line as 'unmatched' so a person can deal with
+  2. Find the card with that SKU in the library of the account the sale
+     belongs to. Take the copies out, cancel its marketplace listing and any
+     unpaid order on it (the card is gone), and write a 'sold' ledger row.
+  3. No such card? Keep the line as 'unmatched' so a person can deal with
      it, and say why. Nothing is guessed from the title.
 
-The scan bench's own row is marked sold either way, so the Scan page stops
-offering the card.
+Whose library: a sale only ever touches the library of the account it came
+from. The operator's eBay account and the operator's CSV imports match the
+operator's own cards; a user's connected eBay account matches that user's.
+A sale can never take a card out of someone else's library.
+
+These routes change libraries, so unlike the rest of the scan bench they
+need the operator to be logged in.
 """
 from __future__ import annotations
 
@@ -38,7 +42,10 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import IntegrityError
 
 from webapp import db as bench_db
+from webapp.auth import admin_emails, current_user_id, is_operator, is_verified
 from webapp.models import (
+    LibraryEvent,
+    User,
     ExternalSale,
     InventoryItem,
     MarketListing,
@@ -53,7 +60,12 @@ BENCH_DB_PATH = str(ROOT / os.getenv("OUTPUT_DIR", "output") / "db.sqlite")
 
 sales_bp = Blueprint("sales", __name__)
 
-SOURCES = ("ebay", "whatnot", "tcgplayer")
+CSV_SOURCES = ("whatnot",)
+RETURN_CHANNELS = ("ebay", "whatnot")   # 'added' rows written when a sale is undone
+MAX_CSV_ROWS = 5000
+# Why an unmatched sale still hides its card on the Scan page: it did sell,
+# it just was never in a library.
+BENCH_ONLY = "this card was scanned but never added to a library"
 _sync_lock = threading.Lock()
 _state: dict[str, Any] = {"last_sync_at": None, "last_result": None, "last_error": None}
 
@@ -66,37 +78,56 @@ def _stem(path: Optional[str]) -> str:
     return Path(path or "").stem
 
 
-def _find_inventory(s, sku: str, owner_uid: Optional[int]) -> Optional[InventoryItem]:
-    """The held library card a SKU refers to. SKUs are the crop file stem,
-    or card-inv<id> for a card listed from the library with no photo."""
-    q = s.query(InventoryItem).filter(InventoryItem.quantity > 0)
-    if owner_uid is not None:
-        q = q.filter(InventoryItem.user_id == owner_uid)
+def operator_ids(s) -> set[int]:
+    """Accounts that own the operator's sales: confirmed ADMIN_EMAILS users."""
+    emails = admin_emails()
+    return {u.id for u in s.query(User).all()
+            if u.email.lower() in emails and is_verified(s, u.id)}
+
+
+def _find_inventory(s, sku: str, owners: set[int], include_empty: bool = False) -> Optional[InventoryItem]:
+    """The library card a SKU refers to, among `owners` only. SKUs are the
+    crop file stem, or card-inv<id> for a card listed from the library with
+    no photo. Returns None when no owner holds it, or when more than one
+    does (ambiguous: a person decides, not this code)."""
+    if not owners:
+        return None
+    q = s.query(InventoryItem).filter(InventoryItem.user_id.in_(owners))
+    if not include_empty:
+        q = q.filter(InventoryItem.quantity > 0)
     m = re.fullmatch(r"card-inv(\d+)", sku)
     if m:
         return q.filter(InventoryItem.id == int(m.group(1))).one_or_none()
-    candidates = q.filter(InventoryItem.source_crop_path.like(f"%{sku}%")).all()
+    like = sku.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    candidates = q.filter(InventoryItem.source_crop_path.like(f"%{like}%", escape="\\")).all()
     exact = [i for i in candidates if _stem(i.source_crop_path) == sku]
-    return exact[0] if exact else None
+    return exact[0] if len(exact) == 1 else None
 
 
-def _mark_bench_sold(sku: str, source: str) -> bool:
-    """Flag the scan-bench row so the card is not offered for listing again.
-    Only eBay has a status column on the bench."""
+def _bench_card_id(sku: str) -> Optional[int]:
+    """The scan-bench row with this SKU, if any. Read only."""
     try:
         with bench_db.connect(BENCH_DB_PATH) as conn:
             rows = conn.execute(
                 "SELECT id, crop_path FROM cards WHERE crop_path LIKE ?", (f"%{sku}%",)
             ).fetchall()
             hit = next((r for r in rows if _stem(r["crop_path"]) == sku), None)
-            if hit is None:
-                return False
-            if source == "ebay":
-                bench_db.update_card(conn, int(hit["id"]), {"ebay_listing_status": "sold"})
-            return True
+            return int(hit["id"]) if hit else None
     except Exception as exc:   # the bench DB is optional context, never fatal
         print(f"[sales] bench lookup for {sku}: {exc}", file=sys.stderr)
-        return False
+        return None
+
+
+def _set_bench_status(card_id: Optional[int], status: Optional[str]) -> None:
+    """Flag (or unflag) the bench row, so a sold card is not offered again.
+    Only eBay has a status column on the bench."""
+    if card_id is None:
+        return
+    try:
+        with bench_db.connect(BENCH_DB_PATH) as conn:
+            bench_db.update_card(conn, card_id, {"ebay_listing_status": status})
+    except Exception as exc:
+        print(f"[sales] bench update for card {card_id}: {exc}", file=sys.stderr)
 
 
 def _release(s, item: InventoryItem) -> None:
@@ -114,16 +145,32 @@ def _release(s, item: InventoryItem) -> None:
 def sold_stems() -> set[str]:
     """SKUs (crop file stems) of cards that have sold anywhere: read back
     from a site, sold on this marketplace, or recorded by hand. The scan
-    bench uses this so a sold card is never published or exported again."""
-    from webapp.models import LibraryEvent
+    bench uses this so a sold card is never published or exported again.
 
+    An unmatched sale only counts when it is known to be one of the bench's
+    own cards (BENCH_ONLY). A SKU nobody recognises hides nothing."""
     s = get_session()
     try:
         stems = {row[0] for row in s.query(ExternalSale.sku)
-                 .filter(ExternalSale.status.in_(("recorded", "unmatched", "dismissed")),
-                         ExternalSale.sku.isnot(None)).all()}
-        stems |= {_stem(row[0]) for row in s.query(LibraryEvent.crop_path)
-                  .filter(LibraryEvent.kind == "sold", LibraryEvent.crop_path.isnot(None)).all()}
+                 .filter(ExternalSale.sku.isnot(None),
+                         (ExternalSale.status == "recorded")
+                         | (ExternalSale.status.in_(("unmatched", "dismissed"))
+                            & (ExternalSale.detail == BENCH_ONLY))).all()}
+        # Ledger: copies sold, less copies that came back when a sale was
+        # refunded (those 'added' rows carry the site as their channel).
+        net: dict[str, int] = {}
+        for kind, channel, crop, qty in (
+                s.query(LibraryEvent.kind, LibraryEvent.channel, LibraryEvent.crop_path,
+                        LibraryEvent.quantity)
+                .filter(LibraryEvent.crop_path.isnot(None),
+                        LibraryEvent.kind.in_(("sold", "added"))).all()):
+            if kind == "sold":
+                net[_stem(crop)] = net.get(_stem(crop), 0) + qty
+            elif channel in RETURN_CHANNELS:
+                net[_stem(crop)] = net.get(_stem(crop), 0) - qty
+        stems |= {stem for stem, n in net.items() if n > 0}
+        # A recorded sale that was later reversed no longer counts either.
+        stems -= {stem for stem, n in net.items() if n <= 0}
     finally:
         s.close()
     stems.discard("")
@@ -134,42 +181,84 @@ def sold_stems() -> set[str]:
 # The recorder
 # ----------------------------------------------------------------------
 
-def record_sale_lines(lines: list[dict], source: str, owner_uid: Optional[int] = None) -> dict:
+def _undo(s, sale: ExternalSale) -> None:
+    """A sale that was recorded has since been cancelled or fully refunded at
+    the source: put the card back. The ledger is append-only, so the return
+    is its own 'added' row next to the original 'sold' one."""
+    event = s.get(LibraryEvent, sale.library_event_id) if sale.library_event_id else None
+    if event is not None:
+        item = _find_inventory(s, sale.sku or "", {event.user_id}, include_empty=True)
+        if item is None:
+            item = InventoryItem(
+                user_id=event.user_id, catalog_card_id=event.catalog_card_id, quantity=0,
+                condition=event.condition or "NM", acquired_price=event.unit_cost,
+                source_crop_path=event.crop_path, image_url=event.image_url)
+            s.add(item)
+        item.quantity += event.quantity
+        log_event(
+            s, event.user_id, event.catalog_card_id, "added", channel=sale.source,
+            quantity=event.quantity, condition=event.condition, image_url=event.image_url,
+            crop_path=event.crop_path, note=f"sale {sale.external_id} was refunded or cancelled",
+        )
+    sale.status, sale.detail = "void", "refunded or cancelled after it was recorded; the card was put back"
+
+
+def record_sale_lines(lines: list[dict], source: str, owners: Optional[set[int]] = None,
+                      operator_account: bool = True) -> dict:
     """Record sale lines. Each line: {external_id, sku, title, quantity,
-    unit_price, fees, sold_at, paid, void}. Returns counts."""
+    unit_price, fees, sold_at, paid, void}. Returns counts.
+
+    owners: the accounts whose libraries these sales may touch (default: the
+    operator's). operator_account: the sales come from the operator's own
+    listings, which are the scan bench's cards, so the bench row is flagged
+    too. A user's own eBay account never touches the bench.
+    """
     out = {"recorded": 0, "unmatched": 0, "duplicates": 0, "void": 0, "not_paid_yet": 0,
-           "cards_sold": 0, "total": 0.0}
+           "reversed": 0, "cards_sold": 0, "total": 0.0}
     for line in lines:
-        external_id = str(line.get("external_id") or "").strip()
+        external_id = str(line.get("external_id") or "").strip()[:160]
         if not external_id:
-            continue
-        if not line.get("void") and not line.get("paid", True):
-            out["not_paid_yet"] += 1      # picked up by a later sync once paid
             continue
         s = get_session()
         try:
-            if s.query(ExternalSale).filter_by(source=source, external_id=external_id).count():
-                out["duplicates"] += 1
-                continue
+            who = owners if owners is not None else operator_ids(s)
             sku = (line.get("sku") or "").strip()
+            bench_id = _bench_card_id(sku) if (sku and operator_account) else None
+            existing = s.query(ExternalSale).filter_by(source=source, external_id=external_id).one_or_none()
+            if existing is not None:
+                if line.get("void") and existing.status == "recorded":
+                    _undo(s, existing)
+                    s.commit()
+                    _set_bench_status(bench_id, None)
+                    out["reversed"] += 1
+                else:
+                    out["duplicates"] += 1
+                continue
+            if not line.get("void") and not line.get("paid", True):
+                out["not_paid_yet"] += 1      # not stored: picked up once it is paid
+                continue
+
             sale = ExternalSale(
-                source=source, external_id=external_id[:160], sku=sku or None,
+                source=source, external_id=external_id, sku=sku or None,
                 title=line.get("title"), quantity=max(1, int(line.get("quantity") or 1)),
                 unit_price=line.get("unit_price"), fees=line.get("fees"),
                 sold_at=line.get("sold_at") or utcnow(),
             )
+            mark_bench, qty = False, 0
             if line.get("void"):
                 sale.status, sale.detail = "void", "cancelled or refunded at the source"
+                counted = "void"
                 out["void"] += 1
             else:
-                item = _find_inventory(s, sku, owner_uid) if sku else None
-                on_bench = _mark_bench_sold(sku, source) if sku else False
+                item = _find_inventory(s, sku, who) if sku else None
                 if item is None:
                     sale.status = "unmatched"
                     sale.detail = (
                         "no SKU on this sale, so it cannot be tied to a card" if not sku
-                        else "this card was scanned but never added to a library" if on_bench
-                        else "no card in any library has this SKU")
+                        else BENCH_ONLY if bench_id is not None
+                        else "no card with this SKU in the library of the account that sold it")
+                    mark_bench = bench_id is not None
+                    counted = "unmatched"
                     out["unmatched"] += 1
                 else:
                     qty = min(sale.quantity, item.quantity)
@@ -187,6 +276,8 @@ def record_sale_lines(lines: list[dict], source: str, owner_uid: Optional[int] =
                     sale.status, sale.user_id, sale.library_event_id = "recorded", item.user_id, event.id
                     if qty < sale.quantity:
                         sale.detail = f"sold {sale.quantity} but the library held {qty}"
+                    mark_bench = bench_id is not None
+                    counted = "recorded"
                     out["recorded"] += 1
                     out["cards_sold"] += qty
                     out["total"] += (sale.unit_price or 0) * qty
@@ -195,10 +286,19 @@ def record_sale_lines(lines: list[dict], source: str, owner_uid: Optional[int] =
                 s.commit()
             except IntegrityError:
                 s.rollback()              # another sync recorded it first
+                out[counted] -= 1
+                if counted == "recorded":
+                    out["cards_sold"] -= qty
+                    out["total"] -= (line.get("unit_price") or 0) * qty
                 out["duplicates"] += 1
+                continue
+            # Only once the sale is safely stored, and only for eBay, which
+            # is the one site the bench tracks a status for.
+            if mark_bench and source == "ebay":
+                _set_bench_status(bench_id, "sold")
         finally:
             s.close()
-    out["total"] = round(out["total"], 2)
+    out["total"] = round(max(out["total"], 0.0), 2)
     return out
 
 
@@ -236,9 +336,13 @@ def sync_ebay(days: int = 30) -> dict:
     if not accounts:
         return {"ok": False, "error": "eBay is not connected. Connect it under Connections."}
 
-    with _sync_lock:
+    # eBay can take a while to answer. A second sync started meanwhile would
+    # only repeat the same requests, so it is turned away instead of queued.
+    if not _sync_lock.acquire(blocking=False):
+        return {"ok": False, "error": "an eBay sync is already running; try again in a minute"}
+    try:
         totals = {"recorded": 0, "unmatched": 0, "duplicates": 0, "void": 0, "not_paid_yet": 0,
-                  "cards_sold": 0, "total": 0.0}
+                  "reversed": 0, "cards_sold": 0, "total": 0.0}
         problems: list[str] = []
         for label, auth, owner in accounts:
             try:
@@ -249,16 +353,22 @@ def sync_ebay(days: int = 30) -> dict:
             except Exception as exc:
                 problems.append(f"{label}: could not reach eBay ({exc})")
                 continue
-            # A per-user account only ever matches that user's cards.
-            result = record_sale_lines(lines, "ebay", owner_uid=owner)
+            # A user's own account only ever matches that user's cards, and
+            # never touches the bench. The operator's matches the operator's.
+            if owner is None:
+                result = record_sale_lines(lines, "ebay")
+            else:
+                result = record_sale_lines(lines, "ebay", owners={owner}, operator_account=False)
             for k in totals:
                 totals[k] += result[k]
         totals["total"] = round(totals["total"], 2)
-        out = {"ok": not problems or totals["recorded"] > 0 or len(problems) < len(accounts),
+        out = {"ok": len(problems) < len(accounts),
                "accounts": len(accounts), "problems": problems, **totals}
         _state.update(last_sync_at=utcnow().isoformat() + "Z", last_result=out,
                       last_error="; ".join(problems) or None)
         return out
+    finally:
+        _sync_lock.release()
 
 
 def start_background(interval_minutes: Optional[int] = None) -> None:
@@ -347,8 +457,11 @@ def parse_sales_csv(text: str) -> tuple[list[dict], dict]:
             f"no price column found. Columns in this file: {', '.join(headers)}")
 
     lines = []
-    for n, row in enumerate(reader, start=2):
+    seen: dict[str, int] = {}
+    for row in reader:
         info["rows"] += 1
+        if info["rows"] > MAX_CSV_ROWS:
+            raise ValueError(f"that file has more than {MAX_CSV_ROWS} rows; export a shorter date range")
         sku = (row.get(cols["sku"]) or "").strip()
         price = _amount(row.get(cols["price"]))
         if not sku or price is None:
@@ -359,10 +472,13 @@ def parse_sales_csv(text: str) -> tuple[list[dict], dict]:
         except ValueError:
             qty = 1
         order = (row.get(cols["order"]) or "").strip() if cols["order"] else ""
+        # Without an order id, the row's own content is its identity, so the
+        # same sale gets the same id wherever it sits in a later export. Two
+        # truly identical rows in one file are told apart by a counter.
+        base = f"{order}:{sku}" if order else f"row:{sku}:{price}:{row.get(cols['date'] or '', '')}"
+        seen[base] = seen.get(base, 0) + 1
         lines.append({
-            # Without an order id, the row's own content is its identity, so
-            # importing the same file twice still records each sale once.
-            "external_id": f"{order}:{sku}" if order else f"row:{sku}:{price}:{row.get(cols['date'] or '', '')}:{n}",
+            "external_id": base if seen[base] == 1 else f"{base}#{seen[base]}",
             "sku": sku,
             "title": (row.get(cols["title"]) or "").strip() if cols["title"] else None,
             "quantity": qty,
@@ -376,8 +492,25 @@ def parse_sales_csv(text: str) -> tuple[list[dict], dict]:
 
 
 # ----------------------------------------------------------------------
-# Routes (scan bench: local operator, guarded by the same-origin hook)
+# Routes. On the Scan page, but operator only: they change libraries.
 # ----------------------------------------------------------------------
+
+def _operator_or_error():
+    """(uid, None) for a logged-in operator, else (None, response)."""
+    uid = current_user_id()
+    if not uid:
+        return None, (jsonify({"error": "Log in as the operator to read sales back.",
+                               "code": "login_required"}), 401)
+    s = get_session()
+    try:
+        ok = is_operator(s, uid)
+    finally:
+        s.close()
+    if not ok:
+        return None, (jsonify({"error": "Only the operator (a confirmed address in ADMIN_EMAILS) "
+                                        "can read sales back.", "code": "operator_only"}), 403)
+    return uid, None
+
 
 def _sale_dict(sale: ExternalSale) -> dict:
     return {
@@ -394,6 +527,9 @@ def sales_status():
     from lib.ebay_oauth import SALES_SCOPE
     from webapp import connections
 
+    uid, error = _operator_or_error()
+    if error:
+        return error
     try:
         auth = connections._ebay_auth()   # noqa: SLF001
         connected, can_read = auth.is_authorized(), auth.has_scope(SALES_SCOPE)
@@ -409,6 +545,7 @@ def sales_status():
             "ebay": {"connected": connected, "can_read_sales": can_read},
             "unmatched": [_sale_dict(x) for x in unmatched],
             "recent": [_sale_dict(x) for x in recent],
+            "sync_minutes": int(os.getenv("EBAY_SALES_SYNC_MINUTES", "30")),
             **_state,
         }
     finally:
@@ -418,6 +555,9 @@ def sales_status():
 
 @sales_bp.route("/api/sales/sync/ebay", methods=["POST"])
 def sales_sync_ebay():
+    uid, error = _operator_or_error()
+    if error:
+        return error
     body = request.get_json(silent=True) or {}
     try:
         days = int(body.get("days") or 30)
@@ -429,11 +569,15 @@ def sales_sync_ebay():
 
 @sales_bp.route("/api/sales/import", methods=["POST"])
 def sales_import():
-    """multipart: file=<csv>, source=whatnot|tcgplayer. dry_run=1 reads the
-    file and reports what it found without recording anything."""
+    """multipart: file=<csv>, source=whatnot. dry_run=1 reads the file and
+    reports what it found without recording anything. Sales are matched
+    against the library of the operator doing the import, nobody else's."""
+    uid, error = _operator_or_error()
+    if error:
+        return error
     source = (request.form.get("source") or "").lower()
-    if source not in ("whatnot", "tcgplayer"):
-        return jsonify({"error": "source must be whatnot or tcgplayer"}), 400
+    if source not in CSV_SOURCES:
+        return jsonify({"error": f"source must be one of: {', '.join(CSV_SOURCES)}"}), 400
     upload = request.files.get("file")
     if upload is None:
         return jsonify({"error": "choose the sales CSV exported from the site"}), 400
@@ -453,13 +597,16 @@ def sales_import():
             s.close()
         return jsonify({"dry_run": True, "sales": len(lines), "already_imported": seen,
                         "total": round(sum(l["unit_price"] * l["quantity"] for l in lines), 2), **info})
-    result = record_sale_lines(lines, source)
+    result = record_sale_lines(lines, source, owners={uid})
     return jsonify({"dry_run": False, "sales": len(lines), **info, **result})
 
 
 @sales_bp.route("/api/sales/external/<int:sale_id>/dismiss", methods=["POST"])
 def sales_dismiss(sale_id: int):
     """Stop showing an unmatched sale (it was handled by hand, or is not ours)."""
+    uid, error = _operator_or_error()
+    if error:
+        return error
     s = get_session()
     try:
         sale = s.query(ExternalSale).filter_by(id=sale_id, status="unmatched").one_or_none()

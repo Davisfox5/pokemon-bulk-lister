@@ -63,17 +63,19 @@ Scan works without an account. Library, Decks and Marketplace need a login
 ### Accounts, email confirmation and the operator
 
 Registering sends a link to confirm the email address. Until it is opened the
-account can keep a library and build decks, but cannot list, buy, or set up
-payouts. The link works once and lasts 24 hours; **Send the link again** on
-the Library page issues a new one.
+account can keep a library and build decks, but cannot list, buy, settle a
+sale, connect eBay, or set up payouts. The link works once, lasts 24 hours,
+and only works in a browser that is logged in to that account (a logged-out
+visitor is sent to log in first). **Send the link again** on the Library page
+issues a new one. Accounts created before this change have to confirm too.
 
 - With `SMTP_HOST` set (plus `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
   `SMTP_FROM`), the link is emailed.
 - With no SMTP settings, the link is printed in the console window the app
   runs in. That suits a local install: whoever can read the console runs it.
 
-The **operator** sees every seller's balance, triggers payouts and sees
-refunds that need doing by hand. An account is the operator when its address
+The **operator** sees every seller's balance, triggers payouts, reads sales
+back from other sites and sees refunds that need doing by hand. An account is the operator when its address
 is listed in `ADMIN_EMAILS` (default `davisfox5@gmail.com`) **and** that
 address has been confirmed. Registering first, or registering a listed
 address without access to its mailbox, grants nothing.
@@ -353,11 +355,12 @@ on first use.
 `python -m webapp.setup_portal --site whatnot` still does steps 2 and 3 from a
 terminal.
 
-### Sales read back (eBay, Whatnot, TCGplayer)
+### Sales read back (eBay, Whatnot)
 
 When a card sells on another site, the app records it so the library, the
 marketplace and the Scan page all agree the card is gone. The **Sales** panel
-on the Scan page does this.
+on the Scan page does this. It changes libraries, so unlike the rest of the
+Scan page it needs the operator to be logged in.
 
 Every listing this app creates carries a SKU: the card photo's file name
 without its extension (`page01_r0c2`). That SKU is how a sale finds its card.
@@ -369,26 +372,35 @@ without its extension (`page01_r0c2`). That SKU is how a sale finds its card.
   connection made before this change does not have it: disconnect and connect
   eBay again under Connections.** Until then publishing keeps working and the
   panel says sales cannot be read.
-- **Whatnot and TCGplayer**: neither has an orders API for regular sellers.
-  Export your sales from the site as a CSV, pick the site, and **Choose
-  CSV…**. The file needs a SKU column and a price column; order id, quantity,
-  fees and date are used when present. The app shows what it found and which
-  columns it read before recording anything.
+- **Whatnot**: no orders API for regular sellers. Export your sales there as
+  a CSV and use **Import Whatnot sales CSV…**. The file needs a SKU column
+  and a price column; order id, quantity, fees and date are used when
+  present. The app shows what it found and which columns it read before
+  recording anything.
+- **TCGplayer**: not read back. Its upload format has no place for this
+  app's SKU, so a TCGplayer sale cannot be tied to a card. Use **Sold
+  elsewhere** in the library.
 
-For each sale: the sold copies leave the owner's library, the card comes off
-this marketplace (an unpaid order for it is cancelled), a row with price and
-fees goes in the ledger under **Sold**, and the Scan page tags the card
-**sold** and stops including it in publishing and exports. Reading the same
-order or file again records nothing twice. Orders that were cancelled or
-fully refunded are skipped; unpaid ones are picked up once paid.
+A sale only ever touches the library of the account it came from. Your eBay
+account and your CSV imports match your own cards; a user's connected eBay
+account matches that user's. If a SKU could mean cards in two accounts,
+nothing is recorded and a person decides.
 
-A sale whose SKU matches no card in any library is listed under the Sales
-panel with the reason. Nothing is guessed from the title. Record it by hand
-with **Sold elsewhere**, then **Dismiss** it.
+For each sale: the sold copies leave the library, the card comes off this
+marketplace (an unpaid order for it is cancelled), a row with price and fees
+goes in the ledger under **Sold**, and the Scan page tags the card **sold**
+and stops including it in publishing and exports. Reading the same order or
+file again records nothing twice. Unpaid orders are picked up once paid. If
+eBay later reports a recorded sale as cancelled or fully refunded, the card
+is put back and can be listed again.
 
-Limits: a refund that happens after a sale was recorded is not undone here,
-and the real Whatnot and TCGplayer export column names have not been seen,
-only inferred, so the first import may report a missing column.
+A sale whose SKU matches no card is listed under the Sales panel with the
+reason. Nothing is guessed from the title. Record it by hand with **Sold
+elsewhere**, then **Dismiss** it.
+
+Limits: partial refunds are left as sales, and Whatnot's real export column
+names have not been seen, only inferred, so the first import may report a
+missing column.
 
 ### Stripe (card payments on the marketplace)
 
@@ -436,7 +448,12 @@ and bank account; this app never sees them. From then on, when one of their
 card sales settles, their share is sent to their Stripe account by transfer,
 and Stripe pays it out to their bank on its schedule. Anything already owed
 is sent the moment setup finishes. Each order is paid at most once, and money
-the operator already paid by hand is not sent again.
+the operator already paid by hand is not sent again. The app records its
+intent to pay before asking Stripe, so a crash mid-payout cannot lead to a
+second transfer: next time it asks Stripe what happened and carries on.
+
+Not handled: a refund or chargeback you issue from the Stripe dashboard
+after a seller was paid. Reverse the transfer there as well.
 
 This needs **Connect switched on for your Stripe account** (Stripe dashboard,
 Connect). Without it, "Set up payouts" reports Stripe's error.

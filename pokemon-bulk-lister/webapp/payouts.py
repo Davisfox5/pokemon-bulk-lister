@@ -34,9 +34,10 @@ its newer account configuration. Express is used here because it is the
 documented, supported call that needs the least setup; revisit if Stripe
 retires it.
 
-Every transfer is written to the same Payout ledger the operator's manual
-payouts use, plus an OrderTransfer row whose unique order_id makes paying one
-order twice impossible. Nothing here was run against Stripe itself: test it
+Every transfer is an OrderTransfer row. order_id is unique and the row is
+committed before Stripe is called, so one order cannot be paid twice even if
+the app dies mid-payout (see pay_seller). Manual payouts stay in the Payout
+table; a seller's balance subtracts both. Nothing here was run against Stripe itself: test it
 in Stripe test mode before relying on it.
 """
 from __future__ import annotations
@@ -51,7 +52,6 @@ from webapp.auth import current_user_id, is_operator, login_required, verified_r
 from webapp.models import (
     Order,
     OrderTransfer,
-    Payout,
     SellerPayoutAccount,
     User,
     get_session,
@@ -109,6 +109,30 @@ def _account_dict(account: SellerPayoutAccount | None, stripe_on: bool) -> dict:
 # Paying sellers
 # ----------------------------------------------------------------------
 
+PENDING = "pending"   # OrderTransfer.transfer_id before Stripe has answered
+
+
+def _reconcile_pending(s, stripe, seller_id: int) -> None:
+    """Settle claims left behind by a crash or a failed write.
+
+    A pending row means "a transfer for this order may or may not exist at
+    Stripe". Ask Stripe, which is the only side that knows: if the transfer
+    is there, record its id; if not, drop the claim so the order can be paid.
+    Until that is settled the claim counts as paid, so nothing is sent twice.
+    """
+    rows = (s.query(OrderTransfer).join(Order, OrderTransfer.order_id == Order.id)
+            .filter(Order.seller_id == seller_id, OrderTransfer.transfer_id == PENDING).all())
+    for row in rows:
+        found = stripe.Transfer.list(transfer_group=f"order-{row.order_id}", limit=10)
+        match = [t for t in found["data"] if str(t["metadata"]["order_id"]) == str(row.order_id)]
+        if match:
+            row.transfer_id = match[0]["id"]
+            row.amount = round(int(match[0]["amount"]) / 100.0, 2)
+        else:
+            s.delete(row)
+        s.commit()
+
+
 def pay_seller(seller_id: int) -> dict:
     """Transfer everything owed to a seller for settled card orders.
 
@@ -116,6 +140,15 @@ def pay_seller(seller_id: int) -> dict:
     seller has an active connected account and a positive balance, pays each
     order at most once, and never more than the balance (so money the
     operator already paid by hand is not sent again).
+
+    Order of operations per order, chosen so no failure can pay twice:
+      1. Commit a pending OrderTransfer row. order_id is unique, so this is
+         the claim; from here the amount counts as paid in seller_balance.
+      2. Ask Stripe for the transfer.
+      3. Stripe said no: delete the claim (the order can be retried).
+         Stripe said yes: store the transfer id on the claim.
+      If the process dies between 2 and 3, the claim stays pending and
+      _reconcile_pending asks Stripe what really happened next time.
     """
     from webapp.marketplace import seller_balance
 
@@ -129,8 +162,14 @@ def pay_seller(seller_id: int) -> dict:
             account = s.query(SellerPayoutAccount).filter_by(user_id=seller_id).one_or_none()
             if account is None or not account.transfers_active:
                 return out
+            try:
+                _reconcile_pending(s, stripe, seller_id)
+            except Exception as exc:
+                s.rollback()
+                out["errors"].append(f"could not check earlier transfers with Stripe: {exc}")
+                return out      # do not send anything while the past is unclear
             remaining = seller_balance(s, seller_id)["balance"]
-            paid_ids = {row[0] for row in s.query(OrderTransfer.order_id).all()}
+            claimed = {row[0] for row in s.query(OrderTransfer.order_id).all()}
             orders = (s.query(Order)
                       .filter(Order.seller_id == seller_id, Order.payment_provider == "stripe",
                               Order.status.in_(("paid", "completed")))
@@ -138,10 +177,21 @@ def pay_seller(seller_id: int) -> dict:
             for order in orders:
                 if remaining < 0.005:
                     break
-                if order.id in paid_ids or not order.payment_ref:
+                if order.id in claimed or not order.payment_ref:
                     continue
                 amount = round(min(order.seller_proceeds, remaining), 2)
                 if amount <= 0:
+                    continue
+                claim = OrderTransfer(order_id=order.id, transfer_id=PENDING, amount=amount)
+                s.add(claim)
+                try:
+                    s.commit()
+                except IntegrityError:
+                    s.rollback()          # claimed by another worker
+                    continue
+                except Exception as exc:
+                    s.rollback()          # nothing was sent; try again later
+                    out["errors"].append(f"order {order.id}: could not record the claim: {exc}")
                     continue
                 try:
                     session_obj = stripe.checkout.Session.retrieve(order.payment_ref)
@@ -152,25 +202,28 @@ def pay_seller(seller_id: int) -> dict:
                         source_transaction=intent["latest_charge"],
                         transfer_group=f"order-{order.id}",
                         metadata={"order_id": str(order.id), "seller_id": str(seller_id)},
-                        # If this request is repeated (a crash between Stripe
-                        # and our commit), Stripe returns the same transfer.
-                        idempotency_key=f"transfer-order-{order.id}-{_cents(amount)}",
+                        # One key per order, whatever the amount: a repeat of
+                        # this request can only ever return the same transfer.
+                        idempotency_key=f"transfer-order-{order.id}",
                     )
                 except Exception as exc:
+                    s.delete(claim)       # Stripe refused, so nothing moved
+                    s.commit()
                     out["errors"].append(f"order {order.id}: {exc}")
                     print(f"[payouts] transfer for order {order.id} failed: {exc}", file=sys.stderr)
-                    continue
-                s.add(OrderTransfer(order_id=order.id, transfer_id=transfer["id"], amount=amount))
-                s.add(Payout(seller_id=seller_id, amount=amount, method="stripe",
-                             note=f"automatic transfer {transfer['id']} for order {order.id}"))
-                try:
-                    s.commit()
-                except IntegrityError:
-                    s.rollback()          # already recorded for this order
                     continue
                 remaining = round(remaining - amount, 2)
                 out["transferred"] = round(out["transferred"] + amount, 2)
                 out["orders"] += 1
+                try:
+                    claim.transfer_id = transfer["id"]
+                    s.commit()
+                except Exception as exc:
+                    # The money moved; only the id failed to save. The claim
+                    # stays pending (and counted) and is reconciled later.
+                    s.rollback()
+                    print(f"[payouts] order {order.id}: transfer {transfer['id']} sent but "
+                          f"not recorded ({exc}); will reconcile", file=sys.stderr)
         finally:
             s.close()
     return out
@@ -229,7 +282,6 @@ def payout_connect():
                     type="express", email=user.email,
                     capabilities={"transfers": {"requested": True}},
                     metadata={"user_id": str(uid)},
-                    idempotency_key=f"connect-account-user-{uid}",
                 )
             except Exception as exc:
                 return jsonify({"error": f"Stripe could not create a payout account: {exc}"}), 502

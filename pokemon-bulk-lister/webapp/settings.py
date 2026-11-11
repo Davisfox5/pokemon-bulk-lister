@@ -24,7 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from lib.ebay_lister import EbayLister, EbayListingError
 from lib.ebay_oauth import EbayUserAuth, EbayUserAuthError
-from webapp.auth import current_user_id, login_required
+from webapp.auth import current_user_id, login_required, verified_required
 from webapp.models import Base, InventoryItem, Listing, get_session, utcnow
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -112,7 +112,7 @@ def ebay_status():
 
 
 @settings_bp.route("/api/settings/ebay", methods=["POST"])
-@login_required
+@verified_required
 def ebay_save_keys():
     body = request.get_json(silent=True) or {}
     client_id = (body.get("client_id") or "").strip()
@@ -183,7 +183,7 @@ def ebay_consent_url():
 
 
 @settings_bp.route("/api/settings/ebay/authorize", methods=["POST"])
-@login_required
+@verified_required
 def ebay_authorize():
     body = request.get_json(silent=True) or {}
     pasted = (body.get("redirect") or "").strip()
@@ -211,7 +211,7 @@ def ebay_authorize():
 # ----------------------------------------------------------------------
 
 @settings_bp.route("/api/settings/ebay/list-item", methods=["POST"])
-@login_required
+@verified_required
 def ebay_list_item():
     body = request.get_json(silent=True) or {}
     uid = current_user_id()
@@ -226,7 +226,8 @@ def ebay_list_item():
             .filter_by(id=int(body.get("item_id") or 0), user_id=uid)
             .one_or_none()
         )
-        if item is None:
+        if item is None or item.quantity < 1:
+            # quantity 0 is a card that has sold; it must not be listed again
             return jsonify({"error": "no such inventory item"}), 404
         item_id = item.id
         cc = item.catalog_card

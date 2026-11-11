@@ -41,6 +41,7 @@ from webapp.models import (
     InventoryItem,
     MarketListing,
     Order,
+    OrderTransfer,
     Payout,
     SellerPayoutAccount,
     User,
@@ -213,7 +214,7 @@ def bulk_list_for_sale():
 
 
 @market_bp.route("/api/market/listings/<int:listing_id>", methods=["PATCH"])
-@login_required
+@verified_required
 def reprice_listing(listing_id: int):
     """Body: {"price": float}. Change the asking price of your active listing."""
     price = _parse_price((request.get_json(silent=True) or {}).get("price"))
@@ -735,7 +736,7 @@ def stripe_abandon(order_id: int):
 
 
 @market_bp.route("/api/market/orders/<int:order_id>/mark-paid", methods=["POST"])
-@login_required
+@verified_required
 def mark_paid(order_id: int):
     """Offline path: the SELLER confirms they've been paid."""
     s = get_session()
@@ -949,7 +950,13 @@ def seller_balance(s, seller_id: int) -> dict:
                .all())
     card = sum(o.seller_proceeds for o in settled if o.payment_provider == "stripe")
     fees_owed = sum(o.platform_fee for o in settled if o.payment_provider != "stripe")
-    paid_out = sum(p.amount for p in s.query(Payout).filter_by(seller_id=seller_id).all())
+    by_hand = sum(p.amount for p in s.query(Payout).filter_by(seller_id=seller_id).all())
+    # Automatic transfers, including ones still being confirmed with Stripe:
+    # a claim counts from the moment it is made, so it cannot be paid again.
+    transferred = sum(
+        t.amount for t in s.query(OrderTransfer).join(Order, OrderTransfer.order_id == Order.id)
+        .filter(Order.seller_id == seller_id).all())
+    paid_out = by_hand + transferred
     return {
         "card_proceeds": round(card, 2),
         "paid_out": round(paid_out, 2),
@@ -986,6 +993,15 @@ def admin_balances():
             "id": p.id, "seller_id": p.seller_id, "amount": p.amount, "method": p.method,
             "note": p.note, "created_at": p.created_at.isoformat() + "Z",
         } for p in s.query(Payout).order_by(Payout.created_at.desc()).limit(100).all()]
+        payouts += [{
+            "id": f"t{t.id}", "seller_id": o.seller_id, "amount": t.amount, "method": "stripe",
+            "note": (f"automatic transfer {t.transfer_id} for order {t.order_id}"
+                     if t.transfer_id != "pending" else
+                     f"transfer for order {t.order_id} is being confirmed with Stripe"),
+            "created_at": t.created_at.isoformat() + "Z",
+        } for t, o in s.query(OrderTransfer, Order).join(Order, OrderTransfer.order_id == Order.id)
+            .order_by(OrderTransfer.created_at.desc()).limit(100).all()]
+        payouts.sort(key=lambda r: r["created_at"], reverse=True)
     finally:
         s.close()
     rows.sort(key=lambda r: -r["balance"])

@@ -227,14 +227,26 @@ def register():
 
 @auth_bp.route("/verify-email")
 def verify_email():
-    """The link from the email. A GET that changes state, which is fine here:
-    the token is a secret only the mailbox owner has, and it works once."""
+    """The link from the email.
+
+    Opening the link is not enough by itself: the browser must also be logged
+    in to the account the link was issued for. Otherwise someone could
+    register another person's address with their own password and wait for
+    the real owner to click the link, ending up with a confirmed account (and,
+    for an address in ADMIN_EMAILS, the operator role) that the owner cannot
+    get into. A logged-out visitor is sent to log in and brought back.
+    """
     token = request.args.get("token") or ""
+    uid = session.get("uid")
+    if not uid:
+        return redirect(url_for("auth.login_page", next=f"/verify-email?token={token}"))
     s = get_session()
     try:
         row = s.query(EmailVerification).filter_by(token_hash=_hash(token)).one_or_none() if token else None
         if row is None:
             return redirect("/portfolio?verify=invalid")
+        if row.user_id != uid:
+            return redirect("/portfolio?verify=wrong_account")
         if row.verified_at is None:
             if row.sent_at is None or utcnow() - row.sent_at > timedelta(hours=VERIFY_LINK_HOURS):
                 return redirect("/portfolio?verify=expired")

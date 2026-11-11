@@ -11,7 +11,7 @@
     <h1>Card Portfolio</h1>
     <p class="auth-sub">Track what your collection is worth — live.</p>
     {% if error %}<p class="auth-error">{{ error }}</p>{% endif %}
-    <form method="post" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+    <form method="post" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') | urlencode }}{% endif %}">
       <label>Email
         <input type="email" name="email" required autocomplete="email" autofocus>
       </label>

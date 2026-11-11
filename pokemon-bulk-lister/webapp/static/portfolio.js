@@ -1034,6 +1034,7 @@ $("#payout-form").addEventListener("submit", async (e) => {
       expired: ["That link has expired. Use “Send the link again” for a new one.", "err"],
       invalid: ["That link is not valid any more. Use “Send the link again” for a new one.", "err"],
       needed: ["Confirm your email address first.", "err"],
+      wrong_account: ["That link belongs to a different account. Log in to that account, then open the link again.", "err"],
     },
     payouts: {
       active: ["Payouts are set up. Your share of card sales is sent to you automatically.", "ok"],

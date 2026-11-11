@@ -826,12 +826,26 @@ let refreshPublishStatus = () => {};
 // eBay orders come over its API; Whatnot and TCGplayer sales come in as the
 // CSV those sites export. Either way a sale finds its card by SKU.
 async function loadSales() {
-  const s = await api("/api/sales/status");
+  let s;
+  try {
+    s = await api("/api/sales/status");
+  } catch (err) {
+    // Sales change libraries, so this part of the Scan page needs the operator.
+    $("#sync-ebay-btn").disabled = true;
+    $("#sales-import-btn").disabled = true;
+    $("#sales-unmatched").classList.add("hidden");
+    $("#sales-meta").innerHTML = err.status === 401
+      ? '<a href="/login?next=/">Log in as the operator</a> to read sales back'
+      : escapeHtml(err.message);
+    return;
+  }
+  $("#sales-import-btn").disabled = false;
   const e = s.ebay;
   $("#sales-meta").textContent = !e.connected ? "eBay not connected"
     : !e.can_read_sales ? "reconnect eBay under Connections to read its sales"
-    : s.last_sync_at ? `eBay last checked ${new Date(s.last_sync_at).toLocaleTimeString()}; checked automatically every 30 minutes`
-    : "eBay is checked automatically every 30 minutes";
+    : !s.sync_minutes ? "automatic eBay checks are off"
+    : s.last_sync_at ? `eBay last checked ${new Date(s.last_sync_at).toLocaleTimeString()}; checked automatically every ${s.sync_minutes} minutes`
+    : `eBay is checked automatically every ${s.sync_minutes} minutes`;
   $("#sync-ebay-btn").disabled = !e.connected;
   const box = $("#sales-unmatched");
   box.classList.toggle("hidden", !s.unmatched.length);
@@ -852,6 +866,7 @@ function salesSummary(r, where) {
   if (r.unmatched) bits.push(`${r.unmatched} could not be matched to a library card (listed below)`);
   if (r.duplicates) bits.push(`${r.duplicates} already recorded`);
   if (r.void) bits.push(`${r.void} cancelled or refunded`);
+  if (r.reversed) bits.push(`${r.reversed} earlier sale(s) were refunded since, and the card was put back`);
   if (r.not_paid_yet) bits.push(`${r.not_paid_yet} not paid yet`);
   if (r.skipped) bits.push(`${r.skipped} rows skipped (no SKU or price)`);
   return bits.join("; ") + ".";
@@ -878,8 +893,7 @@ function setupSales() {
   $("#sales-import-btn").addEventListener("click", () => file.click());
   file.addEventListener("change", async () => {
     if (!file.files.length) return;
-    const source = $("#sales-source").value;
-    const name = source === "whatnot" ? "Whatnot" : "TCGplayer";
+    const source = "whatnot", name = "Whatnot";
     const send = async dryRun => {
       const fd = new FormData();
       fd.append("file", file.files[0]);
@@ -901,8 +915,8 @@ function setupSales() {
       }
       const { ok } = await askConfirm({
         title: `Record ${plural(fresh, "sale")} from ${name}?`,
-        html: `<p>${plural(fresh, "sale")} worth $${p.total.toFixed(2)} will be recorded. Each sold card leaves its
-          owner's library, comes off the marketplace, and shows under Sold.</p>
+        html: `<p>${plural(fresh, "sale")} worth $${p.total.toFixed(2)} will be recorded against your library. Each sold card leaves it,
+          comes off the marketplace, and shows under Sold.</p>
           <p class="muted">Read from columns: SKU “${escapeHtml(p.columns.sku)}”, price “${escapeHtml(p.columns.price)}”${p.columns.quantity ? `, quantity “${escapeHtml(p.columns.quantity)}”` : ""}${p.columns.date ? `, date “${escapeHtml(p.columns.date)}”` : ""}.
           ${p.already_imported ? `${p.already_imported} were imported before and are skipped.` : ""}
           ${p.skipped ? `${p.skipped} rows have no SKU or price and are skipped.` : ""}</p>`,

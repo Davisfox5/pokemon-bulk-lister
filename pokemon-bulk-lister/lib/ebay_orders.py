@@ -91,8 +91,11 @@ def order_lines(order: dict) -> list[dict]:
             # checked against a live response. An unknown value is treated as
             # "not paid yet" and simply waits for the next sync.
             "paid": payment in ("PAID", "PARTIALLY_REFUNDED"),
-            # Money did not stay with the seller: nothing to record as a sale.
-            "void": cancelled or payment in ("FULLY_REFUNDED", "FAILED"),
+            # Money did not stay with the seller: nothing to record as a sale,
+            # and a sale recorded earlier is reversed. A FAILED payment is
+            # not final (the buyer can pay again), so it only counts as
+            # "not paid yet".
+            "void": cancelled or payment == "FULLY_REFUNDED",
             "payment_status": payment,
         })
     return out

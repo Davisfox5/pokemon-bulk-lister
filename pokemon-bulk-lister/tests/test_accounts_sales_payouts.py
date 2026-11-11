@@ -53,6 +53,14 @@ def _user(app, email):
     return c
 
 
+def _uid(email):
+    s = models.get_session()
+    try:
+        return s.query(models.User).filter_by(email=email).one().id
+    finally:
+        s.close()
+
+
 def _add(c, **kw):
     body = {"name": "Dragapult ex", "set_code": "sv6", "card_number": "130"}
     body.update(kw)
@@ -100,10 +108,9 @@ def test_verification_links_are_single_use_expire_and_are_not_stored_in_clear(ap
         s.commit()
     finally:
         s.close()
-    anon = app.test_client()
-    assert "verify=expired" in anon.get(link).headers["Location"]
-    assert "verify=invalid" in anon.get("/verify-email?token=nope").headers["Location"]
-    assert "verify=invalid" in anon.get("/verify-email").headers["Location"]
+    assert "verify=expired" in c.get(link).headers["Location"]
+    assert "verify=invalid" in c.get("/verify-email?token=nope").headers["Location"]
+    assert "verify=invalid" in c.get("/verify-email").headers["Location"]
 
     # A new link replaces the old one, and works once.
     s = models.get_session()
@@ -116,10 +123,33 @@ def test_verification_links_are_single_use_expire_and_are_not_stored_in_clear(ap
     assert c.post("/api/account/resend-verification").status_code == 429     # not a mail cannon
     new_link = verify_link(app.outbox, "a@example.com")
     assert new_link != link
-    assert "verify=invalid" in anon.get(link).headers["Location"]
-    assert "verify=done" in anon.get(new_link).headers["Location"]
-    assert "verify=invalid" in anon.get(new_link).headers["Location"]
+    assert "verify=invalid" in c.get(link).headers["Location"]
+    assert "verify=done" in c.get(new_link).headers["Location"]
+    assert "verify=invalid" in c.get(new_link).headers["Location"]
     assert c.post("/api/account/resend-verification").get_json() == {"verified": True}
+
+
+def test_a_link_only_confirms_the_account_it_was_sent_for_and_only_when_logged_in(app):
+    # Someone registers the admin address with their own password, hoping
+    # the real owner will click the link that lands in their inbox.
+    squatter = _register(app, "op@example.com")
+    link = verify_link(app.outbox, "op@example.com")
+
+    owner_browser = app.test_client()                       # logged out
+    r = owner_browser.get(link)
+    assert r.headers["Location"].startswith("/login?next=")
+    assert squatter.get("/api/account").get_json()["verified"] is False
+
+    other = _user(app, "other@example.com")                  # logged in as someone else
+    assert "verify=wrong_account" in other.get(link).headers["Location"]
+    assert squatter.get("/api/account").get_json()["is_operator"] is False
+
+    # Logging in through the redirect brings the link back and it works.
+    fresh = app.test_client()
+    login = fresh.post("/login?next=" + link.replace("?", "%3F").replace("=", "%3D"),
+                       data={"email": "op@example.com", "password": "password123"})
+    assert login.headers["Location"] == link
+    assert "verify=done" in fresh.get(link).headers["Location"]
 
 
 def test_operator_is_a_verified_admin_address_and_nothing_else(app, monkeypatch):
@@ -197,8 +227,9 @@ def test_ebay_order_becomes_one_sale_line_per_item_with_fees_shared():
     assert refunded["void"] and not refunded["paid"]
     cancelled = ebay_orders.order_lines({**ORDER, "cancelStatus": {"cancelState": "CANCELED"}})[0]
     assert cancelled["void"]
-    pending = ebay_orders.order_lines({**ORDER, "orderPaymentStatus": "PENDING"})[0]
-    assert not pending["paid"] and not pending["void"]
+    for status in ("PENDING", "FAILED"):
+        line = ebay_orders.order_lines({**ORDER, "orderPaymentStatus": status})[0]
+        assert not line["paid"] and not line["void"]
 
 
 class _Resp:
@@ -291,7 +322,7 @@ def _line(**kw):
 
 
 def test_an_ebay_sale_leaves_the_library_and_lands_in_the_ledger_once(app):
-    seller, buyer = _user(app, "seller@example.com"), _user(app, "buyer@example.com")
+    seller, buyer = _user(app, "op@example.com"), _user(app, "buyer@example.com")
     bench_id, item = _scanned_card(app, seller)
     seller.patch(f"/api/inventory/{item['id']}", json={"acquired_price": 6})
     lid = seller.post(f"/api/inventory/{item['id']}/list-for-sale", json={"price": 25}).get_json()["listing_id"]
@@ -299,6 +330,7 @@ def test_an_ebay_sale_leaves_the_library_and_lands_in_the_ledger_once(app):
 
     result = sales_sync.record_sale_lines([_line()], "ebay")
     assert (result["recorded"], result["cards_sold"], result["total"]) == (1, 1, 20.0)
+    assert "page01_r0c0" in sales_sync.sold_stems()
 
     sold = _events(seller, "sold")["events"]
     assert [(e["channel"], e["total"], e["fees"], e["net"], e["gain"]) for e in sold] == [
@@ -319,10 +351,10 @@ def test_an_ebay_sale_leaves_the_library_and_lands_in_the_ledger_once(app):
 
 
 def test_sales_that_cannot_be_tied_to_a_library_card_are_kept_for_a_person(app):
-    c = app.test_client()
+    op = _user(app, "op@example.com")
     with bench_db.connect(app.bench_path) as conn:      # scanned, never added to a library
         gid = bench_db.get_or_create_grid(conn, "p9", "input/grids/p9.jpg")
-        bench_db.insert_card_stub(conn, gid, "output/crops/p9_r0c0.jpg", 0, 0)
+        bench_id = bench_db.insert_card_stub(conn, gid, "output/crops/p9_r0c0.jpg", 0, 0)
     result = sales_sync.record_sale_lines([
         _line(external_id="a", sku="p9_r0c0"),
         _line(external_id="b", sku="unknown_sku"),
@@ -331,34 +363,76 @@ def test_sales_that_cannot_be_tied_to_a_library_card_are_kept_for_a_person(app):
         _line(external_id="e", paid=False),
     ], "ebay")
     assert (result["recorded"], result["unmatched"], result["void"], result["not_paid_yet"]) == (0, 3, 1, 1)
-    status = c.get("/api/sales/status").get_json()
+    status = op.get("/api/sales/status").get_json()
     reasons = {u["external_id"]: u["detail"] for u in status["unmatched"]}
     assert "never added to a library" in reasons["a"]
-    assert "no card in any library" in reasons["b"]
+    assert "no card with this SKU" in reasons["b"]
     assert "no SKU" in reasons["c"]
+
+    # It did sell, so the Scan page stops offering it. An unknown SKU hides nothing.
+    assert sales_sync.sold_stems() == {"p9_r0c0"}
+    with bench_db.connect(app.bench_path) as conn:
+        assert bench_db.get_card(conn, bench_id)["ebay_listing_status"] == "sold"
 
     # An unpaid line is not remembered, so it is recorded once it is paid.
     assert sales_sync.record_sale_lines([_line(external_id="e", sku="unknown_sku")], "ebay")["unmatched"] == 1
-    sale_id = status["unmatched"][0]["id"]
-    assert c.post(f"/api/sales/external/{sale_id}/dismiss").status_code == 200
-    assert c.post(f"/api/sales/external/{sale_id}/dismiss").status_code == 404
-    assert len(c.get("/api/sales/status").get_json()["unmatched"]) == 3
+    sale_id = next(u["id"] for u in status["unmatched"] if u["external_id"] == "b")
+    assert op.post(f"/api/sales/external/{sale_id}/dismiss").status_code == 200
+    assert op.post(f"/api/sales/external/{sale_id}/dismiss").status_code == 404
+    assert len(op.get("/api/sales/status").get_json()["unmatched"]) == 3
 
 
-def test_a_users_own_ebay_account_only_matches_that_users_cards(app):
-    mine, theirs = _user(app, "me@example.com"), _user(app, "them@example.com")
-    _scanned_card(app, theirs)
-    s = models.get_session()
-    try:
-        my_id = s.query(models.User).filter_by(email="me@example.com").one().id
-    finally:
-        s.close()
-    assert sales_sync.record_sale_lines([_line()], "ebay", owner_uid=my_id)["unmatched"] == 1
-    assert len(theirs.get("/api/inventory").get_json()["items"]) == 1
+def test_reading_sales_back_is_for_the_operator_only(app):
+    anon, user = app.test_client(), _user(app, "user@example.com")
+    csv_row = b"SKU,Price\ncard-inv1,0.01\n"
+    for client, code in ((anon, 401), (user, 403)):
+        assert client.get("/api/sales/status").status_code == code
+        assert client.post("/api/sales/sync/ebay").status_code == code
+        assert client.post("/api/sales/external/1/dismiss").status_code == code
+        r = client.post("/api/sales/import", content_type="multipart/form-data",
+                        data={"file": (io.BytesIO(csv_row), "s.csv"), "source": "whatnot"})
+        assert r.status_code == code
+
+
+def test_a_sale_never_takes_a_card_from_someone_elses_library(app):
+    op, alice = _user(app, "op@example.com"), _user(app, "alice@example.com")
+    item = _add(alice)                                    # no photo: its SKU would be card-inv<id>
+    lid = alice.post(f"/api/inventory/{item['id']}/list-for-sale", json={"price": 9}).get_json()["listing_id"]
+
+    # The operator imports a file naming Alice's card by id, and by a stem she holds.
+    _scanned_card(app, alice, stem="page07_r0c0")
+    csv_text = f"SKU,Price\ncard-inv{item['id']},0.01\npage07_r0c0,0.01\n".encode()
+    r = op.post("/api/sales/import", content_type="multipart/form-data",
+                data={"file": (io.BytesIO(csv_text), "s.csv"), "source": "whatnot"}).get_json()
+    assert (r["recorded"], r["unmatched"]) == (0, 2)
+    assert len(alice.get("/api/inventory").get_json()["items"]) == 2
+    assert _events(alice, "sold")["events"] == []
+    assert alice.get("/api/market/my").get_json()["active_listings"][0]["listing_id"] == lid
+
+    # A user's own eBay account matches that user's cards only, and leaves the bench alone.
+    result = sales_sync.record_sale_lines(
+        [_line(sku="page07_r0c0")], "ebay", owners={_uid("op@example.com")}, operator_account=False)
+    assert result["unmatched"] == 1
+    result = sales_sync.record_sale_lines(
+        [_line(external_id="hers", sku="page07_r0c0")], "ebay",
+        owners={_uid("alice@example.com")}, operator_account=False)
+    assert result["recorded"] == 1
+    with bench_db.connect(app.bench_path) as conn:
+        assert all(r["ebay_listing_status"] is None for r in conn.execute("SELECT * FROM cards"))
+
+
+def test_a_sku_held_by_two_accounts_is_not_guessed(app):
+    a, b = _user(app, "a@example.com"), _user(app, "b@example.com")
+    cid, _ = _scanned_card(app, a)
+    assert b.post("/api/inventory/promote", json={"card_ids": [cid]}).get_json()["promoted"] == 1
+    owners = {_uid("a@example.com"), _uid("b@example.com")}
+    assert sales_sync.record_sale_lines([_line()], "ebay", owners=owners)["unmatched"] == 1
+    assert len(a.get("/api/inventory").get_json()["items"]) == 1
+    assert len(b.get("/api/inventory").get_json()["items"]) == 1
 
 
 def test_selling_more_than_the_library_holds_records_what_was_there(app):
-    seller = _user(app, "seller@example.com")
+    seller = _user(app, "op@example.com")
     _scanned_card(app, seller)
     result = sales_sync.record_sale_lines([_line(quantity=3)], "ebay")
     assert result["cards_sold"] == 1
@@ -369,32 +443,66 @@ def test_selling_more_than_the_library_holds_records_what_was_there(app):
         s.close()
 
 
+def test_a_sale_refunded_later_puts_the_card_back(app):
+    op = _user(app, "op@example.com")
+    bench_id, item = _scanned_card(app, op)
+    sales_sync.record_sale_lines([_line()], "ebay")
+    assert op.get("/api/inventory").get_json()["items"] == []
+
+    result = sales_sync.record_sale_lines([_line(void=True, paid=False)], "ebay")
+    assert (result["reversed"], result["duplicates"]) == (1, 0)
+    back = op.get("/api/inventory").get_json()["items"]
+    assert [(i["id"], i["quantity"]) for i in back] == [(item["id"], 1)]
+    kinds = [e["kind"] for e in op.get("/api/library/events").get_json()["events"]]
+    assert kinds.count("sold") == 1 and kinds.count("added") == 2      # scanned in, then returned
+    assert "page01_r0c0" not in sales_sync.sold_stems()                 # it can be listed again
+    with bench_db.connect(app.bench_path) as conn:                      # and the bench flag is cleared
+        assert bench_db.get_card(conn, bench_id)["ebay_listing_status"] is None
+    assert sales_sync.record_sale_lines([_line(void=True)], "ebay")["duplicates"] == 1
+
+
+def test_a_failed_payment_that_later_goes_through_is_recorded(app):
+    op = _user(app, "op@example.com")
+    _scanned_card(app, op)
+    failed = ebay_orders.order_lines({**ORDER, "orderPaymentStatus": "FAILED"})[:1]
+    assert sales_sync.record_sale_lines(failed, "ebay")["not_paid_yet"] == 1
+    paid = ebay_orders.order_lines(ORDER)[:1]
+    assert sales_sync.record_sale_lines(paid, "ebay")["recorded"] == 1
+
+
 def test_sync_ebay_reports_when_ebay_is_not_connected(app, monkeypatch, tmp_path):
     monkeypatch.setenv("EBAY_USER_TOKEN_PATH", str(tmp_path / "none.json"))
-    c = app.test_client()
-    r = c.post("/api/sales/sync/ebay")
+    op = _user(app, "op@example.com")
+    r = op.post("/api/sales/sync/ebay")
     assert r.status_code == 409 and "not connected" in r.get_json()["error"]
-    assert c.post("/api/sales/sync/ebay", json={"days": "x"}).status_code == 400
+    assert op.post("/api/sales/sync/ebay", json={"days": "x"}).status_code == 400
 
 
 def test_sync_ebay_end_to_end_with_a_connected_account(app, monkeypatch, tmp_path):
     from webapp import connections
 
-    seller = _user(app, "seller@example.com")
-    _scanned_card(app, seller)
+    op = _user(app, "op@example.com")
+    _scanned_card(app, op)
     monkeypatch.setattr(connections, "_ebay_auth", lambda: _ebay_auth(tmp_path, CONSENT_SCOPES))
     monkeypatch.setattr("requests.Session.get", lambda self, url, **kw: _Resp(
         200, {"orders": [ORDER], "total": 1}))
-    c = app.test_client()
-    r = c.post("/api/sales/sync/ebay", json={"days": 7}).get_json()
+    r = op.post("/api/sales/sync/ebay", json={"days": 7}).get_json()
     assert (r["ok"], r["recorded"], r["unmatched"], r["accounts"]) == (True, 1, 1, 1)
-    status = c.get("/api/sales/status").get_json()
+    status = op.get("/api/sales/status").get_json()
     assert status["ebay"] == {"connected": True, "can_read_sales": True}
     assert status["last_sync_at"] and status["recent"][0]["sku"] == "page01_r0c0"
 
+    # A sync already in progress is turned away, not queued behind it.
+    assert sales_sync._sync_lock.acquire(blocking=False)
+    try:
+        r = op.post("/api/sales/sync/ebay")
+        assert r.status_code == 409 and "already running" in r.get_json()["error"]
+    finally:
+        sales_sync._sync_lock.release()
+
     # An older connection: the sync says to reconnect instead of failing silently.
     monkeypatch.setattr(connections, "_ebay_auth", lambda: _ebay_auth(tmp_path))
-    r = c.post("/api/sales/sync/ebay")
+    r = op.post("/api/sales/sync/ebay")
     assert r.status_code == 409 and "connect eBay again" in r.get_json()["problems"][0]
 
 
@@ -427,29 +535,43 @@ def test_sales_csv_is_read_by_header_name(app):
 
 
 def test_importing_a_sales_csv_previews_then_records_once(app):
-    seller = _user(app, "seller@example.com")
-    _scanned_card(app, seller)
-    c = app.test_client()
+    op = _user(app, "op@example.com")
+    _scanned_card(app, op)
 
     def post(**form):
         data = {"file": (io.BytesIO(WHATNOT_CSV.encode()), "sales.csv"), **form}
-        return c.post("/api/sales/import", data=data, content_type="multipart/form-data")
+        return op.post("/api/sales/import", data=data, content_type="multipart/form-data")
 
     assert post(source="etsy").status_code == 400
-    assert c.post("/api/sales/import", data={"source": "whatnot"}).status_code == 400
+    assert post(source="tcgplayer").status_code == 400      # its export has no SKU to match on
+    assert op.post("/api/sales/import", data={"source": "whatnot"}).status_code == 400
 
     preview = post(source="whatnot", dry_run="1").get_json()
     assert (preview["sales"], preview["already_imported"], preview["total"]) == (2, 0, 24.5)
-    assert _events(seller, "sold")["events"] == []          # a preview records nothing
+    assert _events(op, "sold")["events"] == []              # a preview records nothing
 
     done = post(source="whatnot").get_json()
     assert (done["recorded"], done["unmatched"]) == (1, 1)
-    sold = _events(seller, "sold")["events"][0]
+    sold = _events(op, "sold")["events"][0]
     assert (sold["channel"], sold["total"], sold["fees"]) == ("whatnot", 21.5, 2.15)
 
     again = post(source="whatnot").get_json()
     assert (again["recorded"], again["duplicates"]) == (0, 2)
     assert post(source="whatnot", dry_run="1").get_json()["already_imported"] == 2
+
+
+def test_a_sale_keeps_its_identity_when_a_later_export_moves_its_row(app):
+    week1 = "SKU,Sold Price,Sold Date\npage01_r0c0,5.00,2026-11-01\n"
+    week2 = "SKU,Sold Price,Sold Date\npage01_r0c0,5.00,2026-11-08\npage01_r0c0,5.00,2026-11-01\n"
+    first, _ = sales_sync.parse_sales_csv(week1)
+    second, _ = sales_sync.parse_sales_csv(week2)
+    assert first[0]["external_id"] == second[1]["external_id"]
+    assert second[0]["external_id"] != second[1]["external_id"]
+    # Two identical rows in one file are two sales, and stay two on re-import.
+    twice, _ = sales_sync.parse_sales_csv("SKU,Price\nx,1\nx,1\n")
+    assert [l["external_id"] for l in twice] == ["row:x:1.0:", "row:x:1.0:#2"]
+    with pytest.raises(ValueError, match="more than"):
+        sales_sync.parse_sales_csv("SKU,Price\n" + "x,1\n" * (sales_sync.MAX_CSV_ROWS + 1))
 
 
 # ====================================================================== automatic payouts
@@ -492,6 +614,12 @@ class ConnectStripe(FakeStripe):
                 return stripe_sdk.PaymentIntent.construct_from({"id": pid, "latest_charge": f"ch_{pid}"}, "k")
 
         class Transfer:
+            @staticmethod
+            def list(transfer_group=None, limit=10):
+                data = [stripe_sdk.Transfer.construct_from(dict(t), "k") for t in outer.transfers
+                        if t["transfer_group"] == transfer_group]
+                return {"data": data}
+
             @staticmethod
             def create(idempotency_key=None, **kw):
                 if outer.fail_transfer:
@@ -563,6 +691,7 @@ def test_a_connected_seller_is_paid_automatically_when_a_sale_settles(shop):
     assert (mine["card_proceeds"], mine["paid_out"], mine["balance"]) == (18.0, 18.0, 0.0)
     rows = shop.operator.get("/api/admin/balances").get_json()
     assert rows["sellers"][0]["auto_payouts"] is True and rows["payouts"][0]["method"] == "stripe"
+    assert "tr_1" in rows["payouts"][0]["note"]
 
     # Settling again, or running payouts again, never pays twice.
     shop.buyer.get(f"/market/orders/{oid}/return")
@@ -609,6 +738,68 @@ def test_a_failed_transfer_leaves_the_sale_intact_and_is_retried(shop):
     r = shop.operator.post("/api/admin/payouts/run").get_json()
     assert (r["transferred"], r["orders"], r["errors"]) == (18.0, 1, [])
     assert shop.seller.get("/api/market/my").get_json()["balance"] == 0.0
+
+
+def test_a_transfer_sent_but_not_recorded_is_never_sent_again(shop, monkeypatch):
+    # Stripe makes the transfer, then the app fails to save its id (database
+    # locked, process killed). The claim made beforehand must hold.
+    shop.connect()
+    real_commit = models.Session.commit
+    state = {"armed": False}
+
+    def flaky_commit(self):
+        if state["armed"] and any(isinstance(o, models.OrderTransfer) and o.transfer_id != "pending"
+                                  for o in self.dirty):
+            state["armed"] = False
+            raise RuntimeError("database is locked")
+        return real_commit(self)
+
+    monkeypatch.setattr(models.Session, "commit", flaky_commit)
+    state["armed"] = True
+    oid, _ = shop.sell(20)
+    assert len(shop.fake.transfers) == 1 and state["armed"] is False
+
+    # The app still knows the money is spoken for: nothing shows as owed,
+    # so the operator is not led to pay it by hand as well.
+    assert shop.seller.get("/api/market/my").get_json()["balance"] == 0.0
+    sid = shop.operator.get("/api/admin/balances").get_json()["sellers"][0]["seller_id"]
+    assert shop.operator.post("/api/admin/payouts", json={"seller_id": sid, "amount": 16}).status_code == 400
+
+    # The next run asks Stripe, finds the transfer, and records its id. No second transfer.
+    r = shop.operator.post("/api/admin/payouts/run").get_json()
+    assert (r["orders"], r["errors"]) == (0, [])
+    assert len(shop.fake.transfers) == 1
+    s = models.get_session()
+    try:
+        assert s.query(models.OrderTransfer).one().transfer_id == "tr_1"
+    finally:
+        s.close()
+
+
+def test_a_claim_with_no_transfer_behind_it_is_released_and_paid(shop):
+    shop.connect()
+    oid, _ = shop.sell(20)
+    s = models.get_session()
+    try:  # as if the app died after claiming and before Stripe was called
+        s.query(models.OrderTransfer).one().transfer_id = "pending"
+        s.commit()
+    finally:
+        s.close()
+    shop.fake.transfers.clear()
+    shop.fake.transfer_keys.clear()
+    r = shop.operator.post("/api/admin/payouts/run").get_json()
+    assert (r["transferred"], r["orders"]) == (18.0, 1)
+    assert len(shop.fake.transfers) == 1
+
+
+def test_one_idempotency_key_per_order_whatever_the_amount(shop):
+    keys = []
+    create = shop.fake.Transfer.create
+    shop.fake.Transfer.create = staticmethod(
+        lambda idempotency_key=None, **kw: (keys.append(idempotency_key), create(idempotency_key=idempotency_key, **kw))[1])
+    shop.connect()
+    oid, _ = shop.sell(20)
+    assert keys == [f"transfer-order-{oid}"]
 
 
 def test_recording_the_same_payout_twice_cannot_overdraw(shop):

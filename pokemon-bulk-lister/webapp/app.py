@@ -202,9 +202,9 @@ def api_list_cards():
             unidentified_only=unidentified_only,
         )
         stats = db.card_stats(conn)
-    sold = _sold_stems()
+    sold = _sold_stems(strict=False)   # display only
     for row in rows:
-        row["sold"] = Path(row["crop_path"]).stem in sold
+        row["sold"] = Path(row["crop_path"]).stem in sold or row.get("ebay_listing_status") == "sold"
     return jsonify({"cards": rows, "stats": stats})
 
 
@@ -1050,11 +1050,16 @@ def _identify_job() -> Optional[int]:
 # Export + image upload
 # ----------------------------------------------------------------------
 
-def _sold_stems() -> set[str]:
+def _sold_stems(strict: bool = True) -> set[str]:
+    """Stems of cards that have sold. strict (the default, used wherever
+    cards are about to be published or exported) lets a failed lookup raise:
+    not knowing what has sold must stop a publish, not wave it through."""
+    from webapp import sales_sync
     try:
-        from webapp import sales_sync
         return sales_sync.sold_stems()
-    except Exception as exc:   # the bench must keep working without the library layer
+    except Exception as exc:
+        if strict:
+            raise RuntimeError(f"could not check which cards have already sold: {exc}") from exc
         print(f"[bench] sold lookup failed: {exc}", file=sys.stderr)
         return set()
 
@@ -1148,7 +1153,11 @@ def api_export_lot():
 
     with db.connect(DB_PATH) as conn:
         cards = [db.get_card(conn, int(cid)) for cid in card_ids]
-    cards = [c for c in cards if c]
+    found = [c for c in cards if c]
+    cards = _unsold(found)
+    if len(cards) < len(found):
+        return jsonify({"error": f"{len(found) - len(cards)} of the selected cards have already "
+                                 "sold; untick them and try again"}), 400
     if len(cards) < 2:
         return jsonify({"error": "fewer than 2 cards resolved from card_ids"}), 400
 
@@ -1330,8 +1339,12 @@ def api_publish_ebay():
                 return
 
             can_upload = connections.cloudinary_ready()
-            with db.connect(DB_PATH) as conn:
-                cards = _cards_payload(_unsold(db.list_cards(conn, sort="newest")))
+            try:
+                with db.connect(DB_PATH) as conn:
+                    cards = _cards_payload(_unsold(db.list_cards(conn, sort="newest")))
+            except RuntimeError as exc:
+                _publish_state["message"] = f"nothing listed: {exc}"
+                return
             eligible = [c for c in cards
                         if c.get("final_price") and (c.get("image_url") or can_upload)]
             if skip_flagged:
