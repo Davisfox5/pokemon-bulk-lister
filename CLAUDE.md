@@ -10,6 +10,8 @@ Outside services (eBay, Cloudinary, TCGplayer and Whatnot portal sessions, Strip
 
 Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also runs `python -m compileall -q lib webapp scripts`. The app runs locally by default; no branch auto-deploys anywhere. `pokemon-bulk-lister/Dockerfile` serves it under a domain (gunicorn, one worker, data on `/data`). Under a non-local host `connections.operator_only_when_public` puts every bench route behind the operator login.
 
+It also runs on Vercel (`app.py`, `vercel.json`), where there is no lasting disk and no process between requests. `webapp/runtime.py` is the switch (`SERVERLESS`): both data layers use Postgres (`webapp/db.py` has a psycopg backend behind the same functions), photos go to Vercel Blob (`runtime.save_file` / `ensure_local`), eBay tokens and job progress are rows in `app_state`, and bench jobs run in slices driven by the status endpoints (`_pump` in `webapp/app.py`) instead of threads. New bench code must not assume a file it wrote is still on disk in a later request (call `runtime.ensure_local`), must not keep job state only in memory, and must not start a thread it expects to outlive the request. `TEST_DATABASE_URL=postgresql://... pytest -q` runs the suite on Postgres; `tests/test_serverless.py` runs the bench the way Vercel does.
+
 ## Model routing (dev)
 
 Cost-aware, top-down routing for Claude Code subagents (`.claude/agents/`). The highest tier (fable) is the default for judgment-heavy work and delegates DOWN to cheaper tiers for mechanical work. No agent ever self-assesses its own capability and escalates upward; every escalation trigger is external (a fixed path rule, a failing test).

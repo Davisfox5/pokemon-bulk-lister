@@ -549,10 +549,69 @@ and signature check against an in-memory stand-in for Stripe's API, not
 against Stripe itself. The calls follow Stripe's published docs. In test
 mode, do one purchase and one payout setup before going live.
 
+## Hosting on Vercel
+
+Vercel runs the app as short-lived functions: no disk that lasts and no
+process between requests. The app detects that (Vercel sets `VERCEL=1`) and
+switches where it keeps things. Nothing changes for a local install.
+
+| Locally | On Vercel |
+|---|---|
+| SQLite file | Postgres (`DATABASE_URL`), both the scan bench and the accounts side |
+| Card and page photos on disk | Vercel Blob (public store); the app redirects to them |
+| eBay tokens in files | Rows in the database, encrypted with a key made from `SECRET_KEY` |
+| Jobs on background threads | Jobs stored in the database and advanced a few seconds at a time by the open page's status checks |
+| Timers for price refresh and eBay sales | One daily scheduled request, `/api/cron/daily` |
+| TCGplayer export kept as a file | Rows in the database |
+
+Setup, once:
+
+1. In Vercel, **Add New, Project**, import this repository, and set **Root
+   Directory** to `pokemon-bulk-lister`. Vercel finds `app.py` and
+   `requirements.txt` there.
+2. **Storage, Create Database**: a Postgres database (Neon) connected to the
+   project. It adds `DATABASE_URL`.
+3. **Storage, Create**: a **Blob** store with **public** access, connected to
+   the project. It adds `BLOB_STORE_ID`.
+4. **Settings, Environment Variables**: `SECRET_KEY` and `CRON_SECRET` (two
+   long random strings of letters and numbers), `ALLOWED_HOSTS` (your
+   domain, for example `bulk.example.com`), `ADMIN_EMAILS`, and the keys
+   for what you use: `ANTHROPIC_API_KEY` (card identification),
+   `POKEMONTCG_API_KEY`, `SMTP_*`, `CLOUDINARY_*`, `EBAY_*`, `STRIPE_*`.
+5. **Settings, Domains**: add your domain. Vercel shows the DNS record to
+   create; when the domain's DNS is already at Vercel it is one click.
+6. Deploy. Register with an `ADMIN_EMAILS` address and confirm it; that
+   account is the operator.
+
+What is different there:
+
+- **Scan and Connections need the operator**, as under any real domain (see
+  the next section).
+- **Keep the Scan page open while a job runs.** Identifying, pricing and
+  publishing to eBay advance each time the page checks progress. Closing the
+  page pauses the job; opening it again carries on where it stopped.
+- **Uploads are capped at 4.5 MB per request.** The page shrinks larger
+  photos before sending them (TIFFs over the cap are skipped) and sends big
+  CSV exports in parts.
+- **No browser automation.** TCGplayer and Whatnot sign-in and upload, and
+  Terapeak, drive a browser on the machine the app runs on. Download the CSV
+  and upload it in the seller portal yourself.
+- **Free image matching is off** unless you set `ART_MATCH=1`; its index is a
+  set of files built locally.
+- **Prices refresh and eBay sales sync once a day** (Vercel's Hobby plan
+  allows one scheduled run a day). On Pro, add more entries to `crons` in
+  `vercel.json`. The buttons still work at any time.
+- Card and page photos in Blob are readable by anyone who has the address.
+- Vercel's Hobby plan is for personal, non-commercial use.
+
+The same suite runs against Postgres with
+`TEST_DATABASE_URL=postgresql://... pytest -q`, and
+`tests/test_serverless.py` runs the scan flow the way Vercel does.
+
 ## Hosting it under a real domain
 
-The app is built to run on your own machine. It can also be served under a
-domain. The `Dockerfile` in this directory runs it with gunicorn.
+For a host that runs containers with a disk (not Vercel; see above). The
+`Dockerfile` in this directory runs the app with gunicorn.
 
 What the host needs:
 
@@ -667,6 +726,7 @@ pokemon-bulk-lister/
 │  ├─ listing_import.py        # listings on other sites read into the library
 │  ├─ payouts.py               # Stripe Connect onboarding + automatic transfers
 │  ├─ refunds.py               # refunds and disputes after a sale settled
+│  ├─ runtime.py               # local vs serverless: files, tokens, job state
 │  ├─ portfolio.py             # valuation, price history, alerts
 │  └─ templates/, static/      # index, portfolio, decks, market, login, register
 ├─ data/

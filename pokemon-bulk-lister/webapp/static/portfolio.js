@@ -569,15 +569,39 @@ async function runListingImport(site, send) {
   }
 }
 
+// A big export goes in parts (each a CSV with the header line), because a
+// hosted install caps the size of one request. The counts are added up.
 async function postListingFile(source, file, dryRun) {
-  const fd = new FormData();
-  fd.append("source", source);
-  fd.append("file", file);
-  if (dryRun) fd.append("dry_run", "1");
-  const res = await fetch("/api/listings/import", { method: "POST", body: fd });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
-  return data;
+  const text = await file.text();
+  const headerEnd = text.indexOf("\n") + 1;
+  const max = 3000000;
+  const parts = [];
+  if (text.length <= max) parts.push(text);
+  else {
+    for (let start = headerEnd; start < text.length;) {
+      let end = Math.min(text.length, start + max);
+      if (end < text.length) {
+        const cut = text.lastIndexOf("\n", end);
+        if (cut > start) end = cut + 1;
+      }
+      parts.push(text.slice(0, headerEnd) + text.slice(start, end));
+      start = end;
+    }
+  }
+  const total = {};
+  for (const part of parts) {
+    const fd = new FormData();
+    fd.append("source", source);
+    fd.append("file", new Blob([part], { type: "text/csv" }), "export.csv");
+    if (dryRun) fd.append("dry_run", "1");
+    const res = await fetch("/api/listings/import", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+    for (const [key, value] of Object.entries(data)) {
+      total[key] = typeof value === "number" ? (total[key] || 0) + value : value;
+    }
+  }
+  return total;
 }
 
 $("#btn-import-listings").addEventListener("click", () => {

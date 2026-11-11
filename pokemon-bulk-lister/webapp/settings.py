@@ -28,7 +28,9 @@ from webapp.auth import current_user_id, login_required, verified_required
 from webapp.models import Base, InventoryItem, Listing, get_session, utcnow
 
 ROOT = Path(__file__).resolve().parent.parent
-TOKENS_DIR = ROOT / "output" / "cache" / "ebay_user_tokens"
+from webapp import runtime  # noqa: E402
+
+TOKENS_DIR = runtime.DATA_ROOT / "output" / "cache" / "ebay_user_tokens"
 
 settings_bp = Blueprint("settings", __name__)
 
@@ -69,12 +71,14 @@ def _get_keys(s, uid: int) -> Optional[UserEbayKeys]:
 
 
 def _auth_for(uid: int, keys: UserEbayKeys) -> EbayUserAuth:
-    return EbayUserAuth(
+    # The refresh token is a file here and a sealed database row on a
+    # serverless host (see runtime.make_ebay_auth).
+    return runtime.make_ebay_auth(
+        f"user-{uid}", _token_path(uid),
         client_id=keys.client_id,
         client_secret=keys.client_secret,
         redirect_uri=keys.ru_name,
         env=keys.env,
-        token_path=str(_token_path(uid)),
     )
 
 
@@ -141,7 +145,7 @@ def ebay_save_keys():
         s.close()
     # A consent granted to a different app id is useless — drop it.
     if changed_app:
-        _token_path(uid).unlink(missing_ok=True)
+        runtime.forget_ebay_token(f"user-{uid}", _token_path(uid))
     return jsonify(_status(uid))
 
 
@@ -157,7 +161,7 @@ def ebay_remove_keys():
             s.commit()
     finally:
         s.close()
-    _token_path(uid).unlink(missing_ok=True)
+    runtime.forget_ebay_token(f"user-{uid}", _token_path(uid))
     return jsonify(_status(uid))
 
 

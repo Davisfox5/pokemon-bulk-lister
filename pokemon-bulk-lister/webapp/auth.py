@@ -58,7 +58,12 @@ def ensure_secret_key(app) -> None:
     """Stable secret so sessions survive restarts. Env wins; else a keyfile."""
     key = os.getenv("SECRET_KEY")
     if not key:
-        path = ROOT / "output" / ".secret_key"
+        from webapp.runtime import DATA_ROOT, SERVERLESS
+        if SERVERLESS:
+            # A generated key would differ per instance and vanish with it:
+            # every login would break at random.
+            raise RuntimeError("Set the SECRET_KEY environment variable (a long random string).")
+        path = DATA_ROOT / "output" / ".secret_key"
         if path.exists():
             key = path.read_text().strip()
         else:

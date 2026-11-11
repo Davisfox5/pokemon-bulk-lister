@@ -42,7 +42,10 @@ from webapp.models import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-POPULAR_CACHE = ROOT / os.getenv("OUTPUT_DIR", "output") / "cache" / "decks" / "popular.json"
+from webapp.runtime import DATA_ROOT  # noqa: E402
+
+# A cache, so losing it with a serverless instance only costs a refetch.
+POPULAR_CACHE = DATA_ROOT / os.getenv("OUTPUT_DIR", "output") / "cache" / "decks" / "popular.json"
 
 # Ceiling on catalog cards priced by one "price missing cards" click. Each one
 # costs a pokemontcg.io lookup and an eBay comps query.

@@ -52,6 +52,12 @@ def allowed_hosts() -> set[str]:
     """Host names this app answers to. ALLOWED_HOSTS (comma separated) adds
     to the local ones, for an install served under a real domain."""
     extra = {h.strip().lower() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()}
+    # Vercel names the hosts of each deployment itself (the production
+    # domain, and the generated address of this deployment and its branch).
+    for name in ("VERCEL_PROJECT_PRODUCTION_URL", "VERCEL_URL", "VERCEL_BRANCH_URL"):
+        host = (os.getenv(name) or "").strip().lower()
+        if host:
+            extra.add(host)
     return LOCAL_HOSTS | extra
 
 
@@ -84,9 +90,10 @@ def same_origin_only():
 
 
 # Bench routes anyone signed in or not may reach under a public host: card
-# photos (the library and marketplace show them) and the health check.
+# photos (the library and marketplace show them), the health check, and the
+# host's scheduled request, which carries its own secret instead of a login.
 _PUBLIC_BENCH_PREFIXES = ("/crops/", "/output/crops/", "/static/")
-_PUBLIC_BENCH_PATHS = ("/healthz", "/api/session")
+_PUBLIC_BENCH_PATHS = ("/healthz", "/api/session", "/api/cron/daily")
 
 
 def operator_only_when_public():
@@ -147,10 +154,10 @@ def cloudinary_ready() -> bool:
 def _ebay_auth():
     from lib.ebay_oauth import EbayUserAuth
 
-    token_path = Path(os.getenv("EBAY_USER_TOKEN_PATH", "output/cache/ebay_user_token.json"))
-    if not token_path.is_absolute():
-        token_path = ROOT / token_path
-    return EbayUserAuth(token_path=str(token_path))
+    from webapp import runtime
+
+    token_path = runtime.data_path(os.getenv("EBAY_USER_TOKEN_PATH", "output/cache/ebay_user_token.json"))
+    return runtime.make_ebay_auth("operator", token_path)
 
 
 def _ebay_status() -> dict:
@@ -219,7 +226,8 @@ def ebay_authorize():
 def ebay_disconnect():
     """Forget the saved eBay authorization. Live listings are not touched."""
     try:
-        _ebay_auth().token_path.unlink(missing_ok=True)
+        from webapp import runtime
+        runtime.forget_ebay_token("operator", _ebay_auth().token_path)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
     return jsonify(_ebay_status())
@@ -341,7 +349,16 @@ def _portal_lib():
     return portal_uploader
 
 
+HOSTED_PORTAL_NOTE = ("Signing in to the seller portal opens a browser on the machine the app runs on, "
+                      "which a hosted install does not have. Download the CSV from the Scan page and "
+                      "upload it in the portal yourself.")
+
+
 def _portal_status(site: str) -> dict:
+    from webapp.runtime import SERVERLESS
+    if SERVERLESS:
+        return {"session": False, "ready": False, "playwright": False, "login": {"state": "idle"},
+                "next": HOSTED_PORTAL_NOTE}
     try:
         lib = _portal_lib()
     except ImportError as exc:
@@ -375,6 +392,9 @@ def portal_login(site: str):
     """Open a visible browser window at the portal's sign-in page."""
     if _site_or_404(site) is None:
         return jsonify({"error": "unknown site"}), 404
+    from webapp.runtime import SERVERLESS
+    if SERVERLESS:
+        return jsonify({"error": HOSTED_PORTAL_NOTE}), 409
     try:
         lib = _portal_lib()
     except ImportError as exc:

@@ -32,6 +32,7 @@ from flask import (
     Flask,
     abort,
     jsonify,
+    redirect,
     render_template,
     request,
     send_file,
@@ -47,6 +48,8 @@ from lib.ebay_client import EbayAuthError, EbayClient  # noqa: E402
 from lib.pricing import aggregate  # noqa: E402
 from lib.tcgplayer_client import TCGPlayerClient  # noqa: E402
 from webapp import db  # noqa: E402
+from webapp import runtime  # noqa: E402
+from webapp.runtime import DATA_ROOT, SERVERLESS, data_path, rel_path  # noqa: E402
 
 
 def _load_split_grids():
@@ -70,8 +73,10 @@ def _load_csv_generator():
 
 load_dotenv(ROOT / ".env")
 
-INPUT_DIR = ROOT / os.getenv("INPUT_DIR", "input/grids")
-OUTPUT_DIR = ROOT / os.getenv("OUTPUT_DIR", "output")
+# Data lives under DATA_ROOT: this directory locally, /tmp on a serverless
+# host (where the lasting copies are in Blob and the database).
+INPUT_DIR = DATA_ROOT / os.getenv("INPUT_DIR", "input/grids")
+OUTPUT_DIR = DATA_ROOT / os.getenv("OUTPUT_DIR", "output")
 CROPS_DIR = OUTPUT_DIR / "crops"
 CSVS_DIR = OUTPUT_DIR / "csvs"
 DB_PATH = str(OUTPUT_DIR / "db.sqlite")
@@ -109,7 +114,7 @@ app.before_request(operator_only_when_public)
 # Behind a reverse proxy that terminates HTTPS (a hosting platform, nginx,
 # Caddy). Without this the app thinks it is served over plain http, so the
 # links it mails and the URLs it gives Stripe would be wrong.
-if os.getenv("TRUST_PROXY") == "1":
+if os.getenv("TRUST_PROXY") == "1" or SERVERLESS:
     from werkzeug.middleware.proxy_fix import ProxyFix
 
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -131,11 +136,11 @@ _csv_gen = None
 
 # Background job state (single in-process slot — fine for a one-off personal app).
 _job_lock = threading.Lock()
-_job_state: dict[str, Any] = {"running": False, "progress": 0, "total": 0, "message": ""}
+_job_state = runtime.JobState("main", running=False, progress=0, total=0, message="")
 
 # Separate slot for publish jobs so a publish run doesn't clobber pricing state.
 _publish_lock = threading.Lock()
-_publish_state: dict[str, Any] = {"running": False, "progress": 0, "total": 0, "message": "", "site": ""}
+_publish_state = runtime.JobState("publish", running=False, progress=0, total=0, message="", site="")
 
 
 # ----------------------------------------------------------------------
@@ -296,6 +301,7 @@ def api_upload_grid():
             continue
         safe_name = _unique_upload_name(_safe_filename(file.filename or "grid.jpg"))
         dest = INPUT_DIR / safe_name
+        INPUT_DIR.mkdir(parents=True, exist_ok=True)
         file.save(dest)
 
         n = _record_single(sg, dest) if single else _split_and_record(sg, dest)
@@ -314,6 +320,10 @@ def _unique_upload_name(name: str) -> str:
     taken = {p.stem.lower() for p in INPUT_DIR.iterdir()} | {
         p.stem.lower() for p in (OUTPUT_DIR / "pages").glob("*")
     }
+    # The database knows every page ever uploaded, including ones whose files
+    # are not on this instance's disk.
+    with db.connect(DB_PATH) as conn:
+        taken |= {str(r["filename"]).lower() for r in conn.execute("SELECT filename FROM grids").fetchall()}
     stem, n = path.stem, 1
     while stem.lower() in taken:
         n += 1
@@ -338,9 +348,10 @@ def _record_single(sg, photo_path: Path) -> int:
     stem = photo_path.stem
     out_path = CROPS_DIR / f"{stem}_r0c0.jpg"
     cv2.imwrite(str(out_path), card, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    runtime.save_file(out_path)
     with db.connect(DB_PATH) as conn:
-        grid_id = db.get_or_create_grid(conn, stem, str(photo_path.relative_to(ROOT)))
-        db.insert_card_stub(conn, grid_id, str(out_path.relative_to(ROOT)), 0, 0)
+        grid_id = db.get_or_create_grid(conn, stem, rel_path(photo_path))
+        db.insert_card_stub(conn, grid_id, rel_path(out_path), 0, 0)
         db.update_grid_count(conn, grid_id)
     return 1
 
@@ -355,20 +366,22 @@ def _split_and_record(sg, grid_path: Path) -> int:
     pages_dir = OUTPUT_DIR / "pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(pages_dir / f"{grid_path.stem}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    runtime.save_file(pages_dir / f"{grid_path.stem}.jpg")
     cells, method = sg.split_page(img)
     print(f"[split] {grid_path.name}: {sum(1 for c in cells if c is not None)} crops via {method}", file=sys.stderr)
 
     stem = grid_path.stem
     written = 0
     with db.connect(DB_PATH) as conn:
-        grid_id = db.get_or_create_grid(conn, stem, str(grid_path.relative_to(ROOT)))
+        grid_id = db.get_or_create_grid(conn, stem, rel_path(grid_path))
         for idx, cell in enumerate(cells):
             if cell is None:
                 continue
             r, c = divmod(idx, 3)
             out_path = CROPS_DIR / f"{stem}_r{r}c{c}.jpg"
             cv2.imwrite(str(out_path), cell, [cv2.IMWRITE_JPEG_QUALITY, 92])
-            rel = str(out_path.relative_to(ROOT))
+            runtime.save_file(out_path)
+            rel = rel_path(out_path)
             db.insert_card_stub(conn, grid_id, rel, r, c)
             written += 1
         db.update_grid_count(conn, grid_id)
@@ -404,6 +417,8 @@ def api_run_pricing_all():
     body = request.get_json(silent=True) or {}
     use_terapeak = request.args.get("terapeak") == "1" or body.get("terapeak")
     only_unpriced = request.args.get("only_unpriced") == "1" or bool(body.get("only_unpriced"))
+    if SERVERLESS:
+        return _start_sliced_job("pricing", only_unpriced=only_unpriced)
     with _job_lock:
         if _job_state["running"]:
             return jsonify({"error": "another job is running"}), 409
@@ -626,6 +641,8 @@ def api_terapeak_status():
 
 @app.route("/api/pricing/status")
 def api_pricing_status():
+    if SERVERLESS:
+        return jsonify(_pump(MAIN_JOB, _main_slice))
     return jsonify(_job_state)
 
 
@@ -797,7 +814,9 @@ IDENTIFY_RETRY_CONF = float(os.getenv("VISION_RETRY_CONFIDENCE", "0.6"))
 # pokemontcg.io art index (built by scripts/08_build_art_index.py).
 # Both accept only high-confidence matches; everything else falls through
 # to the AI, so this can only cut cost, never quality. ART_MATCH=0 disables.
-ART_MATCH_ENABLED = os.getenv("ART_MATCH", "1") == "1"
+# The art index is a set of files built on this machine; a serverless
+# instance has none, so matching is off there unless asked for.
+ART_MATCH_ENABLED = os.getenv("ART_MATCH", "0" if SERVERLESS else "1") == "1"
 ART_INDEX_DIR = OUTPUT_DIR / "cache" / "art_index" / "catalog"
 LEARNED_CACHE_PATH = OUTPUT_DIR / "cache" / "art_index" / "learned.jsonl"
 ART_MATCH_CONFIDENCE = 0.9   # reported id_confidence for a catalog art match
@@ -893,8 +912,8 @@ def api_identify_card(card_id: int):
         card = db.get_card(conn, card_id)
     if not card:
         abort(404)
-    crop = ROOT / card["crop_path"]
-    if not crop.exists():
+    crop = data_path(card["crop_path"])
+    if not runtime.ensure_local(crop):
         return jsonify({"error": f"crop not found: {card['crop_path']}"}), 404
     body = request.get_json(silent=True) or {}
     res = None if body.get("force_ai") else _match_crop(crop)
@@ -916,6 +935,8 @@ def api_identify_card(card_id: int):
 
 @app.route("/api/identify/run-all", methods=["POST"])
 def api_identify_all():
+    if SERVERLESS:
+        return _start_sliced_job("identify")
     with _job_lock:
         if _job_state["running"]:
             return jsonify({"error": "another job is running"}), 409
@@ -936,6 +957,8 @@ def api_scan_process():
     """The scan flow in one click: identify every unidentified card, then
     price every identified card that has no price yet. Cards that are already
     identified or priced are left alone, so re-running costs nothing extra."""
+    if SERVERLESS:
+        return _start_sliced_job("scan")
     with _job_lock:
         if _job_state["running"]:
             return jsonify({"error": "another job is running"}), 409
@@ -957,12 +980,90 @@ def api_scan_process():
     return jsonify({"started": True})
 
 
+def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=None) -> None:
+    """Identify the unidentified cards of one page. `tally` counts
+    done / by_image / by_ai and keeps the last error; `tick` is called after
+    each card so progress can be shown."""
+    from lib.vision_identify import identify_crop, identify_page
+
+    def _apply(card: dict, res: dict) -> None:
+        with db.connect(DB_PATH) as conn:
+            db.update_card(conn, int(card["id"]), _identification_patch(res, card))
+
+    def _done() -> None:
+        tally["done"] += 1
+        if tick:
+            tick()
+
+    # Pass 0 (free): learned cache + art-index hash match.
+    unmatched: list[dict] = []
+    for card in group:
+        crop = data_path(card["crop_path"])
+        res = _match_crop(crop) if ART_MATCH_ENABLED and runtime.ensure_local(crop) else None
+        if res is not None:
+            _apply(card, res)
+            tally["by_image"] += 1
+            _done()
+        else:
+            unmatched.append(card)
+    if not unmatched:
+        return
+
+    # Pass 1 (AI): one page-level call when several crops on the page still
+    # need it (~9x cheaper than per-crop); otherwise go straight to per-crop
+    # calls for the stragglers.
+    page_results: dict[tuple, dict] = {}
+    if grid and len(unmatched) >= 3:
+        page_path = data_path(grid["original_path"])
+        # Prefer the leveled page saved at split time: its orientation
+        # matches the crops' row/col assignments.
+        prepared = OUTPUT_DIR / "pages" / f"{page_path.stem}.jpg"
+        if runtime.ensure_local(prepared):
+            page_path = prepared
+        if page_path.exists():
+            try:
+                page_results = {
+                    (r.get("row"), r.get("col")): r
+                    for r in identify_page(str(page_path))
+                }
+            except Exception as exc:
+                tally["last_error"] = str(exc)
+                print(f"[identify] page grid={grid.get('id')}: {exc}", file=sys.stderr)
+
+    for card in unmatched:
+        res = page_results.get((card.get("row"), card.get("col")))
+        crop = data_path(card["crop_path"])
+        have_crop = runtime.ensure_local(crop)
+        if res is None or float(res.get("confidence") or 0.0) < IDENTIFY_RETRY_CONF:
+            if have_crop:
+                try:
+                    crop_res = identify_crop(str(crop))
+                    if res is None or float(crop_res.get("confidence") or 0.0) >= float(res.get("confidence") or 0.0):
+                        res = crop_res
+                except Exception as exc:
+                    tally["last_error"] = str(exc)
+                    print(f"[identify] crop id={card['id']}: {exc}", file=sys.stderr)
+        if res and (res.get("name") or "").strip():
+            _apply(card, res)
+            tally["by_ai"] += 1
+            if have_crop:
+                _remember_identification(crop, res)
+        _done()
+
+
+def _identify_summary(tally: dict, total: int) -> str:
+    message = (f"identified {tally['by_image'] + tally['by_ai']}/{total} "
+               f"({tally['by_image']} free by image match, {tally['by_ai']} by AI)")
+    missed = total - tally["by_image"] - tally["by_ai"]
+    if missed and tally.get("last_error"):
+        message += f", {missed} failed: {tally['last_error'][:160]}"
+    return message
+
+
 def _identify_job() -> Optional[int]:
     """Identify unidentified bench cards. Returns how many were identified,
     or None if the job failed. Never touches _job_state["running"]."""
     try:
-        from lib.vision_identify import identify_crop, identify_page
-
         with db.connect(DB_PATH) as conn:
             cards = db.list_cards(conn, sort="oldest", unidentified_only=True)
             grids = {int(r["id"]): dict(r) for r in conn.execute("SELECT * FROM grids").fetchall()}
@@ -975,93 +1076,167 @@ def _identify_job() -> Optional[int]:
         for c in cards:
             by_grid.setdefault(c.get("grid_id"), []).append(c)
 
-        done = 0
-        by_image = 0
-        by_ai = 0
-        last_error = ""   # shown to the user; a missing API key fails every card the same way
-
-        def _apply(card: dict, res: dict) -> None:
-            with db.connect(DB_PATH) as conn:
-                db.update_card(conn, int(card["id"]), _identification_patch(res, card))
+        # last_error is shown to the user; a missing API key fails every card the same way.
+        tally = {"done": 0, "by_image": 0, "by_ai": 0, "last_error": ""}
 
         def _tick() -> None:
-            _job_state["progress"] = done
+            _job_state["progress"] = tally["done"]
             _job_state["message"] = (
-                f"Identifying {done}/{len(cards)} "
-                f"({by_image} by image match, {by_ai} by AI)"
+                f"Identifying {tally['done']}/{len(cards)} "
+                f"({tally['by_image']} by image match, {tally['by_ai']} by AI)"
             )
 
         for grid_id, group in by_grid.items():
-            # Pass 0 (free): learned cache + art-index hash match.
-            unmatched: list[dict] = []
-            for card in group:
-                crop = ROOT / card["crop_path"]
-                res = _match_crop(crop) if crop.exists() else None
-                if res is not None:
-                    _apply(card, res)
-                    by_image += 1
-                    done += 1
-                    _tick()
-                else:
-                    unmatched.append(card)
-            if not unmatched:
-                continue
+            _identify_group(group, grids.get(grid_id) if grid_id is not None else None, tally, _tick)
 
-            # Pass 1 (AI): one page-level call when several crops on the
-            # page still need it (~9x cheaper than per-crop); otherwise go
-            # straight to per-crop calls for the stragglers.
-            page_results: dict[tuple, dict] = {}
-            grid = grids.get(grid_id) if grid_id is not None else None
-            if grid and len(unmatched) >= 3:
-                p = Path(grid["original_path"])
-                page_path = p if p.is_absolute() else ROOT / p
-                # Prefer the leveled page saved at split time — its
-                # orientation matches the crops' row/col assignments.
-                prepared = OUTPUT_DIR / "pages" / f"{page_path.stem}.jpg"
-                if prepared.exists():
-                    page_path = prepared
-                if page_path.exists():
-                    try:
-                        page_results = {
-                            (r.get("row"), r.get("col")): r
-                            for r in identify_page(str(page_path))
-                        }
-                    except Exception as exc:
-                        last_error = str(exc)
-                        print(f"[identify] page grid={grid_id}: {exc}", file=sys.stderr)
-
-            for card in unmatched:
-                res = page_results.get((card.get("row"), card.get("col")))
-                crop = ROOT / card["crop_path"]
-                if res is None or float(res.get("confidence") or 0.0) < IDENTIFY_RETRY_CONF:
-                    if crop.exists():
-                        try:
-                            crop_res = identify_crop(str(crop))
-                            if res is None or float(crop_res.get("confidence") or 0.0) >= float(res.get("confidence") or 0.0):
-                                res = crop_res
-                        except Exception as exc:
-                            last_error = str(exc)
-                            print(f"[identify] crop id={card['id']}: {exc}", file=sys.stderr)
-                if res and (res.get("name") or "").strip():
-                    _apply(card, res)
-                    by_ai += 1
-                    if crop.exists():
-                        _remember_identification(crop, res)
-                done += 1
-                _tick()
-
-        _job_state["message"] = (
-            f"identified {by_image + by_ai}/{len(cards)} "
-            f"({by_image} free by image match, {by_ai} by AI)"
-        )
-        missed = len(cards) - by_image - by_ai
-        if missed and last_error:
-            _job_state["message"] += f", {missed} failed: {last_error[:160]}"
-        return by_image + by_ai
+        _job_state["message"] = _identify_summary(tally, len(cards))
+        return tally["by_image"] + tally["by_ai"]
     except Exception as exc:
         traceback.print_exc()
         _job_state["message"] = f"identify failed: {exc}"
         return None
+
+
+# ----------------------------------------------------------------------
+# Jobs on a serverless host
+#
+# There is no process that outlives a request, so a job cannot run on a
+# thread. Instead a job is a row in the database holding a queue of card ids,
+# and each status request the open page makes (it polls every second or two)
+# does a few seconds of that queue before answering. Closing the page pauses
+# the job; opening it again carries on. Several requests can arrive at once
+# (two tabs, two instances), so each slice is claimed first.
+# ----------------------------------------------------------------------
+
+MAIN_JOB = "job:main"
+PUBLISH_JOB = "job:publish"
+SLICE_SECONDS = float(os.getenv("JOB_SLICE_SECONDS", "12"))
+LEASE_SECONDS = 150
+PRICE_BATCH = 12
+_IDLE = {"running": False, "progress": 0, "total": 0, "message": ""}
+
+
+def _public(state: Optional[dict]) -> dict:
+    state = state or _IDLE
+    return {k: v for k, v in state.items() if k not in ("queue", "lease", "tally", "params")}
+
+
+def _job_busy(key: str) -> bool:
+    return bool((runtime.state_get(key) or {}).get("running"))
+
+
+def _pump(key: str, do_slice) -> dict:
+    """Do one slice of a job if it is running and nobody else holds it."""
+    def claim(state: dict) -> Optional[dict]:
+        if not state.get("running") or state.get("lease", 0) > time.time():
+            return None
+        state["lease"] = time.time() + LEASE_SECONDS
+        return state
+
+    state = runtime.state_claim(key, claim)
+    if state is None:
+        return _public(runtime.state_get(key))
+    try:
+        deadline = time.monotonic() + SLICE_SECONDS
+        while True:                      # always at least one unit of work
+            do_slice(state)
+            # Saved after every unit of work, so a slice that dies loses one unit.
+            state["lease"] = time.time() + LEASE_SECONDS
+            runtime.state_set(key, state)
+            if not state.get("running") or time.monotonic() >= deadline:
+                break
+    except Exception as exc:
+        traceback.print_exc()
+        state.update(running=False, message=f"failed: {exc}")
+    finally:
+        state["lease"] = 0
+        runtime.state_set(key, state)
+    return _public(state)
+
+
+def _pricing_queue(only_unpriced: bool) -> list[int]:
+    with db.connect(DB_PATH) as conn:
+        cards = db.list_cards(conn, sort="newest")
+    return [int(c["id"]) for c in cards
+            if c.get("name") and not (only_unpriced and c.get("final_price") is not None)]
+
+
+def _start_sliced_job(kind: str, only_unpriced: bool = False):
+    if _job_busy(MAIN_JOB):
+        return jsonify({"error": "another job is running"}), 409
+    state = {"running": True, "kind": kind, "progress": 0, "terapeak": False, "lease": 0,
+             "tally": {"done": 0, "by_image": 0, "by_ai": 0, "last_error": ""}}
+    if kind in ("identify", "scan"):
+        with db.connect(DB_PATH) as conn:
+            cards = db.list_cards(conn, sort="oldest", unidentified_only=True)
+        # Kept in page order, each with its page, so a page is identified in one go.
+        cards.sort(key=lambda c: (c.get("grid_id") is None, c.get("grid_id") or 0, c["id"]))
+        state.update(phase="identify", queue=[[int(c["id"]), c.get("grid_id")] for c in cards],
+                     total=len(cards), id_total=len(cards), message="identifying…")
+    else:
+        queue = _pricing_queue(only_unpriced)
+        state.update(phase="pricing", queue=queue, total=len(queue), message="pricing…")
+    runtime.state_set(MAIN_JOB, state)
+    return jsonify({"started": True})
+
+
+def _main_slice(state: dict) -> None:
+    queue = state["queue"]
+    if state["phase"] == "identify":
+        tally = state["tally"]
+        if queue:
+            grid_id = queue[0][1]
+            ids = [cid for cid, gid in queue if gid == grid_id] if grid_id is not None else [queue[0][0]]
+            with db.connect(DB_PATH) as conn:
+                group = [c for c in (db.get_card(conn, cid) for cid in ids)
+                         if c and not (c.get("name") or "").strip()]
+                grid = None
+                if grid_id is not None:
+                    row = conn.execute("SELECT * FROM grids WHERE id = ?", (grid_id,)).fetchone()
+                    grid = dict(row) if row else None
+            tally["done"] += len(ids) - len(group)       # removed or named by hand meanwhile
+            if group:
+                _identify_group(group, grid, tally)
+            taken = set(ids)
+            state["queue"] = [entry for entry in queue if entry[0] not in taken]
+            state["progress"] = tally["done"]
+            state["message"] = (f"Identifying {tally['done']}/{state['id_total']} "
+                                f"({tally['by_image']} by image match, {tally['by_ai']} by AI)")
+            return
+        summary = _identify_summary(tally, state["id_total"]) if state["id_total"] else "nothing to identify"
+        if state["kind"] != "scan":
+            state.update(running=False, message=summary)
+            return
+        # Identification done; price what now has a name and no price.
+        pending = _pricing_queue(only_unpriced=True)
+        state.update(phase="pricing", queue=pending, progress=0, total=len(pending),
+                     id_message=summary, message="pricing…")
+        return
+
+    if not queue:
+        message = f"done, priced {state['total']} card(s)" if state["total"] else "nothing to price"
+        if state.get("id_message"):
+            message = f"{state['id_message']}; {message}"
+        state.update(running=False, message=message)
+        return
+    batch, state["queue"] = queue[:PRICE_BATCH], queue[PRICE_BATCH:]
+
+    def price(card_id: int) -> None:
+        try:
+            with db.connect(DB_PATH) as conn:
+                card = db.get_card(conn, card_id)
+            if not card or not card.get("name"):
+                return
+            patch, _ = _price_card_pass1(card)
+            with db.connect(DB_PATH) as conn:
+                db.update_card(conn, card_id, patch)
+        except Exception as exc:
+            print(f"[pricing] id={card_id}: {exc}", file=sys.stderr)
+
+    with ThreadPoolExecutor(max_workers=int(os.getenv("TCG_WORKERS", "6"))) as pool:
+        list(pool.map(price, batch))
+    state["progress"] += len(batch)
+    state["message"] = f"TCG/CM {state['progress']}/{state['total']}"
 
 
 # ----------------------------------------------------------------------
@@ -1094,10 +1269,61 @@ TCG_CATALOG_PATH = OUTPUT_DIR / "cache" / "tcgplayer_catalog.csv"
 _tcg_catalog_cache: dict[str, Any] = {"mtime": None, "catalog": None}
 
 
+class _StoredTcgCatalog:
+    """The TCGplayer export as rows in the database (serverless). Matching is
+    lib.tcgplayer_catalog's, run over the few rows that share the card's
+    name and number."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+
+    def __len__(self) -> int:
+        return self._count
+
+    def match(self, card: dict) -> Optional[str]:
+        from lib.tcgplayer_catalog import TcgCatalog, _norm_name, _norm_number
+        from webapp.models import TcgProduct, get_session
+
+        name, number = _norm_name(card.get("name")), _norm_number(card.get("card_number"))
+        if not name or not number:
+            return None
+        s = get_session()
+        try:
+            rows = [{"id": r.tcg_id, "name": r.name, "number": r.number, "set": r.set_name,
+                     "condition": r.condition}
+                    for r in s.query(TcgProduct).filter_by(name=name, number=number).all()]
+        finally:
+            s.close()
+        return TcgCatalog(rows).match(card) if rows else None
+
+
+def _store_tcg_rows(rows: list[dict], replace: bool) -> None:
+    from webapp.models import TcgProduct, get_session
+
+    s = get_session()
+    try:
+        if replace:
+            s.query(TcgProduct).delete()
+        s.bulk_insert_mappings(TcgProduct, [
+            {"tcg_id": r["id"][:40], "name": r["name"][:300], "number": r["number"][:40],
+             "set_name": r["set"][:300], "condition": r["condition"][:80]} for r in rows])
+        s.commit()
+    finally:
+        s.close()
+
+
 def get_tcg_catalog():
     """The seller's TCGplayer export (real TCGplayer Ids), or None if none
     has been uploaded. Re-read when the file changes."""
     from lib.tcgplayer_catalog import TcgCatalog
+    if SERVERLESS:
+        from webapp.models import TcgProduct, get_session
+        s = get_session()
+        try:
+            count = s.query(TcgProduct).count()
+        finally:
+            s.close()
+        return _StoredTcgCatalog(count) if count else None
     try:
         mtime = TCG_CATALOG_PATH.stat().st_mtime
     except OSError:
@@ -1125,8 +1351,17 @@ def api_tcg_catalog_status():
 @app.route("/api/tcgplayer/catalog", methods=["POST"])
 def api_tcg_catalog_upload():
     """multipart file=<the pricing CSV exported from the TCGplayer seller
-    portal>. Kept on disk and used to fill in real TCGplayer Ids."""
+    portal>. Kept and used to fill in real TCGplayer Ids.
+
+    A host that caps request size gets the file in parts (part=N of
+    parts=M, each a CSV with the header line): part 1 replaces what was
+    stored, later parts add to it."""
     from lib.tcgplayer_catalog import TcgCatalog
+
+    try:
+        part, parts = int(request.form.get("part") or 1), int(request.form.get("parts") or 1)
+    except ValueError:
+        return jsonify({"error": "part and parts must be numbers"}), 400
 
     upload = request.files.get("file")
     if upload is None:
@@ -1138,10 +1373,24 @@ def api_tcg_catalog_upload():
     try:
         catalog = TcgCatalog.parse(text)
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        # One part of a larger file can hold no Pokemon rows at all.
+        if not (parts > 1 and "no Pokemon rows" in str(exc)):
+            return jsonify({"error": str(exc)}), 400
+        catalog = TcgCatalog([])
+    if SERVERLESS:
+        _store_tcg_rows(catalog.rows, replace=part == 1)
+        if part < parts:
+            return jsonify({"part": part, "parts": parts, "rows": len(catalog)})
+        return api_tcg_catalog_status()
     TCG_CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TCG_CATALOG_PATH.write_text(text, encoding="utf-8")
+    if part == 1:
+        TCG_CATALOG_PATH.write_text(text, encoding="utf-8")
+    else:
+        with TCG_CATALOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(text.split("\n", 1)[1] if "\n" in text else "")
     _tcg_catalog_cache.update(mtime=None, catalog=None)
+    if part < parts:
+        return jsonify({"part": part, "parts": parts, "rows": len(catalog)})
     return api_tcg_catalog_status()
 
 
@@ -1187,11 +1436,18 @@ def api_export_csvs():
         # Use pandas only when present; otherwise write naively.
         path = CSVS_DIR / filename
         _write_csv(path, rows)
-        written.append({"file": str(path.relative_to(ROOT)), "rows": len(rows)})
+        written.append({"file": rel_path(path), "rows": len(rows)})
     return jsonify({"written": written})
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
+    _write_csv_file(path, rows)
+    if SERVERLESS:
+        # The download may be served by an instance that never wrote the file.
+        runtime.state_set(f"csv:{rel_path(path)}", {"text": path.read_text()})
+
+
+def _write_csv_file(path: Path, rows: list[dict]) -> None:
     import csv
     if not rows:
         path.write_text("")
@@ -1278,7 +1534,7 @@ def api_export_lot():
     for filename, row in targets:
         path = out_dir / filename
         _write_csv(path, [row])
-        written.append({"file": str(path.relative_to(ROOT)), "rows": 1})
+        written.append({"file": rel_path(path), "rows": 1})
 
     return jsonify({
         "written": written,
@@ -1303,7 +1559,8 @@ def api_upload_card_image(card_id: int):
     try:
         from lib import cloudinary_client
         cloudinary_client.configure()
-        crop = ROOT / card["crop_path"]
+        crop = data_path(card["crop_path"])
+        runtime.ensure_local(crop)
         url = cloudinary_client.upload(str(crop))
         with db.connect(DB_PATH) as conn:
             updated = db.update_card(conn, card_id, {"image_url": url})
@@ -1378,6 +1635,8 @@ def api_publish_status():
 
 @app.route("/api/publish/job-status")
 def api_publish_job_status():
+    if SERVERLESS:
+        return jsonify(_pump(PUBLISH_JOB, _ebay_publish_slice))
     return jsonify(_publish_state)
 
 
@@ -1397,6 +1656,8 @@ def api_publish_ebay():
     except (KeyError, TypeError, ValueError):
         return jsonify({"error": "expected (the number of cards you confirmed) is required; "
                                  "read it from /api/publish/status"}), 400
+    if SERVERLESS:
+        return _start_sliced_ebay_publish(expected, skip_flagged)
     with _publish_lock:
         if _publish_state["running"]:
             return jsonify({"error": "a publish job is already running"}), 409
@@ -1435,45 +1696,21 @@ def api_publish_ebay():
             done = listed = 0
             failures: list[str] = []
             for card in eligible:
-                title = card.get("name") or Path(card.get("crop_path", "")).stem
+                if not card.get("image_url"):
+                    _publish_state["message"] = f"uploading photo {done + 1}/{len(eligible)}"
                 try:
-                    if not card.get("image_url"):
-                        # eBay needs the photo at a public URL; host it now
-                        # instead of making the operator do it card by card.
-                        from lib import cloudinary_client
-                        _publish_state["message"] = f"uploading photo {done + 1}/{len(eligible)}"
-                        card["image_url"] = cloudinary_client.upload(str(ROOT / card["crop_path"]))
-                        with db.connect(DB_PATH) as conn:
-                            db.update_card(conn, int(card["id"]), {"image_url": card["image_url"]})
-                    result = lister.publish_card(card)
-                    patch = {
-                        "ebay_listing_id": result.get("listing_id"),
-                        "ebay_offer_id": result.get("offer_id"),
-                        "ebay_listing_url": result.get("url"),
-                        "ebay_listing_status": "listed",
-                        "listed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    }
-                    with db.connect(DB_PATH) as conn:
-                        db.update_card(conn, int(card["id"]), patch)
-                    listed += 1
+                    failure = _publish_one_ebay(lister, card)
                 except EbayUserNotAuthorized as exc:
                     _publish_state["message"] = (
                         f"stopped after {listed} listed: eBay is not connected ({exc})")
                     return
-                except EbayListingError as exc:
-                    print(f"[publish ebay] FAILED {title}: {exc}", file=sys.stderr)
-                    failures.append(f"{title}: {exc}")
-                    with db.connect(DB_PATH) as conn:
-                        db.update_card(conn, int(card["id"]), {"ebay_listing_status": f"error: {exc}"[:200]})
-                except Exception as exc:
-                    print(f"[publish ebay] error {title}: {exc}", file=sys.stderr)
-                    failures.append(f"{title}: {exc}")
-                    with db.connect(DB_PATH) as conn:
-                        db.update_card(conn, int(card["id"]), {"ebay_listing_status": f"error: {exc}"[:200]})
-                finally:
-                    done += 1
-                    _publish_state["progress"] = done
-                    _publish_state["message"] = f"{listed} listed, {len(failures)} failed, {done}/{len(eligible)} done"
+                if failure:
+                    failures.append(failure)
+                else:
+                    listed += 1
+                done += 1
+                _publish_state["progress"] = done
+                _publish_state["message"] = f"{listed} listed, {len(failures)} failed, {done}/{len(eligible)} done"
             # Say plainly how it went; the first error is usually the one
             # that explains all of them (a missing policy, a bad category).
             message = f"done: {listed} of {len(eligible)} listed on eBay"
@@ -1487,9 +1724,130 @@ def api_publish_ebay():
     return jsonify({"started": True})
 
 
+def _publish_one_ebay(lister, card: dict) -> Optional[str]:
+    """List one card on eBay and record the outcome on its row. Returns None
+    when it listed, else a short failure. A lost eBay connection is raised,
+    since it stops the whole run."""
+    from lib.ebay_lister import EbayListingError
+    from lib.ebay_oauth import EbayUserNotAuthorized
+
+    title = card.get("name") or Path(card.get("crop_path", "")).stem
+    try:
+        if not card.get("image_url"):
+            # eBay needs the photo at a public URL; host it now instead of
+            # making the operator do it card by card.
+            from lib import cloudinary_client
+            crop = data_path(card["crop_path"])
+            runtime.ensure_local(crop)
+            card["image_url"] = cloudinary_client.upload(str(crop))
+            with db.connect(DB_PATH) as conn:
+                db.update_card(conn, int(card["id"]), {"image_url": card["image_url"]})
+        result = lister.publish_card(card)
+        patch = {
+            "ebay_listing_id": result.get("listing_id"),
+            "ebay_offer_id": result.get("offer_id"),
+            "ebay_listing_url": result.get("url"),
+            "ebay_listing_status": "listed",
+            "listed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        with db.connect(DB_PATH) as conn:
+            db.update_card(conn, int(card["id"]), patch)
+        return None
+    except EbayUserNotAuthorized:
+        raise
+    except EbayListingError as exc:
+        print(f"[publish ebay] FAILED {title}: {exc}", file=sys.stderr)
+        problem = str(exc)
+    except Exception as exc:
+        print(f"[publish ebay] error {title}: {exc}", file=sys.stderr)
+        problem = str(exc)
+    with db.connect(DB_PATH) as conn:
+        db.update_card(conn, int(card["id"]), {"ebay_listing_status": f"error: {problem}"[:200]})
+    return f"{title}: {problem}"
+
+
+def _ebay_publish_set(skip_flagged: bool) -> list[dict]:
+    """What a publish would list right now. Raises RuntimeError when sold
+    cards cannot be told apart."""
+    from webapp import connections
+
+    can_upload = connections.cloudinary_ready()
+    with db.connect(DB_PATH) as conn:
+        cards = _cards_payload(_unsold(db.list_cards(conn, sort="newest")))
+    eligible = [c for c in cards if c.get("final_price") and (c.get("image_url") or can_upload)]
+    return [c for c in eligible if not (skip_flagged and c.get("needs_review"))]
+
+
+def _start_sliced_ebay_publish(expected: int, skip_flagged: bool):
+    if _job_busy(PUBLISH_JOB):
+        return jsonify({"error": "a publish job is already running"}), 409
+    state = {"running": False, "progress": 0, "total": 0, "site": "ebay", "lease": 0,
+             "listed": 0, "failures": [], "queue": []}
+    try:
+        eligible = _ebay_publish_set(skip_flagged)
+    except RuntimeError as exc:
+        state["message"] = f"nothing listed: {exc}"
+    else:
+        if len(eligible) != expected:
+            state["message"] = (f"nothing listed: {len(eligible)} cards are eligible now, "
+                                f"you confirmed {expected}. Check the list and publish again.")
+        else:
+            state.update(running=True, queue=[int(c["id"]) for c in eligible], total=len(eligible),
+                         message="starting…")
+    runtime.state_set(PUBLISH_JOB, state)
+    return jsonify({"started": True})
+
+
+def _ebay_publish_slice(state: dict) -> None:
+    from lib.ebay_lister import EbayLister
+    from lib.ebay_oauth import EbayUserNotAuthorized
+    from webapp import connections
+
+    def finish() -> None:
+        message = f"done: {state['listed']} of {state['total']} listed on eBay"
+        if state["failures"]:
+            message += f", {len(state['failures'])} failed. First error: {state['failures'][0][:300]}"
+        state.update(running=False, message=message)
+
+    if not state["queue"]:
+        finish()
+        return
+    card_id = state["queue"].pop(0)
+    try:
+        lister = EbayLister(auth=connections._ebay_auth())   # noqa: SLF001
+    except Exception as exc:
+        state.update(running=False, message=f"cannot continue: {exc}")
+        return
+    with db.connect(DB_PATH) as conn:
+        row = db.get_card(conn, card_id)
+    # Listed or sold since the run started: leave it alone.
+    card = _cards_payload(_unsold([row]))[0] if row and not row.get("ebay_listing_id") and _unsold([row]) else None
+    if card is not None:
+        try:
+            failure = _publish_one_ebay(lister, card)
+        except EbayUserNotAuthorized as exc:
+            state.update(running=False,
+                         message=f"stopped after {state['listed']} listed: eBay is not connected ({exc})")
+            return
+        if failure:
+            state["failures"] = (state["failures"] + [failure])[:20]
+            state["failed"] = state.get("failed", 0) + 1
+        else:
+            state["listed"] += 1
+    state["progress"] += 1
+    state["message"] = (f"{state['listed']} listed, {state.get('failed', 0)} failed, "
+                        f"{state['progress']}/{state['total']} done")
+    if not state["queue"]:
+        finish()
+
+
 @app.route("/api/publish/portal", methods=["POST"])
 def api_publish_portal():
     """Generate the site's CSV from the DB and upload it via headless browser."""
+    if SERVERLESS:
+        return jsonify({"error": "Uploading through the TCGplayer or Whatnot seller portal drives a browser "
+                                 "on the machine the app runs on, which a hosted install does not have. "
+                                 "Download the CSV and upload it in the portal yourself."}), 409
     body = request.get_json(silent=True) or {}
     site = body.get("site") or request.args.get("site")
     if site not in ("tcgplayer", "whatnot"):
@@ -1547,6 +1905,13 @@ def api_publish_portal():
 @app.route("/crops/<path:filename>")
 @app.route("/output/crops/<path:filename>")
 def serve_crop(filename: str):
+    if not (CROPS_DIR / filename).exists():
+        # Not on this instance's disk: the browser fetches it from storage.
+        url = runtime.file_url(f"{rel_path(CROPS_DIR)}/{filename}") if ".." not in filename.split("/") else None
+        if url:
+            response = redirect(url, code=302)
+            response.headers["Cache-Control"] = "public, max-age=86400"
+            return response
     return send_from_directory(CROPS_DIR, filename)
 
 
@@ -1557,7 +1922,11 @@ def download_csv(filename: str):
         abort(404)
     path = CSVS_DIR / filename
     if not path.exists():
-        abort(404)
+        saved = runtime.state_get(f"csv:{rel_path(path)}") if SERVERLESS else None
+        if saved is None:
+            abort(404)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(saved["text"])
     return send_file(path, as_attachment=True)
 
 
@@ -1591,7 +1960,11 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(catalog_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(market_bp)
-price_scheduler.start(price_fn=_price_card)
+if SERVERLESS:
+    # No process to run a timer in: the daily cron below does the refresh.
+    price_scheduler.install(price_fn=_price_card)
+else:
+    price_scheduler.start(price_fn=_price_card)
 
 # [B] Advanced settings (per-user eBay API keys) — see webapp/settings.py.
 from webapp.settings import ensure_settings_tables, settings_bp  # noqa: E402
@@ -1627,14 +2000,47 @@ app.register_blueprint(refunds_bp)
 from webapp.listing_import import listings_bp  # noqa: E402
 
 app.register_blueprint(listings_bp)
-sales_sync.start_background()
+if not SERVERLESS:
+    sales_sync.start_background()
+
+
+@app.route("/api/cron/daily")
+def api_cron_daily():
+    """Called once a day by the host's scheduler (vercel.json) in place of
+    the timers a long-running process would keep: refresh due prices, read
+    eBay sales back. Vercel sends CRON_SECRET as a bearer token."""
+    import hmac
+
+    secret = os.getenv("CRON_SECRET") or ""
+    sent = request.headers.get("Authorization") or ""
+    if not secret or not hmac.compare_digest(sent, f"Bearer {secret}"):
+        return jsonify({"error": "not authorized"}), 401
+    out: dict[str, Any] = {}
+    try:
+        out["prices_refreshed"] = price_scheduler.refresh_cards(
+            batch_size=int(os.getenv("CRON_PRICE_BATCH", "150")))
+    except Exception as exc:
+        traceback.print_exc()
+        out["price_error"] = str(exc)
+    try:
+        out["ebay_sales"] = sales_sync.sync_ebay()
+    except Exception as exc:
+        traceback.print_exc()
+        out["ebay_error"] = str(exc)
+    return jsonify(out)
 
 
 @app.route("/api/session")
 def api_session():
     """Lets the open bench page know whether library actions need a login."""
     from webapp.auth import current_user_id
-    return jsonify({"logged_in": bool(current_user_id())})
+    return jsonify({
+        "logged_in": bool(current_user_id()),
+        # A serverless host refuses request bodies over 4.5 MB. The page
+        # shrinks photos and splits CSVs to stay under this.
+        "max_upload_bytes": 4_000_000 if SERVERLESS else None,
+        "hosted": SERVERLESS,
+    })
 
 
 if __name__ == "__main__":

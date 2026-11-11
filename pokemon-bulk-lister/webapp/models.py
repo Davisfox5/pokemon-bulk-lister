@@ -423,6 +423,47 @@ class ExternalSale(Base):
 Index("uq_external_sale", ExternalSale.source, ExternalSale.external_id, unique=True)
 
 
+class AppState(Base):
+    """Small named pieces of state that must be shared between instances on
+    a serverless host: job progress, generated CSVs, sealed eBay tokens.
+    value is JSON. See webapp/runtime.py."""
+
+    __tablename__ = "app_state"
+
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TcgProduct(Base):
+    """One row of the seller's TCGplayer pricing export, already normalised
+    the way lib.tcgplayer_catalog compares them. Used on a serverless host,
+    where the export cannot be kept as a file."""
+
+    __tablename__ = "tcg_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tcg_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    number: Mapped[str] = mapped_column(String(40), nullable=False)
+    set_name: Mapped[str] = mapped_column(String(300), default="")
+    condition: Mapped[str] = mapped_column(String(80), default="")
+
+
+Index("idx_tcg_products_name_number", TcgProduct.name, TcgProduct.number)
+
+
+class StoredFile(Base):
+    """A file kept in object storage (Vercel Blob): its path as the rest of
+    the app knows it ("output/crops/page01_r0c0.jpg") and its public URL."""
+
+    __tablename__ = "stored_files"
+
+    path: Mapped[str] = mapped_column(String(400), primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class ExternalListing(Base):
     """A card listed for sale on another site (eBay, TCGplayer, Whatnot),
     read in so the library knows about it.

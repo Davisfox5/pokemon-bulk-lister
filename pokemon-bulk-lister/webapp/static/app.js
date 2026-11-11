@@ -176,17 +176,39 @@ function setupDropzone() {
   dz.addEventListener("drop", ev => uploadFiles(ev.dataTransfer.files));
   input.addEventListener("change", () => uploadFiles(input.files));
 
+  async function sendPhotos(list, mode) {
+    const fd = new FormData();
+    for (const f of list) fd.append("file", f, f.name);
+    fd.append("mode", mode);
+    const res = await fetch("/api/grids/upload", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
   async function uploadFiles(files) {
     if (!files || !files.length) return;
     const mode = scanMode();
     status.textContent = `Uploading ${files.length} photo(s)…`;
-    const fd = new FormData();
-    for (const f of files) fd.append("file", f);
-    fd.append("mode", mode);
     try {
-      const res = await fetch("/api/grids/upload", { method: "POST", body: fd });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      let data;
+      const limit = await uploadLimit();
+      if (!limit) {
+        data = await sendPhotos(Array.from(files), mode);
+      } else {
+        // A hosted install caps each request, so photos go one at a time,
+        // shrunk first when they are too big.
+        data = { grids: [], total_crops: 0, skipped: [] };
+        let n = 0;
+        for (const original of files) {
+          status.textContent = `Uploading photo ${++n} of ${files.length}…`;
+          const photo = await fitPhoto(original, limit);
+          if (!photo) { data.skipped.push(original.name); continue; }
+          const one = await sendPhotos([photo], mode);
+          data.grids.push(...one.grids);
+          data.total_crops += one.total_crops;
+          data.skipped.push(...(one.skipped || []));
+        }
+      }
       const skipped = (data.skipped || []).length
         ? ` Skipped ${data.skipped.length} file(s) that are not JPG, PNG, WEBP or TIFF.` : "";
       status.textContent = data.total_crops
@@ -222,6 +244,53 @@ function setupDropzone() {
   $$('input[name="scan-mode"]').forEach(r => r.addEventListener("change", remember));
   $("#auto-process").addEventListener("change", remember);
   remember();
+}
+
+// What the server will accept in one request, or null for no cap.
+let uploadLimitCache;
+async function uploadLimit() {
+  if (uploadLimitCache === undefined) {
+    uploadLimitCache = (await api("/api/session").catch(() => ({}))).max_upload_bytes || null;
+  }
+  return uploadLimitCache;
+}
+
+// A photo small enough to send: the file itself, or a re-encoded JPEG scaled
+// down until it fits. Returns null for a file the browser cannot read (TIFF).
+async function fitPhoto(file, limit) {
+  if (file.size <= limit) return file;
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); } catch { return null; }
+  const name = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+  for (const [side, quality] of [[4000, 0.9], [3400, 0.88], [2800, 0.85], [2200, 0.82]]) {
+    const scale = Math.min(1, side / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((done) => canvas.toBlob(done, "image/jpeg", quality));
+    if (blob && blob.size <= limit) return new File([blob], name, { type: "image/jpeg" });
+  }
+  return null;
+}
+
+// A CSV as pieces small enough to send, each starting with the header line.
+function csvParts(text, maxChars = 3000000) {
+  if (text.length <= maxChars) return [text];
+  const headerEnd = text.indexOf("\n") + 1;
+  const header = text.slice(0, headerEnd);
+  const parts = [];
+  let start = headerEnd;
+  while (start < text.length) {
+    let end = Math.min(text.length, start + maxChars);
+    if (end < text.length) {
+      const cut = text.lastIndexOf("\n", end);
+      if (cut > start) end = cut + 1;
+    }
+    parts.push(header + text.slice(start, end));
+    start = end;
+  }
+  return parts;
 }
 
 function scanMode() {
@@ -1081,10 +1150,18 @@ function setupConnections() {
       const input = $("#tcg-catalog-file");
       input.onchange = async () => {
         if (!input.files.length) return;
-        const fd = new FormData();
-        fd.append("file", input.files[0]);
-        const res = await fetch("/api/tcgplayer/catalog", { method: "POST", body: fd });
-        const data = await res.json().catch(() => ({}));
+        // The whole-catalog export is tens of megabytes, so it goes in parts.
+        const parts = csvParts(await input.files[0].text());
+        let res, data = {};
+        for (let i = 0; i < parts.length; i++) {
+          const fd = new FormData();
+          fd.append("file", new Blob([parts[i]], { type: "text/csv" }), "export.csv");
+          fd.append("part", i + 1);
+          fd.append("parts", parts.length);
+          res = await fetch("/api/tcgplayer/catalog", { method: "POST", body: fd });
+          data = await res.json().catch(() => ({}));
+          if (!res.ok) break;
+        }
         conn.results.tcgplayer = res.ok
           ? { ok: true, detail: `Loaded ${data.rows} products; ${data.matched} of ${data.priced} priced cards matched.` }
           : { ok: false, detail: data.error || "upload failed" };
