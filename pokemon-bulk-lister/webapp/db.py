@@ -179,7 +179,10 @@ def _pg_connect(url: str) -> Iterator[_PgConnection]:
         else:
             candidate.close()
     if raw is None:
-        raw = psycopg.connect(url, autocommit=True, row_factory=dict_row)
+        # prepare_threshold=None: a hosted Postgres is usually reached through
+        # a pooler that hands each statement to a different server connection,
+        # where a statement prepared earlier does not exist.
+        raw = psycopg.connect(url, autocommit=True, row_factory=dict_row, prepare_threshold=None)
     try:
         yield _PgConnection(raw)
     except BaseException:
@@ -224,12 +227,13 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             # Two instances starting at once must not both create the tables.
             # The schema above already has every column, so the SQLite
             # migrations below have nothing to do here.
-            conn.execute("SELECT pg_advisory_lock(?)", (_PG_SCHEMA_LOCK,))
-            try:
+            # The lock lasts exactly as long as this one transaction. (A
+            # session lock would not survive a pooler, which may run the
+            # unlock on a different server connection than the lock.)
+            with conn.raw.transaction():
+                conn.execute("SELECT pg_advisory_xact_lock(?)", (_PG_SCHEMA_LOCK,))
                 for statement in _pg_schema():
                     conn.execute(statement)
-            finally:
-                conn.execute("SELECT pg_advisory_unlock(?)", (_PG_SCHEMA_LOCK,))
             return
         conn.executescript(SCHEMA)
         _apply_migrations(conn)

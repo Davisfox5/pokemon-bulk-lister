@@ -16,3 +16,5 @@ input/grids/*
 output/.secret_key
 output/pages/
 _demo/
+.vercel
+.env*

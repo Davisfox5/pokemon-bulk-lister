@@ -606,6 +606,9 @@ def init_models(url: Optional[str] = None) -> None:
         # A hosted Postgres drops idle connections, and a serverless instance
         # can sit frozen for minutes: check each one before use, keep few.
         kwargs.update(pool_pre_ping=True, pool_size=2, max_overflow=3, pool_recycle=300)
+        # Behind a pooler a statement prepared on one server connection does
+        # not exist on the next, so psycopg must not prepare any.
+        kwargs["connect_args"] = {"prepare_threshold": None}
     _engine = create_engine(db_url, **kwargs)
     if db_url.startswith("sqlite"):
         # The legacy bench (raw sqlite3) and the scheduler write concurrently;
@@ -625,16 +628,14 @@ def init_models(url: Optional[str] = None) -> None:
         _ensure_indexes(_engine)
     else:
         # Two instances starting at once must not both create the tables.
+        # The lock is held for one transaction only: a session lock would not
+        # survive a pooler. _ensure_indexes takes the same lock itself.
         from sqlalchemy import text
 
-        with _engine.connect() as lock:
-            lock.execute(text("SELECT pg_advisory_lock(7203114906)"))
-            try:
-                Base.metadata.create_all(_engine)
-                _ensure_indexes(_engine)
-            finally:
-                lock.execute(text("SELECT pg_advisory_unlock(7203114906)"))
-                lock.commit()
+        with _engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(7203114906)"))
+            Base.metadata.create_all(conn)
+        _ensure_indexes(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
 
 
@@ -654,6 +655,8 @@ def _ensure_indexes(engine) -> None:
     from sqlalchemy import text
 
     with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            conn.execute(text("SELECT pg_advisory_xact_lock(7203114906)"))
         # Keep one active listing per card: the one a buyer is waiting on if
         # there is one, else the oldest.
         rows = conn.execute(text(
