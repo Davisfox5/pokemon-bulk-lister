@@ -172,9 +172,11 @@
       <div class="panel-head">
         <h2>Seller balances</h2>
         <span class="muted">Card payments land in your Stripe account. Sellers with payouts set up are paid automatically; this tracks the rest.</span>
+        <button id="btn-check-refunds" class="btn" title="Ask Stripe whether any recent card sale was refunded or disputed">Check Stripe for refunds</button>
         <button id="btn-run-payouts" class="btn" title="Send every seller with payouts set up what they are owed">Pay out now</button>
       </div>
       <div id="refunds-due" class="hidden"></div>
+      <ul id="attention-list" class="rules-list hidden"></ul>
       <div class="table-scroll">
         <table class="inv-table">
           <thead><tr>

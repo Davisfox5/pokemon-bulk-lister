@@ -750,7 +750,9 @@ function setupPublish() {
     }
     const WHY_LEFT_OUT = {
       ebay: "without a hosted photo (Cloudinary is not set up; see Connections)",
-      tcgplayer: "without a TCGplayer product id (they did not match a TCGplayer product when priced)",
+      tcgplayer: c.catalog === false
+        ? "cannot be matched until you upload your TCGplayer pricing export (Connections)"
+        : "with no single matching row in your TCGplayer pricing export",
     };
     const leftOut = c.left_out
       ? `<p class="muted">${plural(c.left_out, "priced card")} ${WHY_LEFT_OUT[site]} will be left out.</p>` : "";
@@ -866,6 +868,7 @@ function salesSummary(r, where) {
   if (r.unmatched) bits.push(`${r.unmatched} could not be matched to a library card (listed below)`);
   if (r.duplicates) bits.push(`${r.duplicates} already recorded`);
   if (r.void) bits.push(`${r.void} cancelled or refunded`);
+  if (r.adjusted) bits.push(`${r.adjusted} sale(s) were partly refunded since, and their price was lowered to match`);
   if (r.reversed) bits.push(`${r.reversed} earlier sale(s) were refunded since, and the card was put back`);
   if (r.not_paid_yet) bits.push(`${r.not_paid_yet} not paid yet`);
   if (r.skipped) bits.push(`${r.skipped} rows skipped (no SKU or price)`);
@@ -949,6 +952,7 @@ const conn = { data: null, results: {}, focus: null, timer: null };
 
 async function loadConnections() {
   conn.data = await api("/api/connections");
+  conn.tcg = await api("/api/tcgplayer/catalog").catch(() => null);
   renderConnections();
   refreshPublishStatus();
   // Keep polling while a sign-in window is open.
@@ -986,6 +990,21 @@ function connItem(key, name, state, cls, next, actions = "", note = "") {
   </section>`;
 }
 
+// TCGplayer's upload needs its own id for each card. Those come from the
+// pricing export the seller downloads from TCGplayer.
+function tcgCatalogHtml() {
+  const t = conn.tcg;
+  if (!t) return "";
+  const status = t.loaded
+    ? `Pricing export loaded: ${t.rows} products. ${t.matched} of your ${t.priced} priced cards match a TCGplayer Id.`
+    : "Upload your TCGplayer pricing export (seller portal, Pricing, Export) so uploads carry real TCGplayer Ids. Without it the TCGplayer CSV is empty.";
+  return `<div class="conn-actions" style="margin-top:8px">
+      <span class="small">${escapeHtml(status)}</span>
+      <button data-act="tcg-catalog">${t.loaded ? "Replace export" : "Upload export"}</button>
+      <input id="tcg-catalog-file" type="file" accept=".csv,text/csv" hidden />
+    </div>`;
+}
+
 function portalItem(key, name) {
   const d = conn.data[key];
   const login = d.login.state;
@@ -1006,7 +1025,7 @@ function portalItem(key, name) {
     ? ` Last attempt: ${d.login.detail}.` : "";
   return connItem(key, name,
     d.session ? "session saved" : "not connected", d.session ? "ok" : "todo",
-    d.next + problem, actions,
+    d.next + problem, actions + (key === "tcgplayer" ? tcgCatalogHtml() : ""),
     `${name} has no listing API for regular sellers, so this drives your seller portal in a browser.
      That is against ${name}'s terms and can break when they change the page. Uploading the exported CSV by hand always works.`);
 }
@@ -1056,6 +1075,24 @@ function setupConnections() {
     const btn = ev.target.closest("button[data-act]");
     if (!btn) return;
     const key = btn.closest("[data-conn]").dataset.conn;
+    if (btn.dataset.act === "tcg-catalog") {
+      // Handled apart from the other buttons: the panel must not redraw
+      // (and replace the file input) while the file dialog is open.
+      const input = $("#tcg-catalog-file");
+      input.onchange = async () => {
+        if (!input.files.length) return;
+        const fd = new FormData();
+        fd.append("file", input.files[0]);
+        const res = await fetch("/api/tcgplayer/catalog", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        conn.results.tcgplayer = res.ok
+          ? { ok: true, detail: `Loaded ${data.rows} products; ${data.matched} of ${data.priced} priced cards matched.` }
+          : { ok: false, detail: data.error || "upload failed" };
+        loadConnections().catch(() => {});
+      };
+      input.click();
+      return;
+    }
     const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
     const label = btn.textContent;
     btn.disabled = true;

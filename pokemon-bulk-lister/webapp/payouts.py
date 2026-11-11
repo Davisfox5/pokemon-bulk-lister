@@ -124,7 +124,10 @@ def _reconcile_pending(s, stripe, seller_id: int) -> None:
             .filter(Order.seller_id == seller_id, OrderTransfer.transfer_id == PENDING).all())
     for row in rows:
         found = stripe.Transfer.list(transfer_group=f"order-{row.order_id}", limit=10)
-        match = [t for t in found["data"] if str(t["metadata"]["order_id"]) == str(row.order_id)]
+        # A transfer that was fully reversed (refund, dispute) is history,
+        # not the payment this claim stands for.
+        match = [t for t in found["data"]
+                 if str(t["metadata"]["order_id"]) == str(row.order_id) and not t["reversed"]]
         if match:
             row.transfer_id = match[0]["id"]
             row.amount = round(int(match[0]["amount"]) / 100.0, 2)
@@ -196,15 +199,20 @@ def pay_seller(seller_id: int) -> dict:
                 try:
                     session_obj = stripe.checkout.Session.retrieve(order.payment_ref)
                     intent = stripe.PaymentIntent.retrieve(session_obj["payment_intent"])
+                    # An order can be paid again after a dispute is won, so
+                    # the key carries how many transfers came before.
+                    earlier = len(stripe.Transfer.list(
+                        transfer_group=f"order-{order.id}", limit=10)["data"])
                     transfer = stripe.Transfer.create(
                         amount=_cents(amount), currency="usd",
                         destination=account.stripe_account_id,
                         source_transaction=intent["latest_charge"],
                         transfer_group=f"order-{order.id}",
                         metadata={"order_id": str(order.id), "seller_id": str(seller_id)},
-                        # One key per order, whatever the amount: a repeat of
-                        # this request can only ever return the same transfer.
-                        idempotency_key=f"transfer-order-{order.id}",
+                        # One key per payment of an order, whatever the
+                        # amount: a repeat of this request can only ever
+                        # return the same transfer.
+                        idempotency_key=f"transfer-order-{order.id}-n{earlier}",
                     )
                 except Exception as exc:
                     s.delete(claim)       # Stripe refused, so nothing moved

@@ -33,7 +33,14 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from lib import mailer
-from webapp.models import AlertRule, EmailVerification, User, get_session, utcnow
+from webapp.models import (
+    AlertRule,
+    EmailVerification,
+    PasswordReset,
+    User,
+    get_session,
+    utcnow,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,8 +77,44 @@ VERIFY_LINK_HOURS = 24
 VERIFY_RESEND_SECONDS = 60
 
 
+RESET_LINK_MINUTES = 60
+RESET_RESEND_SECONDS = 60
+MIN_PASSWORD = 8
+
+
+def _stamp(user: User) -> str:
+    """Ties a session to the password it was opened with. Changing the
+    password changes the stamp, which signs every other browser out."""
+    return hashlib.sha256(user.password_hash.encode()).hexdigest()[:16]
+
+
+def start_session(user: User) -> None:
+    session["uid"] = user.id
+    session["pw"] = _stamp(user)
+    session.permanent = True
+
+
 def current_user_id() -> int | None:
-    return session.get("uid")
+    """The logged-in user's id, or None. A session opened before the
+    account's password was last changed no longer counts."""
+    uid = session.get("uid")
+    if not uid:
+        return None
+    s = get_session()
+    try:
+        user = s.get(User, uid)
+        # Sessions from before this check existed carry no stamp; they are
+        # accepted and stamped, so nobody is signed out by the upgrade.
+        if user is not None and "pw" not in session:
+            session["pw"] = _stamp(user)
+        ok = user is not None and session.get("pw") == _stamp(user)
+    finally:
+        s.close()
+    if not ok:
+        session.pop("uid", None)
+        session.pop("pw", None)
+        return None
+    return uid
 
 
 def admin_emails() -> set[str]:
@@ -131,7 +174,7 @@ def verified_required(fn):
     """login_required, plus the account's email must be verified."""
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        uid = session.get("uid")
+        uid = current_user_id()
         if not uid:
             if request.path.startswith("/api/"):
                 return jsonify({"error": "login required"}), 401
@@ -155,7 +198,7 @@ def verified_required(fn):
 def login_required(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        if not session.get("uid"):
+        if not current_user_id():
             if request.path.startswith("/api/"):
                 return jsonify({"error": "login required"}), 401
             return redirect(url_for("auth.login_page", next=request.path))
@@ -213,8 +256,7 @@ def register():
             window_days=SELL_SIGNAL_WINDOW_DAYS,
         ))
         s.commit()
-        session["uid"] = user.id
-        session.permanent = True
+        start_session(user)
         try:
             send_verification(s, user, request.host_url)
         except Exception as exc:
@@ -237,7 +279,7 @@ def verify_email():
     get into. A logged-out visitor is sent to log in and brought back.
     """
     token = request.args.get("token") or ""
-    uid = session.get("uid")
+    uid = current_user_id()
     if not uid:
         return redirect(url_for("auth.login_page", next=f"/verify-email?token={token}"))
     s = get_session()
@@ -265,9 +307,6 @@ def account():
     s = get_session()
     try:
         user = s.get(User, uid)
-        if user is None:
-            session.pop("uid", None)
-            return jsonify({"error": "login required"}), 401
         out = {
             "email": user.email,
             "verified": is_verified(s, uid),
@@ -317,8 +356,7 @@ def login():
         user = s.query(User).filter_by(email=email).one_or_none()
         if user is None or not check_password_hash(user.password_hash, password):
             return _respond("", "invalid email or password", "login.html")
-        session["uid"] = user.id
-        session.permanent = True
+        start_session(user)
     finally:
         s.close()
     target = request.args.get("next") or "/portfolio"
@@ -327,7 +365,121 @@ def login():
     return _respond(target)
 
 
+# ----------------------------------------------------------------------
+# Forgotten password
+# ----------------------------------------------------------------------
+
+FORGOT_SENT = ("If an account exists for that address, a link to choose a new password "
+               "is on its way. It works once and lasts an hour.")
+
+
+@auth_bp.route("/forgot-password", methods=["GET"])
+def forgot_page():
+    return render_template("forgot.html", mail="smtp" if mailer.configured() else "console")
+
+
+@auth_bp.route("/forgot-password", methods=["POST"])
+def forgot():
+    """Send a reset link. The answer is the same whether or not the address
+    has an account, so this cannot be used to find out who is registered."""
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip().lower()
+    s = get_session()
+    try:
+        user = s.query(User).filter_by(email=email).one_or_none() if email else None
+        if user is not None:
+            row = s.query(PasswordReset).filter_by(user_id=user.id).one_or_none()
+            recent = row and row.sent_at and utcnow() - row.sent_at < timedelta(seconds=RESET_RESEND_SECONDS)
+            if not recent:
+                token = secrets.token_urlsafe(32)
+                if row is None:
+                    row = PasswordReset(user_id=user.id)
+                    s.add(row)
+                row.token_hash, row.sent_at = _hash(token), utcnow()
+                s.commit()
+                link = f"{request.host_url.rstrip('/')}/reset-password?token={token}"
+                try:
+                    deliver(
+                        user.email, "Choose a new password for Card Portfolio",
+                        "Open this link to choose a new password:\n\n"
+                        f"{link}\n\n"
+                        f"It works once and expires in {RESET_LINK_MINUTES} minutes. "
+                        "If you did not ask for this, ignore this message; your password "
+                        "has not changed.",
+                    )
+                except Exception as exc:
+                    print(f"[auth] could not send reset link to {user.email}: {exc}", file=sys.stderr)
+    finally:
+        s.close()
+    if request.is_json:
+        return jsonify({"ok": True, "message": FORGOT_SENT})
+    return render_template("forgot.html", sent=FORGOT_SENT,
+                           mail="smtp" if mailer.configured() else "console")
+
+
+def _reset_row(s, token: str):
+    """The live reset row for a token, or None if unknown, used or expired."""
+    row = s.query(PasswordReset).filter_by(token_hash=_hash(token)).one_or_none() if token else None
+    if row is None or row.sent_at is None:
+        return None
+    if utcnow() - row.sent_at > timedelta(minutes=RESET_LINK_MINUTES):
+        return None
+    return row
+
+
+@auth_bp.route("/reset-password", methods=["GET"])
+def reset_page():
+    token = request.args.get("token") or ""
+    s = get_session()
+    try:
+        ok = _reset_row(s, token) is not None
+    finally:
+        s.close()
+    if not ok:
+        return render_template(
+            "forgot.html", mail="smtp" if mailer.configured() else "console",
+            error="That link has expired or was already used. Ask for a new one."), 400
+    return render_template("reset.html", token=token)
+
+
+@auth_bp.route("/reset-password", methods=["POST"])
+def reset():
+    data = request.get_json(silent=True) or request.form
+    token, password = data.get("token") or "", data.get("password") or ""
+    if len(password) < MIN_PASSWORD:
+        return render_template(
+            "reset.html", token=token,
+            error=f"password must be at least {MIN_PASSWORD} characters"), 400
+    s = get_session()
+    try:
+        row = _reset_row(s, token)
+        if row is None:
+            return render_template(
+                "forgot.html", mail="smtp" if mailer.configured() else "console",
+                error="That link has expired or was already used. Ask for a new one."), 400
+        user = s.get(User, row.user_id)
+        user.password_hash = generate_password_hash(password, method="pbkdf2:sha256")
+        row.token_hash = None     # single use
+        # Opening the link proved they receive mail at this address, which is
+        # all that confirming it asks for.
+        proof = s.query(EmailVerification).filter_by(user_id=user.id).one_or_none()
+        if proof is None:
+            proof = EmailVerification(user_id=user.id)
+            s.add(proof)
+        if proof.verified_at is None:
+            proof.verified_at = utcnow()
+        proof.token_hash = None
+        s.commit()
+        # The new password changes the session stamp: every browser logged in
+        # with the old one is signed out. This one gets a fresh session.
+        start_session(user)
+    finally:
+        s.close()
+    return redirect("/portfolio?reset=done")
+
+
 @auth_bp.route("/logout", methods=["POST", "GET"])
 def logout():
+    session.pop("pw", None)
     session.pop("uid", None)
     return redirect("/login")

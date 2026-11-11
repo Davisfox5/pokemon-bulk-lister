@@ -69,6 +69,12 @@ and only works in a browser that is logged in to that account (a logged-out
 visitor is sent to log in first). **Send the link again** on the Library page
 issues a new one. Accounts created before this change have to confirm too.
 
+**Forgot your password?** on the login page mails a link to choose a new one
+(printed in the console when SMTP is not set). It works once and lasts an
+hour. Changing a password signs every other browser out of that account.
+Because the link proves the mailbox, using it also confirms the address. The
+page gives the same answer whether or not an account exists.
+
 - With `SMTP_HOST` set (plus `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
   `SMTP_FROM`), the link is emailed.
 - With no SMTP settings, the link is printed in the console window the app
@@ -341,9 +347,19 @@ it at your own risk, or upload by hand.**
    the saved session and confirms you are still signed in and the upload field
    is there. It uploads nothing.
 
-**Upload to Whatnot / TCGplayer** then confirms the row count and total first.
-TCGplayer's CSV only includes cards that matched a TCGplayer product, and the
-dialog says how many are left out. If an upload fails, a screenshot and the
+**TCGplayer Ids.** TCGplayer's upload identifies each row by a TCGplayer Id,
+a number it assigns to one card in one condition and printing. Only
+TCGplayer has those. In the seller portal, export your pricing CSV (Pricing,
+Export), then in Connections, under TCGplayer, click **Upload export**. The
+app looks each scanned card up in that file by name, number, set, condition
+and printing, and writes the real Id. A card with no match, or more than one
+possible match, is left out and counted. Without an export the TCGplayer CSV
+is empty. (Earlier versions wrote the pokemontcg.io card id into that column,
+which TCGplayer does not recognise.) From the command line, save the export
+as `output/cache/tcgplayer_catalog.csv`.
+
+**Upload to Whatnot / TCGplayer** then confirms the row count and total first,
+and for TCGplayer says how many priced cards are left out. If an upload fails, a screenshot and the
 page HTML are written to `output/cache/<site>_debug/`; the import URL can be
 changed with `WHATNOT_UPLOAD_URL` / `TCGPLAYER_UPLOAD_URL`.
 
@@ -377,9 +393,9 @@ without its extension (`page01_r0c2`). That SKU is how a sale finds its card.
   and a price column; order id, quantity, fees and date are used when
   present. The app shows what it found and which columns it read before
   recording anything.
-- **TCGplayer**: not read back. Its upload format has no place for this
-  app's SKU, so a TCGplayer sale cannot be tied to a card. Use **Sold
-  elsewhere** in the library.
+- **TCGplayer**: not read back. Its listings carry TCGplayer's own ids, not
+  this app's SKU, so a sale there cannot be tied to one scanned card. Use
+  **Sold elsewhere** in the library.
 
 A sale only ever touches the library of the account it came from. Your eBay
 account and your CSV imports match your own cards; a user's connected eBay
@@ -398,9 +414,10 @@ A sale whose SKU matches no card is listed under the Sales panel with the
 reason. Nothing is guessed from the title. Record it by hand with **Sold
 elsewhere**, then **Dismiss** it.
 
-Limits: partial refunds are left as sales, and Whatnot's real export column
-names have not been seen, only inferred, so the first import may report a
-missing column.
+A partial refund at eBay lowers the recorded sale to what you kept.
+
+Limit: Whatnot's real export column names have not been seen, only inferred,
+so the first import may report a missing column.
 
 ### Stripe (card payments on the marketplace)
 
@@ -452,8 +469,26 @@ the operator already paid by hand is not sent again. The app records its
 intent to pay before asking Stripe, so a crash mid-payout cannot lead to a
 second transfer: next time it asks Stripe what happened and carries on.
 
-Not handled: a refund or chargeback you issue from the Stripe dashboard
-after a seller was paid. Reverse the transfer there as well.
+**Refunds and chargebacks after a sale.** If you refund a charge in the Stripe
+dashboard, or a buyer disputes one with their bank, the app brings its books
+in line:
+
+- A full refund marks the order refunded, takes the seller's transfer back,
+  and stops counting the sale in anyone's totals. The operator sees the order
+  under **Seller balances** with **Return card to seller**, which moves the
+  card back once the buyer has returned it.
+- A partial refund recomputes the fee and the seller's share on what the
+  buyer ended up paying and takes back the difference.
+- A dispute puts the order on hold and takes the transfer back while the bank
+  decides. If you win, the seller is paid again. If you lose, it ends as a
+  refund.
+- If Stripe cannot take the money back (the seller already withdrew it), the
+  seller's balance goes negative and the panel says how much they owe you.
+
+The app learns of these through the signed webhook (add `charge.refunded`,
+`charge.dispute.created` and `charge.dispute.closed` to the events Stripe
+sends) or, on a local install, the operator's **Check Stripe for refunds**
+button, which asks Stripe about each card order from the last 130 days.
 
 This needs **Connect switched on for your Stripe account** (Stripe dashboard,
 Connect). Without it, "Set up payouts" reports Stripe's error.
@@ -536,6 +571,7 @@ pokemon-bulk-lister/
 │  ├─ whatnot_lister.py        # Whatnot Seller Hub CSV upload
 │  ├─ decks.py                 # decklist parser, library matching, Limitless popular decks
 │  ├─ ebay_orders.py           # eBay Fulfillment API: read sold orders
+│  ├─ tcgplayer_catalog.py     # real TCGplayer Ids from the seller's export
 │  ├─ mailer.py                # SMTP, or the console when SMTP is not set
 │  └─ cloudinary_client.py
 ├─ webapp/
@@ -549,6 +585,7 @@ pokemon-bulk-lister/
 │  ├─ connections.py           # setup + checks for eBay, portals, Stripe
 │  ├─ sales_sync.py            # sales read back: eBay orders, CSV exports
 │  ├─ payouts.py               # Stripe Connect onboarding + automatic transfers
+│  ├─ refunds.py               # refunds and disputes after a sale settled
 │  ├─ portfolio.py             # valuation, price history, alerts
 │  └─ templates/, static/      # index, portfolio, decks, market, login, register
 ├─ data/

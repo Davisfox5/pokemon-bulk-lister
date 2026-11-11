@@ -220,6 +220,8 @@ class Order(Base):
     amount - platform_fee (owed to the seller once paid).
 
     status: pending_payment | paid | completed | cancelled | refund_due
+            | refunded (money went back after the sale settled)
+            | disputed (the buyer's bank is deciding; see webapp/refunds.py)
             (refund_due: a card payment has to be sent back and Stripe
             refused the automatic refund; the operator must do it by hand)
     payment_provider: 'stripe' | 'offline'
@@ -370,6 +372,20 @@ class EmailVerification(Base):
     token_hash: Mapped[Optional[str]] = mapped_column(String(64))
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class PasswordReset(Base):
+    """A pending "forgot my password" link. Same shape as EmailVerification:
+    only the token's SHA-256 is stored, the link works once and expires."""
+
+    __tablename__ = "password_resets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    token_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class ExternalSale(Base):

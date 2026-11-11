@@ -203,6 +203,30 @@ def _undo(s, sale: ExternalSale) -> None:
     sale.status, sale.detail = "void", "refunded or cancelled after it was recorded; the card was put back"
 
 
+def _net_unit_price(line: dict, quantity: int) -> Optional[float]:
+    price = line.get("unit_price")
+    if price is None:
+        return None
+    return round(max(price * quantity - (line.get("refunded") or 0.0), 0.0) / quantity, 2)
+
+
+def _apply_partial_refund(s, sale: ExternalSale, line: dict) -> bool:
+    """A recorded sale now shows money refunded (or more than before): bring
+    the recorded price down to what the seller kept. The ledger row for the
+    sale is corrected in place and says why, so Sold shows the true take."""
+    net = _net_unit_price(line, sale.quantity)
+    if net is None or sale.unit_price is None or abs(net - sale.unit_price) < 0.005:
+        return False
+    event = s.get(LibraryEvent, sale.library_event_id) if sale.library_event_id else None
+    if event is not None:
+        event.unit_price = net
+        event.note = (f"read back from {sale.source}; partly refunded, "
+                      f"{(line.get('refunded') or 0.0):.2f} given back")
+    sale.unit_price = net
+    sale.detail = f"partly refunded: {(line.get('refunded') or 0.0):.2f} given back"
+    return True
+
+
 def record_sale_lines(lines: list[dict], source: str, owners: Optional[set[int]] = None,
                       operator_account: bool = True) -> dict:
     """Record sale lines. Each line: {external_id, sku, title, quantity,
@@ -214,7 +238,7 @@ def record_sale_lines(lines: list[dict], source: str, owners: Optional[set[int]]
     too. A user's own eBay account never touches the bench.
     """
     out = {"recorded": 0, "unmatched": 0, "duplicates": 0, "void": 0, "not_paid_yet": 0,
-           "reversed": 0, "cards_sold": 0, "total": 0.0}
+           "reversed": 0, "adjusted": 0, "cards_sold": 0, "total": 0.0}
     for line in lines:
         external_id = str(line.get("external_id") or "").strip()[:160]
         if not external_id:
@@ -231,6 +255,9 @@ def record_sale_lines(lines: list[dict], source: str, owners: Optional[set[int]]
                     s.commit()
                     _set_bench_status(bench_id, None)
                     out["reversed"] += 1
+                elif existing.status == "recorded" and _apply_partial_refund(s, existing, line):
+                    s.commit()
+                    out["adjusted"] += 1
                 else:
                     out["duplicates"] += 1
                 continue
@@ -238,10 +265,13 @@ def record_sale_lines(lines: list[dict], source: str, owners: Optional[set[int]]
                 out["not_paid_yet"] += 1      # not stored: picked up once it is paid
                 continue
 
+            quantity = max(1, int(line.get("quantity") or 1))
             sale = ExternalSale(
                 source=source, external_id=external_id, sku=sku or None,
-                title=line.get("title"), quantity=max(1, int(line.get("quantity") or 1)),
-                unit_price=line.get("unit_price"), fees=line.get("fees"),
+                title=line.get("title"), quantity=quantity,
+                # What the seller kept per card: the price less anything
+                # already refunded when the sale is first seen.
+                unit_price=_net_unit_price(line, quantity), fees=line.get("fees"),
                 sold_at=line.get("sold_at") or utcnow(),
             )
             mark_bench, qty = False, 0
@@ -342,7 +372,7 @@ def sync_ebay(days: int = 30) -> dict:
         return {"ok": False, "error": "an eBay sync is already running; try again in a minute"}
     try:
         totals = {"recorded": 0, "unmatched": 0, "duplicates": 0, "void": 0, "not_paid_yet": 0,
-                  "reversed": 0, "cards_sold": 0, "total": 0.0}
+                  "reversed": 0, "adjusted": 0, "cards_sold": 0, "total": 0.0}
         problems: list[str] = []
         for label, auth, owner in accounts:
             try:

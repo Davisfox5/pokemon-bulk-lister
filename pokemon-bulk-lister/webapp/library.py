@@ -156,7 +156,11 @@ def list_events():
         if kind:
             q = q.filter_by(kind=kind)
         events = q.order_by(LibraryEvent.occurred_at.desc(), LibraryEvent.id.desc()).limit(2000).all()
+        from webapp.refunds import refunded_order_ids
+        refunded = refunded_order_ids(s)
         rows = [_event_dict(e) for e in events]
+        for row in rows:
+            row["refunded"] = row["order_id"] in refunded
 
         all_events = s.query(LibraryEvent).filter_by(user_id=uid).all()
         totals = {
@@ -166,6 +170,8 @@ def list_events():
             "added_cards": 0, "removed_cards": 0,
         }
         for e in all_events:
+            if e.order_id in refunded and e.kind in ("sold", "purchased"):
+                continue      # the money went back; the row stays as a record only
             gross = (e.unit_price or 0) * e.quantity
             if e.kind == "sold":
                 totals["sold_cards"] += e.quantity

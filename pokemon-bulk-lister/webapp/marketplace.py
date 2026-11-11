@@ -841,6 +841,21 @@ def stripe_webhook():
         return jsonify({"error": f"signature check failed: {exc}"}), 400
 
     kind = event["type"]
+    if kind.startswith("charge."):
+        # Money going back after a sale settled: a refund from the Stripe
+        # dashboard, or a dispute. See webapp/refunds.py.
+        from webapp import refunds
+        s = get_session()
+        try:
+            changed = refunds.handle_event(s, stripe, event)
+            if changed:
+                print(f"[market] {changed}", file=sys.stderr)
+        except Exception as exc:
+            s.rollback()
+            print(f"[market] stripe webhook {kind}: {exc}", file=sys.stderr)
+        finally:
+            s.close()
+        return jsonify({"received": True})
     if not kind.startswith("checkout.session."):
         return jsonify({"received": True})
     session_obj = event["data"]["object"]
@@ -977,6 +992,9 @@ def admin_balances():
         seller_ids = {row[0] for row in s.query(Order.seller_id)
                       .filter(Order.status.in_(("paid", "completed"))).distinct().all()}
         seller_ids |= {row[0] for row in s.query(Payout.seller_id).distinct().all()}
+        # A seller who kept a transfer for a refunded sale owes money back.
+        seller_ids |= {row[0] for row in s.query(Order.seller_id)
+                       .join(OrderTransfer, OrderTransfer.order_id == Order.id).distinct().all()}
         rows = []
         for sid in sorted(seller_ids):
             user = s.get(User, sid)
@@ -1002,10 +1020,13 @@ def admin_balances():
         } for t, o in s.query(OrderTransfer, Order).join(Order, OrderTransfer.order_id == Order.id)
             .order_by(OrderTransfer.created_at.desc()).limit(100).all()]
         payouts.sort(key=lambda r: r["created_at"], reverse=True)
+        from webapp import refunds
+        attention = refunds.needs_attention(s)
     finally:
         s.close()
     rows.sort(key=lambda r: -r["balance"])
-    return jsonify({"sellers": rows, "payouts": payouts, "refunds_due": refunds_due})
+    return jsonify({"sellers": rows, "payouts": payouts, "refunds_due": refunds_due,
+                    "attention": attention})
 
 
 @market_bp.route("/api/admin/payouts", methods=["POST"])

@@ -214,7 +214,8 @@ function renderLedger(kind) {
       <td>${esc(e.condition || "")}</td><td>${CHANNELS[e.channel] || esc(e.channel)}</td>
       <td class="num">${e.quantity}</td><td class="num">${fmtUsd(e.unit_price)}</td>
       <td class="num">${e.fees ? fmtUsd(e.fees) : "—"}</td><td class="num">${fmtUsd(e.net)}</td>
-      <td class="num">${e.gain == null ? '<span class="muted" title="No price paid on file">—</span>'
+      <td class="num">${e.refunded ? '<span class="pill">refunded</span>'
+        : e.gain == null ? '<span class="muted" title="No price paid on file">—</span>'
         : `<span class="chg ${e.gain >= 0 ? "up" : "down"}">${e.gain >= 0 ? "+" : ""}${fmtUsd(e.gain)}</span>`}</td>
     </tr>`).join("") || emptyRow(10, events.length
       ? "No sales match this search."
@@ -951,6 +952,42 @@ async function loadPayoutAccount() {
   });
 }
 
+$("#attention-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest('[data-act="return-card"]');
+  if (!btn) return;
+  const { ok } = await askConfirm({
+    title: "Return this card to the seller?",
+    html: `<p><strong>${esc(btn.dataset.card)}</strong> moves from the buyer's library back to the seller's.
+           Both see it in their activity. Do this once the buyer has sent the card back.</p>`,
+    confirm: "Return card",
+  });
+  if (!ok) return;
+  try {
+    await postJson(`/api/admin/orders/${btn.dataset.order}/return-card`);
+    toast("Card returned to the seller's library.");
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+$("#btn-check-refunds").addEventListener("click", async () => {
+  const btn = $("#btn-check-refunds");
+  btn.disabled = true; btn.textContent = "Checking…";
+  try {
+    const r = await postJson("/api/admin/refunds/check");
+    toast(r.errors.length ? `Checked ${r.checked} orders. ${r.errors.length} could not be read: ${r.errors[0]}`
+      : r.changes.length ? `Checked ${r.checked} orders. ${r.changes.join(". ")}.`
+      : `Checked ${r.checked} recent card orders. Nothing was refunded or disputed.`,
+      r.errors.length ? "err" : "ok");
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false; btn.textContent = "Check Stripe for refunds";
+  }
+});
+
 $("#btn-run-payouts").addEventListener("click", async () => {
   const btn = $("#btn-run-payouts");
   const { ok } = await askConfirm({
@@ -986,11 +1023,22 @@ async function loadOperator() {
   due.innerHTML = data.refunds_due.map((r) =>
     `<p class="flag-note">Refund ${fmtUsd(r.amount)} to ${esc(r.buyer)} by hand in the Stripe dashboard
      (order ${r.order_id}, session ${esc(r.payment_ref)}). The automatic refund was refused.</p>`).join("");
+  const attention = $("#attention-list");
+  attention.classList.toggle("hidden", !data.attention.length);
+  attention.innerHTML = data.attention.map((a) => `<li>
+      <span><strong>${esc(a.card || "Card")}</strong>, order ${a.order_id}, ${fmtUsd(a.amount)}:
+        ${a.status === "disputed"
+          ? '<span class="pill warn">disputed</span> the buyer\'s bank is deciding; the seller\'s payout is on hold'
+          : '<span class="pill">refunded</span> the money went back to the buyer'}
+        <span class="muted">buyer ${esc(a.buyer)} · seller ${esc(a.seller)}</span>
+        ${a.seller_still_holds ? `<span class="flag-note">Stripe could not take back ${fmtUsd(a.seller_still_holds)} from the seller. They owe it to you.</span>` : ""}</span>
+      ${a.card_with_buyer ? `<button class="btn" data-act="return-card" data-order="${a.order_id}" data-card="${esc(a.card || "this card")}">Return card to seller</button>` : ""}
+    </li>`).join("");
   $("#operator-body").innerHTML = data.sellers.map((r) => `<tr data-seller="${r.seller_id}">
       <td>${esc(r.email)}</td>
       <td class="num">${fmtUsd(r.card_proceeds)}</td>
       <td class="num">${fmtUsd(r.paid_out)}</td>
-      <td class="num"><strong>${fmtUsd(r.balance)}</strong></td>
+      <td class="num"><strong>${r.balance < 0 ? `<span class="flag-note">owes you ${fmtUsd(-r.balance)}</span>` : fmtUsd(r.balance)}</strong></td>
       <td class="num">${r.fees_owed ? fmtUsd(r.fees_owed) : "—"}</td>
       <td>${r.auto_payouts ? '<span class="pill ok">automatic</span>' : '<span class="pill">by hand</span>'}</td>
       <td><div class="row-actions">${r.balance > 0
@@ -1035,6 +1083,9 @@ $("#payout-form").addEventListener("submit", async (e) => {
       invalid: ["That link is not valid any more. Use “Send the link again” for a new one.", "err"],
       needed: ["Confirm your email address first.", "err"],
       wrong_account: ["That link belongs to a different account. Log in to that account, then open the link again.", "err"],
+    },
+    reset: {
+      done: ["Password changed. Other browsers logged in to this account were signed out.", "ok"],
     },
     payouts: {
       active: ["Payouts are set up. Your share of card sales is sent to you automatically.", "ok"],

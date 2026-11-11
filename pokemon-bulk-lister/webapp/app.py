@@ -1072,6 +1072,61 @@ def _unsold(cards: list[dict]) -> list[dict]:
             if Path(c["crop_path"]).stem not in sold and c.get("ebay_listing_status") != "sold"]
 
 
+TCG_CATALOG_PATH = OUTPUT_DIR / "cache" / "tcgplayer_catalog.csv"
+_tcg_catalog_cache: dict[str, Any] = {"mtime": None, "catalog": None}
+
+
+def get_tcg_catalog():
+    """The seller's TCGplayer export (real TCGplayer Ids), or None if none
+    has been uploaded. Re-read when the file changes."""
+    from lib.tcgplayer_catalog import TcgCatalog
+    try:
+        mtime = TCG_CATALOG_PATH.stat().st_mtime
+    except OSError:
+        _tcg_catalog_cache.update(mtime=None, catalog=None)
+        return None
+    if _tcg_catalog_cache["mtime"] != mtime:
+        _tcg_catalog_cache.update(mtime=mtime, catalog=TcgCatalog.load(TCG_CATALOG_PATH))
+    return _tcg_catalog_cache["catalog"]
+
+
+def _tcg_rows(payload: list[dict]) -> list[dict]:
+    return get_csv_gen().tcgplayer_rows(payload, get_tcg_catalog())
+
+
+@app.route("/api/tcgplayer/catalog", methods=["GET"])
+def api_tcg_catalog_status():
+    catalog = get_tcg_catalog()
+    with db.connect(DB_PATH) as conn:
+        priced = [c for c in db.list_cards(conn, sort="newest") if c.get("final_price")]
+    matched = sum(1 for c in priced if catalog.match(c)) if catalog else 0
+    return jsonify({"loaded": catalog is not None, "rows": len(catalog) if catalog else 0,
+                    "priced": len(priced), "matched": matched})
+
+
+@app.route("/api/tcgplayer/catalog", methods=["POST"])
+def api_tcg_catalog_upload():
+    """multipart file=<the pricing CSV exported from the TCGplayer seller
+    portal>. Kept on disk and used to fill in real TCGplayer Ids."""
+    from lib.tcgplayer_catalog import TcgCatalog
+
+    upload = request.files.get("file")
+    if upload is None:
+        return jsonify({"error": "choose the CSV you exported from TCGplayer"}), 400
+    raw = upload.read(40 * 1024 * 1024 + 1)
+    if len(raw) > 40 * 1024 * 1024:
+        return jsonify({"error": "that file is over 40 MB; export only the Pokemon product line"}), 400
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        catalog = TcgCatalog.parse(text)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    TCG_CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TCG_CATALOG_PATH.write_text(text, encoding="utf-8")
+    _tcg_catalog_cache.update(mtime=None, catalog=None)
+    return api_tcg_catalog_status()
+
+
 def _cards_payload(cards: list[dict]) -> list[dict]:
     """Coerce DB rows into the dict shape the CSV generator + listers expect."""
     payload = []
@@ -1106,7 +1161,7 @@ def api_export_csvs():
     CSVS_DIR.mkdir(parents=True, exist_ok=True)
     written = []
     for filename, rows_fn in (
-        ("tcgplayer_bulk.csv", gc.tcgplayer_rows),
+        ("tcgplayer_bulk.csv", _tcg_rows),
         ("whatnot_seller_hub.csv", gc.whatnot_rows),
         ("ebay_bulk.csv", gc.ebay_rows),
     ):
@@ -1275,7 +1330,8 @@ def api_publish_status():
         }
 
     ebay_rows = [c for c in priced if c.get("image_url") or can_upload]
-    tcg_rows = [c for c in priced if c.get("tcgplayer_product_id")]
+    catalog = get_tcg_catalog()
+    tcg_rows = [c for c in priced if catalog and catalog.match(c)]
     counts = {
         "priced": len(priced),
         "ebay": {
@@ -1284,7 +1340,8 @@ def api_publish_status():
             "to_upload_unflagged": sum(1 for c in ebay_rows
                                        if not c.get("image_url") and not c.get("needs_review")),
         },
-        "tcgplayer": {**_group(tcg_rows), "left_out": len(priced) - len(tcg_rows)},
+        "tcgplayer": {**_group(tcg_rows), "left_out": len(priced) - len(tcg_rows),
+                      "catalog": catalog is not None},
         "whatnot": {**_group(priced), "left_out": 0},
     }
 
@@ -1432,7 +1489,7 @@ def api_publish_portal():
                 payload = _cards_payload(_unsold(db.list_cards(conn, sort="newest")))
             CSVS_DIR.mkdir(parents=True, exist_ok=True)
             if site == "tcgplayer":
-                filename, rows_fn = "tcgplayer_bulk.csv", gc.tcgplayer_rows
+                filename, rows_fn = "tcgplayer_bulk.csv", _tcg_rows
                 from lib.tcgplayer_lister import TCGPlayerLister as Lister
             else:
                 filename, rows_fn = "whatnot_seller_hub.csv", gc.whatnot_rows
@@ -1535,16 +1592,19 @@ app.register_blueprint(connections_bp)
 from webapp import sales_sync  # noqa: E402
 from webapp.payouts import payouts_bp  # noqa: E402
 
+from webapp.refunds import refunds_bp  # noqa: E402
+
 app.register_blueprint(sales_sync.sales_bp)
 app.register_blueprint(payouts_bp)
+app.register_blueprint(refunds_bp)
 sales_sync.start_background()
 
 
 @app.route("/api/session")
 def api_session():
     """Lets the open bench page know whether library actions need a login."""
-    from flask import session as flask_session
-    return jsonify({"logged_in": bool(flask_session.get("uid"))})
+    from webapp.auth import current_user_id
+    return jsonify({"logged_in": bool(current_user_id())})
 
 
 if __name__ == "__main__":

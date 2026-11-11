@@ -11,6 +11,7 @@ Contract taken from eBay's published OpenAPI document for the Fulfillment API
             totalMarketplaceFee{value}, lineItems[]
   line:     lineItemId, sku, title, quantity, legacyItemId,
             lineItemCost{value}  (unit price x quantity, before discounts)
+            refunds[]{amount{value}}  (empty unless the seller refunded)
 
 Each line item becomes one flat "sale line" dict, which is what the rest of
 the app works with. Nothing here writes to eBay.
@@ -75,7 +76,11 @@ def order_lines(order: dict) -> list[dict]:
         fee = None
         if order_fee is not None:
             fee = round(order_fee * (cost / order_cost), 2) if order_cost else 0.0
+        # Money given back on this line (a partial refund leaves the order
+        # PARTIALLY_REFUNDED and lists each refund here).
+        refunded = round(sum((_money(r.get("amount")) or 0.0) for r in (li.get("refunds") or [])), 2)
         out.append({
+            "refunded": refunded,
             "external_id": f"{order.get('orderId')}:{li.get('lineItemId')}",
             "order_id": order.get("orderId"),
             "sku": (li.get("sku") or "").strip() or None,
