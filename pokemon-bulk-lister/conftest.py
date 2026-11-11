@@ -48,6 +48,7 @@ def mail_outbox(monkeypatch):
         yield []
         return
     box: list[dict] = []
+    monkeypatch.setattr(auth, "in_background", lambda fn: fn())
     monkeypatch.setattr(auth, "deliver", lambda to, subject, body: (
         box.append({"to": to, "subject": subject, "body": body}), "console")[1])
     yield box

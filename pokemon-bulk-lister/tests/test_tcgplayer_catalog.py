@@ -37,7 +37,7 @@ def test_matches_on_name_number_set_condition_and_printing():
 
 def test_anything_ambiguous_or_absent_is_left_out():
     cat = TcgCatalog.parse(EXPORT)
-    assert cat.match(_card("Dragapult ex", "130")) == "7001"        # only one printing exists: holofoil
+    assert cat.match(_card("Dragapult ex", "130")) is None          # scanned as non-holo; only a holofoil row
     assert cat.match(_card("Munkidori", "95")) is None              # non-holo wanted, two foil rows: unclear
     assert cat.match(_card("Munkidori", "95", holo=True)) == "7007"
     assert cat.match(_card("Dragapult ex", "130", cond="HP", holo=True)) is None
@@ -45,6 +45,23 @@ def test_anything_ambiguous_or_absent_is_left_out():
     assert cat.match(_card("Dragapult ex", "130", set_name="Paldea Evolved", holo=True)) is None
     assert cat.match(_card("Charizard ex", "125")) is None
     assert cat.match(_card("", "130")) is None and cat.match(_card("Dreepy", "")) is None
+
+
+def test_near_misses_never_get_an_id():
+    export = """TCGplayer Id,Product Line,Set Name,Product Name,Number,Condition
+1,Pokemon,Base Set 2,Pikachu,87/130,Near Mint
+2,Pokemon,,Bulbasaur,44/102,Near Mint
+3,Pokemon,Base Set,Mewtwo (Staff Prerelease),10/102,Near Mint Holofoil
+4,Pokemon,Base Set,Squirtle,63/102,Near Mint Reverse Holofoil
+"""
+    cat = TcgCatalog.parse(export)
+    assert cat.match(_card("Pikachu", "87", set_name="Base")) is None          # "Base" is not "Base Set 2"
+    assert cat.match(_card("Pikachu", "87", set_name="Base Set 2")) == "1"
+    assert cat.match(_card("Pikachu", "87", set_name="")) is None             # the scan has no set
+    assert cat.match(_card("Bulbasaur", "44", set_name="Base Set")) is None   # the export row has no set
+    assert cat.match(_card("Mewtwo", "10", set_name="Base Set", holo=True)) is None   # a different product
+    assert cat.match(_card("Squirtle", "63", set_name="Base Set")) is None    # only a reverse holo row
+    assert cat.match(_card("Pikachu", "87", set_name="Base Set 2", cond="EX")) is None   # unknown condition
 
 
 def test_a_file_that_is_not_a_tcgplayer_export_is_refused_with_the_reason():

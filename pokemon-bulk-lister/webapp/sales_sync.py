@@ -214,8 +214,10 @@ def _apply_partial_refund(s, sale: ExternalSale, line: dict) -> bool:
     """A recorded sale now shows money refunded (or more than before): bring
     the recorded price down to what the seller kept. The ledger row for the
     sale is corrected in place and says why, so Sold shows the true take."""
+    if not (line.get("refunded") or 0) > 0:
+        return False      # a different price on a re-read is not a refund
     net = _net_unit_price(line, sale.quantity)
-    if net is None or sale.unit_price is None or abs(net - sale.unit_price) < 0.005:
+    if net is None or sale.unit_price is None or net >= sale.unit_price - 0.005:
         return False
     event = s.get(LibraryEvent, sale.library_event_id) if sale.library_event_id else None
     if event is not None:

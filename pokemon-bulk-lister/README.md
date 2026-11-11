@@ -352,8 +352,10 @@ a number it assigns to one card in one condition and printing. Only
 TCGplayer has those. In the seller portal, export your pricing CSV (Pricing,
 Export), then in Connections, under TCGplayer, click **Upload export**. The
 app looks each scanned card up in that file by name, number, set, condition
-and printing, and writes the real Id. A card with no match, or more than one
-possible match, is left out and counted. Without an export the TCGplayer CSV
+and printing, and writes the real Id. All five must agree exactly (a card scanned as
+non-holo never takes a Holofoil row, and a card with no set name matches
+nothing). A card with no match, or more than one possible match, is left out
+and counted. Without an export the TCGplayer CSV
 is empty. (Earlier versions wrote the pokemontcg.io card id into that column,
 which TCGplayer does not recognise.) From the command line, save the export
 as `output/cache/tcgplayer_catalog.csv`.
@@ -484,6 +486,7 @@ in line:
   refund.
 - If Stripe cannot take the money back (the seller already withdrew it), the
   seller's balance goes negative and the panel says how much they owe you.
+  Every later check tries the reversal again until it goes through.
 
 The app learns of these through the signed webhook (add `charge.refunded`,
 `charge.dispute.created` and `charge.dispute.closed` to the events Stripe

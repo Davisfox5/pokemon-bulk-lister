@@ -112,6 +112,17 @@ def _account_dict(account: SellerPayoutAccount | None, stripe_on: bool) -> dict:
 PENDING = "pending"   # OrderTransfer.transfer_id before Stripe has answered
 
 
+def _nothing_moved(exc: Exception) -> bool:
+    """True only when Stripe itself answered "no" to the request (a 4xx:
+    bad parameters, missing capability, wrong key). Then no transfer exists.
+    A timeout, a dropped connection or a 5xx proves nothing either way."""
+    try:
+        import stripe as sdk
+    except ImportError:
+        return False
+    return isinstance(exc, (sdk.InvalidRequestError, sdk.AuthenticationError, sdk.PermissionError))
+
+
 def _reconcile_pending(s, stripe, seller_id: int) -> None:
     """Settle claims left behind by a crash or a failed write.
 
@@ -148,10 +159,11 @@ def pay_seller(seller_id: int) -> dict:
       1. Commit a pending OrderTransfer row. order_id is unique, so this is
          the claim; from here the amount counts as paid in seller_balance.
       2. Ask Stripe for the transfer.
-      3. Stripe said no: delete the claim (the order can be retried).
-         Stripe said yes: store the transfer id on the claim.
-      If the process dies between 2 and 3, the claim stays pending and
-      _reconcile_pending asks Stripe what really happened next time.
+      3. Stripe said yes: store the transfer id on the claim.
+         Stripe said no (a 4xx): delete the claim; the order is still owed.
+         Anything else (a timeout, a 5xx, a crash): the claim stays pending,
+         and _reconcile_pending asks Stripe what really happened next time:
+         transfer found, record it; not found, release the claim.
     """
     from webapp.marketplace import seller_balance
 
@@ -200,9 +212,12 @@ def pay_seller(seller_id: int) -> dict:
                     session_obj = stripe.checkout.Session.retrieve(order.payment_ref)
                     intent = stripe.PaymentIntent.retrieve(session_obj["payment_intent"])
                     # An order can be paid again after a dispute is won, so
-                    # the key carries how many transfers came before.
-                    earlier = len(stripe.Transfer.list(
-                        transfer_group=f"order-{order.id}", limit=10)["data"])
+                    # the key carries how many transfers were made and fully
+                    # taken back before. A transfer whose answer never reached
+                    # us is not reversed, so it does not change the key: asking
+                    # again returns that same transfer, never a second one.
+                    earlier = sum(1 for t in stripe.Transfer.list(
+                        transfer_group=f"order-{order.id}", limit=20)["data"] if t["reversed"])
                     transfer = stripe.Transfer.create(
                         amount=_cents(amount), currency="usd",
                         destination=account.stripe_account_id,
@@ -215,8 +230,13 @@ def pay_seller(seller_id: int) -> dict:
                         idempotency_key=f"transfer-order-{order.id}-n{earlier}",
                     )
                 except Exception as exc:
-                    s.delete(claim)       # Stripe refused, so nothing moved
-                    s.commit()
+                    if _nothing_moved(exc):
+                        s.delete(claim)      # Stripe refused: the order is still owed
+                        s.commit()
+                    # Any other error does not prove nothing moved: a timeout
+                    # can hide a transfer Stripe did make. The claim stays
+                    # pending, and the next run asks Stripe before retrying
+                    # (found: record it; not found: release the claim).
                     out["errors"].append(f"order {order.id}: {exc}")
                     print(f"[payouts] transfer for order {order.id} failed: {exc}", file=sys.stderr)
                     continue

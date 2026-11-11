@@ -78,7 +78,15 @@ def order_lines(order: dict) -> list[dict]:
             fee = round(order_fee * (cost / order_cost), 2) if order_cost else 0.0
         # Money given back on this line (a partial refund leaves the order
         # PARTIALLY_REFUNDED and lists each refund here).
-        refunded = round(sum((_money(r.get("amount")) or 0.0) for r in (li.get("refunds") or [])), 2)
+        currency = (li.get("lineItemCost") or {}).get("currency")
+        refunded = round(sum(
+            (_money(r.get("amount")) or 0.0) for r in (li.get("refunds") or [])
+            # Only money in the same currency as the price can be netted off it.
+            if (r.get("amount") or {}).get("currency") in (None, currency)), 2)
+        # Refunds can include shipping and tax the price never did, so cap at
+        # the price. A line refunded for at least its price did not sell.
+        line_void = cost > 0 and refunded >= cost
+        refunded = min(refunded, cost)
         out.append({
             "refunded": refunded,
             "external_id": f"{order.get('orderId')}:{li.get('lineItemId')}",
@@ -100,7 +108,7 @@ def order_lines(order: dict) -> list[dict]:
             # and a sale recorded earlier is reversed. A FAILED payment is
             # not final (the buyer can pay again), so it only counts as
             # "not paid yet".
-            "void": cancelled or payment == "FULLY_REFUNDED",
+            "void": cancelled or payment == "FULLY_REFUNDED" or line_void,
             "payment_status": payment,
         })
     return out

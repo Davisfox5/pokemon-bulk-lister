@@ -17,6 +17,7 @@ import hashlib
 import os
 import re
 import secrets
+import threading
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -103,10 +104,9 @@ def current_user_id() -> int | None:
     s = get_session()
     try:
         user = s.get(User, uid)
-        # Sessions from before this check existed carry no stamp; they are
-        # accepted and stamped, so nobody is signed out by the upgrade.
-        if user is not None and "pw" not in session:
-            session["pw"] = _stamp(user)
+        # A cookie with no stamp (from before stamps existed) is not accepted:
+        # there is no telling which password it was opened with. Everyone
+        # logs in once more after the upgrade.
         ok = user is not None and session.get("pw") == _stamp(user)
     finally:
         s.close()
@@ -360,7 +360,8 @@ def login():
     finally:
         s.close()
     target = request.args.get("next") or "/portfolio"
-    if not target.startswith("/"):
+    # Only a path on this site. "//host" and "/\\host" are other sites to a browser.
+    if not target.startswith("/") or target.startswith(("//", "/\\")):
         target = "/portfolio"
     return _respond(target)
 
@@ -368,6 +369,11 @@ def login():
 # ----------------------------------------------------------------------
 # Forgotten password
 # ----------------------------------------------------------------------
+
+def in_background(fn) -> None:
+    """Run `fn` off the request. Tests swap this to run it inline."""
+    threading.Thread(target=fn, daemon=True).start()
+
 
 FORGOT_SENT = ("If an account exists for that address, a link to choose a new password "
                "is on its way. It works once and lasts an hour.")
@@ -398,17 +404,24 @@ def forgot():
                 row.token_hash, row.sent_at = _hash(token), utcnow()
                 s.commit()
                 link = f"{request.host_url.rstrip('/')}/reset-password?token={token}"
-                try:
-                    deliver(
-                        user.email, "Choose a new password for Card Portfolio",
-                        "Open this link to choose a new password:\n\n"
-                        f"{link}\n\n"
-                        f"It works once and expires in {RESET_LINK_MINUTES} minutes. "
-                        "If you did not ask for this, ignore this message; your password "
-                        "has not changed.",
-                    )
-                except Exception as exc:
-                    print(f"[auth] could not send reset link to {user.email}: {exc}", file=sys.stderr)
+                to = user.email
+
+                def send() -> None:
+                    try:
+                        deliver(
+                            to, "Choose a new password for Card Portfolio",
+                            "Open this link to choose a new password:\n\n"
+                            f"{link}\n\n"
+                            f"It works once and expires in {RESET_LINK_MINUTES} minutes. "
+                            "If you did not ask for this, ignore this message; your password "
+                            "has not changed.",
+                        )
+                    except Exception as exc:
+                        print(f"[auth] could not send reset link to {to}: {exc}", file=sys.stderr)
+
+                # Sent after the response: how long the mail server takes
+                # must not show which addresses have accounts.
+                in_background(send)
     finally:
         s.close()
     if request.is_json:

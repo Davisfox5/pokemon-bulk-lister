@@ -853,6 +853,8 @@ def stripe_webhook():
         except Exception as exc:
             s.rollback()
             print(f"[market] stripe webhook {kind}: {exc}", file=sys.stderr)
+            # Not handled: say so, and Stripe delivers the event again later.
+            return jsonify({"error": "could not process this event; retry"}), 500
         finally:
             s.close()
         return jsonify({"received": True})

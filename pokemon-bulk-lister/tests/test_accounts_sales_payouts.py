@@ -585,6 +585,7 @@ class ConnectStripe(FakeStripe):
         self.transfers: list[dict] = []
         self.transfer_keys: dict[str, dict] = {}
         self.fail_transfer = False
+        self.lose_transfer_response = False
         self.reversals: list[tuple] = []
         self.reversal_keys: dict[str, dict] = {}
         self.fail_reversal = False
@@ -646,6 +647,11 @@ class ConnectStripe(FakeStripe):
                 return {"data": data}
 
             @staticmethod
+            def retrieve(tid):
+                return stripe_sdk.Transfer.construct_from(
+                    dict(next(x for x in outer.transfers if x["id"] == tid)), "k")
+
+            @staticmethod
             def create_reversal(tid, amount=None, idempotency_key=None):
                 if outer.fail_reversal:
                     raise RuntimeError("Insufficient funds in the connected account")
@@ -664,7 +670,8 @@ class ConnectStripe(FakeStripe):
             @staticmethod
             def create(idempotency_key=None, **kw):
                 if outer.fail_transfer:
-                    raise RuntimeError("Your destination account needs to have the transfers capability")
+                    raise stripe_sdk.InvalidRequestError(
+                        "Your destination account needs to have the transfers capability", None)
                 if idempotency_key in outer.transfer_keys:
                     return outer.transfer_keys[idempotency_key]
                 kw["id"] = f"tr_{len(outer.transfers) + 1}"
@@ -672,6 +679,9 @@ class ConnectStripe(FakeStripe):
                 outer.transfers.append(kw)
                 obj = stripe_sdk.Transfer.construct_from(dict(kw), "k")
                 outer.transfer_keys[idempotency_key] = obj
+                if outer.lose_transfer_response:       # Stripe did it; the answer never arrived
+                    outer.lose_transfer_response = False
+                    raise stripe_sdk.APIConnectionError("Request timed out")
                 return obj
 
         self.Account, self.AccountLink = Account, AccountLink
@@ -780,6 +790,26 @@ def test_a_failed_transfer_leaves_the_sale_intact_and_is_retried(shop):
     r = shop.operator.post("/api/admin/payouts/run").get_json()
     assert (r["transferred"], r["orders"], r["errors"]) == (18.0, 1, [])
     assert shop.seller.get("/api/market/my").get_json()["balance"] == 0.0
+
+
+def test_a_transfer_whose_answer_was_lost_is_found_not_repeated(shop):
+    # Stripe makes the transfer but the reply times out. From here the app
+    # cannot tell a failure from a success, so it must not pay again.
+    shop.connect()
+    shop.fake.lose_transfer_response = True
+    oid, _ = shop.sell(20)
+    assert len(shop.fake.transfers) == 1
+    assert shop.seller.get("/api/market/my").get_json()["balance"] == 0.0      # spoken for, not owed
+    # Even if looking the transfer up comes back empty, asking again uses the
+    # same key and gets the same transfer back.
+    real_list = shop.fake.Transfer.list
+    shop.fake.Transfer.list = staticmethod(lambda **kw: {"data": []})
+    r = shop.operator.post("/api/admin/payouts/run").get_json()
+    shop.fake.Transfer.list = real_list
+    assert r["errors"] == [] and len(shop.fake.transfers) == 1
+    assert list(shop.fake.transfer_keys) == [f"transfer-order-{oid}-n0"]
+    mine = shop.seller.get("/api/market/my").get_json()
+    assert (mine["paid_out"], mine["balance"]) == (18.0, 0.0)
 
 
 def test_a_transfer_sent_but_not_recorded_is_never_sent_again(shop, monkeypatch):
@@ -960,6 +990,90 @@ def test_a_reversal_stripe_refuses_shows_as_money_the_seller_owes(shop):
     assert data["sellers"][0]["balance"] == -18.0 and data["attention"][0]["seller_still_holds"] == 18.0
 
 
+def test_a_refused_reversal_is_tried_again_on_the_next_check(shop):
+    shop.connect()
+    oid, sid = shop.sell(20)
+    shop.fake.fail_reversal = True
+    shop.fake.charge_state[sid] = {"refunded": True, "amount_refunded": 2000}
+    shop.operator.post("/api/admin/refunds/check")
+    assert shop.fake.reversals == [] and _status(shop, oid) == "refunded"
+
+    shop.fake.fail_reversal = False                        # the seller's Stripe balance was topped up
+    assert shop.operator.post("/api/admin/refunds/check").get_json()["checked"] == 1
+    assert shop.fake.reversals == [("tr_1", 1800)]
+    assert shop.seller.get("/api/market/my").get_json()["balance"] == 0
+    assert shop.operator.get("/api/admin/balances").get_json()["attention"][0]["seller_still_holds"] == 0
+    assert shop.operator.post("/api/admin/refunds/check").get_json()["checked"] == 0   # finished
+
+
+def test_a_partial_refund_whose_reversal_failed_is_finished_later(shop):
+    shop.connect()
+    oid, sid = shop.sell(20)
+    shop.fake.fail_reversal = True
+    shop.fake.charge_state[sid] = {"amount_refunded": 500}
+    assert "reversal refused" in shop.operator.post("/api/admin/refunds/check").get_json()["changes"][0]
+    assert shop.seller.get("/api/market/my").get_json()["balance"] == -4.5    # holds 18.00, earned 13.50
+
+    shop.fake.fail_reversal = False
+    shop.operator.post("/api/admin/refunds/check")
+    assert shop.fake.reversals == [("tr_1", 450)]
+    assert shop.seller.get("/api/market/my").get_json()["balance"] == 0.0
+    shop.operator.post("/api/admin/refunds/check")
+    assert len(shop.fake.reversals) == 1
+
+
+def test_a_reversal_stripe_made_but_the_app_did_not_record_is_not_repeated(shop, monkeypatch):
+    shop.connect()
+    oid, sid = shop.sell(20)
+    shop.fake.charge_state[sid] = {"amount_refunded": 500}
+    real = shop.fake.Transfer.create_reversal
+
+    def lost(tid, **kw):
+        real(tid, **kw)
+        raise stripe_sdk.APIConnectionError("Request timed out")
+
+    shop.fake.Transfer.create_reversal = staticmethod(lost)
+    shop.operator.post("/api/admin/refunds/check")
+    shop.fake.Transfer.create_reversal = real
+    shop.operator.post("/api/admin/refunds/check")
+    assert shop.fake.reversals == [("tr_1", 450)]                             # once
+    mine = shop.seller.get("/api/market/my").get_json()
+    assert (mine["paid_out"], mine["balance"]) == (13.5, 0.0)
+
+
+def test_a_refund_that_lands_while_a_payout_is_unfinished_still_takes_the_money_back(shop):
+    shop.connect()
+    shop.fake.lose_transfer_response = True                # transfer made, claim left pending
+    oid, sid = shop.sell(20)
+    shop.fake.charge_state[sid] = {"refunded": True, "amount_refunded": 2000}
+    shop.operator.post("/api/admin/refunds/check")
+    assert shop.fake.reversals == [("tr_1", 1800)]
+    assert shop.seller.get("/api/market/my").get_json()["balance"] == 0
+
+
+def test_a_refunded_card_goes_back_once_even_when_the_seller_kept_other_copies(shop):
+    item = _add(shop.seller, name="Twin", card_number="7", quantity=2)
+    assert shop.seller.patch(f"/api/inventory/{item['id']}", json={"acquired_price": 3.0}).status_code == 200
+    lid = shop.seller.post(f"/api/inventory/{item['id']}/list-for-sale", json={"price": 20}).get_json()["listing_id"]
+    body = shop.buyer.post(f"/api/market/listings/{lid}/buy").get_json()
+    sid = body["checkout_url"].rsplit("/", 1)[1]
+    shop.fake.pay(sid)
+    shop.buyer.get(f"/market/orders/{body['order_id']}/return")
+    oid = body["order_id"]
+    shop.fake.charge_state[sid] = {"refunded": True, "amount_refunded": 2000}
+    shop.operator.post("/api/admin/refunds/check")
+    assert shop.operator.get("/api/admin/balances").get_json()["attention"][0]["card_with_buyer"] is True
+
+    assert shop.operator.post(f"/api/admin/orders/{oid}/return-card").status_code == 200
+    assert shop.buyer.get("/api/inventory").get_json()["items"] == []
+    mine = shop.seller.get("/api/inventory").get_json()["items"]
+    assert sum(i["quantity"] for i in mine) == 2
+    assert {i.get("acquired_price") for i in mine} == {3.0}                   # what the seller paid, not $20
+    # A second click must not take another of the seller's own copies' worth from anyone.
+    assert shop.operator.post(f"/api/admin/orders/{oid}/return-card").status_code == 409
+    assert sum(i["quantity"] for i in shop.seller.get("/api/inventory").get_json()["items"]) == 2
+
+
 def test_refund_and_dispute_webhooks_do_the_same_as_the_manual_check(shop, monkeypatch):
     import hashlib, hmac, time
 
@@ -987,6 +1101,32 @@ def test_refund_and_dispute_webhooks_do_the_same_as_the_manual_check(shop, monke
           "data": {"object": {**dispute, "status": "won"}}})
     assert _status(shop, oid) == "paid" and len(shop.fake.transfers) == 2
 
+    # The first event delivered again, late: the dispute is over, so nothing moves.
+    send({"id": "e1", "object": "event", "type": "charge.dispute.created", "data": {"object": dispute}})
+    assert _status(shop, oid) == "paid" and len(shop.fake.reversals) == 1
+
+    # Another charge on the same Stripe account that happens to carry this
+    # order's transfer_group cannot refund it.
+    foreign = {"id": "ch_someone_else", "object": "charge", "amount": 2000, "amount_refunded": 2000,
+               "refunded": True, "disputed": False, "transfer_group": f"order-{oid}", "payment_intent": "pi_x"}
+    assert send({"id": "e9", "object": "event", "type": "charge.refunded",
+                 "data": {"object": foreign}}).status_code == 200
+    assert _status(shop, oid) == "paid"
+
+    # A stale event claiming a refund Stripe does not show is not believed.
+    stale = {**foreign, "id": cid, "payment_intent": f"pi_{sid}"}
+    send({"id": "e10", "object": "event", "type": "charge.refunded", "data": {"object": stale}})
+    assert _status(shop, oid) == "paid"
+
+    # If handling fails, Stripe is told so and will deliver the event again.
+    from webapp import refunds
+    with monkeypatch.context() as m:
+        m.setattr(refunds, "handle_event", lambda *a: (_ for _ in ()).throw(RuntimeError("database is locked")))
+        assert send({"id": "e11", "object": "event", "type": "charge.refunded",
+                     "data": {"object": stale}}).status_code == 500
+
+    shop.fake.charge_state[sid] = {"refunded": True, "amount_refunded": 2000}
+
     charge = {"id": cid, "object": "charge", "amount": 2000, "amount_refunded": 2000, "refunded": True,
               "disputed": False, "transfer_group": f"order-{oid}", "payment_intent": f"pi_{sid}"}
     send({"id": "e3", "object": "event", "type": "charge.refunded", "data": {"object": charge}})
@@ -1000,6 +1140,23 @@ def test_refund_and_dispute_webhooks_do_the_same_as_the_manual_check(shop, monke
 
 
 # ====================================================================== forgotten password
+
+def test_a_cookie_without_a_password_stamp_is_not_a_login(app):
+    c = _user(app, "a@example.com")
+    with c.session_transaction() as sess:
+        sess.pop("pw")
+    assert c.get("/api/account").status_code == 401
+
+
+def test_login_only_redirects_to_a_path_on_this_site(app):
+    _user(app, "a@example.com")
+    creds = {"email": "a@example.com", "password": "password123"}
+    for bad in ("//evil.example", "/\\evil.example", "https://evil.example"):
+        r = app.test_client().post("/login", query_string={"next": bad}, data=creds)
+        assert r.headers["Location"].endswith("/portfolio"), bad
+    r = app.test_client().post("/login", query_string={"next": "/decks"}, data=creds)
+    assert r.headers["Location"].endswith("/decks")
+
 
 def _reset_link(outbox, email):
     import re
@@ -1100,3 +1257,29 @@ def test_a_sale_first_seen_already_partly_refunded_is_recorded_net(app):
     assert (line["refunded"], line["paid"], line["void"]) == (5.0, True, False)
     sales_sync.record_sale_lines([line], "ebay")
     assert _events(op, "sold")["events"][0]["total"] == 15.0
+
+
+def test_a_line_refunded_in_full_inside_a_partly_refunded_order_did_not_sell(app):
+    op = _user(app, "op@example.com")
+    _scanned_card(app, op)
+    sales_sync.record_sale_lines(ebay_orders.order_lines(ORDER)[:1], "ebay")
+    assert op.get("/api/inventory").get_json()["items"] == []
+
+    order = {**ORDER, "orderPaymentStatus": "PARTIALLY_REFUNDED"}
+    order["lineItems"] = [
+        {**ORDER["lineItems"][0], "refunds": [{"amount": {"value": "23.50", "currency": "USD"}}]},   # price + shipping
+        {**ORDER["lineItems"][1], "refunds": [{"amount": {"value": "9.00", "currency": "EUR"}}]}]    # not netted
+    first, second = ebay_orders.order_lines(order)
+    assert (first["void"], first["refunded"]) == (True, 20.0)
+    assert (second["void"], second["refunded"]) == (False, 0.0)
+    assert sales_sync.record_sale_lines([first], "ebay")["reversed"] == 1
+    assert len(op.get("/api/inventory").get_json()["items"]) == 1          # the card is back
+
+
+def test_a_different_price_on_a_re_read_is_not_a_refund(app):
+    op = _user(app, "op@example.com")
+    _scanned_card(app, op)
+    sales_sync.record_sale_lines([_line()], "ebay")
+    again = sales_sync.record_sale_lines([_line(unit_price=17.0)], "ebay")
+    assert (again["adjusted"], again["duplicates"]) == (0, 1)
+    assert _events(op, "sold")["events"][0]["total"] == 20.0

@@ -1495,7 +1495,14 @@ def api_publish_portal():
                 filename, rows_fn = "whatnot_seller_hub.csv", gc.whatnot_rows
                 from lib.whatnot_lister import WhatnotLister as Lister
             path = CSVS_DIR / filename
-            _write_csv(path, rows_fn(payload))
+            rows = rows_fn(payload)
+            if not rows:
+                _publish_state["message"] = (
+                    "nothing uploaded: no cards to send" + (
+                        " (upload your TCGplayer pricing export under Connections so cards "
+                        "can be matched to TCGplayer Ids)" if site == "tcgplayer" else ""))
+                return
+            _write_csv(path, rows)
 
             _publish_state["message"] = f"uploading {filename} to {site}…"
             from lib.portal_uploader import portal_state_path
