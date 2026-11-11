@@ -1281,13 +1281,18 @@ def api_publish_job_status():
 def api_publish_ebay():
     """Publish every eligible card as a live eBay listing (background job).
 
-    Body: {"skip_flagged": true} leaves out cards whose price needs review.
-    {"expected": N} is the count the user confirmed; if the eligible set has
-    changed size since (a pricing job finished in between), nothing is
-    listed and the job says so."""
+    Body: {"expected": N, "skip_flagged": bool}. `expected` is the count the
+    user confirmed and is required; if the eligible set has changed size
+    since (a pricing job finished in between), nothing is listed and the job
+    says so. skip_flagged leaves out cards whose price needs review."""
     body = request.get_json(silent=True) or {}
     skip_flagged = bool(body.get("skip_flagged"))
-    expected = body.get("expected")
+    # Required: a bare POST must never be enough to put listings live.
+    try:
+        expected = int(body["expected"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "expected (the number of cards you confirmed) is required; "
+                                 "read it from /api/publish/status"}), 400
     with _publish_lock:
         if _publish_state["running"]:
             return jsonify({"error": "a publish job is already running"}), 409
@@ -1311,10 +1316,10 @@ def api_publish_ebay():
                         if c.get("final_price") and (c.get("image_url") or can_upload)]
             if skip_flagged:
                 eligible = [c for c in eligible if not c.get("needs_review")]
-            if expected is not None and len(eligible) != int(expected):
+            if len(eligible) != expected:
                 _publish_state["message"] = (
                     f"nothing listed: {len(eligible)} cards are eligible now, "
-                    f"you confirmed {int(expected)}. Check the list and publish again."
+                    f"you confirmed {expected}. Check the list and publish again."
                 )
                 return
             _publish_state["total"] = len(eligible)

@@ -156,6 +156,12 @@ class LoginCapture:
         self._decision.set()
         if self._thread is not None:
             self._thread.join(timeout)
+            if self._thread.is_alive():
+                # The browser is not answering. Stop treating this capture as
+                # live, or the site could never be signed into again without
+                # restarting the app.
+                self._set("error", "the browser did not respond while saving; "
+                                   "close its window and sign in again")
         return self.status()
 
     def cancel(self, timeout: float = 15) -> dict:
@@ -196,20 +202,31 @@ class LoginCapture:
                             # Also pumps browser events, so a closed window is noticed.
                             page.wait_for_timeout(400)
                         except Exception:
-                            self._set("cancelled", "the browser window was closed; nothing saved")
-                            return
+                            # That tab is gone. Sign-in may have moved to a
+                            # popup or a second tab; carry on with it.
+                            still_open = [pg for pg in getattr(context, "pages", [])
+                                          if not pg.is_closed()]
+                            if not still_open:
+                                self._set("cancelled", "the browser window was closed; nothing saved")
+                                return
+                            page = still_open[0]
 
                     if not self._save:
                         self._set("cancelled", "cancelled; nothing saved")
                         return
+                    if self.status()["state"] != "waiting":
+                        return   # finish() gave up on us; do not save late
                     self.state_path.parent.mkdir(parents=True, exist_ok=True)
                     tmp = self.state_path.with_suffix(".tmp")
-                    context.storage_state(path=str(tmp))
-                    tmp.replace(self.state_path)
+                    # Owner-only before any cookie is written to it.
+                    os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
                     try:
-                        self.state_path.chmod(0o600)   # it holds live session cookies
-                    except OSError:
-                        pass
+                        context.storage_state(path=str(tmp))
+                        os.chmod(tmp, 0o600)
+                        tmp.replace(self.state_path)
+                    except Exception:
+                        tmp.unlink(missing_ok=True)   # no half-written cookies left behind
+                        raise
                     self._set("saved", f"session saved to {self.state_path}")
                 finally:
                     try:

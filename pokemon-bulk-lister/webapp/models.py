@@ -219,7 +219,9 @@ class Order(Base):
     amount = what the buyer pays, platform_fee = our cut, seller_proceeds =
     amount - platform_fee (owed to the seller once paid).
 
-    status: pending_payment | paid | completed | cancelled
+    status: pending_payment | paid | completed | cancelled | refund_due
+            (refund_due: a card payment has to be sent back and Stripe
+            refused the automatic refund; the operator must do it by hand)
     payment_provider: 'stripe' | 'offline'
     """
 
@@ -445,15 +447,40 @@ def _ensure_indexes(engine) -> None:
     from sqlalchemy import text
 
     with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE market_listings SET status = 'cancelled' "
-            "WHERE status = 'active' AND id NOT IN ("
-            "  SELECT MIN(id) FROM market_listings WHERE status = 'active' "
-            "  GROUP BY inventory_item_id)"
-        ))
+        # Keep one active listing per card: the one a buyer is waiting on if
+        # there is one, else the oldest.
+        rows = conn.execute(text(
+            "SELECT l.id, l.inventory_item_id, "
+            "  EXISTS (SELECT 1 FROM orders o WHERE o.listing_id = l.id "
+            "          AND o.status = 'pending_payment') AS has_pending "
+            "FROM market_listings l WHERE l.status = 'active' ORDER BY l.id"
+        )).fetchall()
+        keep: dict[int, tuple] = {}
+        for listing_id, item_id, has_pending in rows:
+            best = keep.get(item_id)
+            if best is None or (has_pending and not best[1]):
+                keep[item_id] = (listing_id, bool(has_pending))
+        kept = {v[0] for v in keep.values()}
+        for listing_id, _item_id, _pending in rows:
+            if listing_id not in kept:
+                conn.execute(text("UPDATE market_listings SET status = 'cancelled' WHERE id = :i"),
+                             {"i": listing_id})
         conn.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_listing "
             "ON market_listings (inventory_item_id) WHERE status = 'active'"
+        ))
+
+        # uq_pending_order: one buyer at a time per listing. buy() checks
+        # first, but two buyers clicking together could both pass the check.
+        conn.execute(text(
+            "UPDATE orders SET status = 'cancelled' "
+            "WHERE status = 'pending_payment' AND id NOT IN ("
+            "  SELECT MIN(id) FROM orders WHERE status = 'pending_payment' "
+            "  GROUP BY listing_id)"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_order "
+            "ON orders (listing_id) WHERE status = 'pending_payment'"
         ))
 
 

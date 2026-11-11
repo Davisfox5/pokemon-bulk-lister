@@ -100,11 +100,22 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// Sent back here by Stripe when the buyer backs out of checkout.
-if (new URLSearchParams(location.search).get("payment") === "cancelled") {
+// Sent back here by Stripe when the buyer backs out of checkout. The server
+// route only redirects; the order is cancelled from here, same-origin, so a
+// link on another site cannot cancel anyone's checkout.
+(function abandonedCheckout() {
+  const params = new URLSearchParams(location.search);
+  if (params.get("payment") !== "cancelled") return;
+  const order = Number(params.get("order"));
   history.replaceState(null, "", location.pathname);
-  setTimeout(() => toast("Checkout was cancelled. You were not charged, and the card is for sale again."), 300);
-}
+  if (!order) return;
+  postJson(`/api/market/orders/${order}/cancel`)
+    .then(() => toast("Checkout was cancelled. You were not charged, and the card is for sale again."))
+    .catch((err) => toast(/already been paid/.test(err.message)
+      ? "That payment had already gone through. The card is in your library."
+      : "Checkout was left unfinished. The card is released when the checkout expires.", "err"))
+    .finally(() => load().catch(() => {}));
+})();
 
 // Deep link from the deck page: /market?q=Dragapult+ex
 const preset = new URLSearchParams(location.search).get("q");

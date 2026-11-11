@@ -104,7 +104,14 @@ class EbayUserAuth:
             "refresh_expires_in": expires_in,
             "env": "sandbox" if self.is_sandbox else "production",
         }
-        self.token_path.write_text(json.dumps(payload, indent=2))
+        # Owner-only from the first byte: this is a long-lived credential.
+        fd = os.open(self.token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(payload, indent=2))
+        try:
+            self.token_path.chmod(0o600)   # tighten a file an older build wrote
+        except OSError:
+            pass
 
     def is_authorized(self) -> bool:
         return bool(self._refresh_token)
@@ -172,7 +179,10 @@ class EbayUserAuth:
         payload = resp.json()
         refresh = payload.get("refresh_token")
         if not refresh:
-            raise EbayUserAuthError(f"no refresh_token in response: {payload}")
+            # Name the fields only: the payload holds a live access token,
+            # and this message can end up in an HTTP response or a log.
+            raise EbayUserAuthError(
+                f"no refresh_token in eBay's response (fields: {sorted(payload)})")
         self._refresh_token = refresh
         self._access_token = payload.get("access_token")
         self._access_expiry = time.time() + int(payload.get("expires_in", 7200))

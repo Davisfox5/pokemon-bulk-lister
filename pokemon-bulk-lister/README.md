@@ -267,6 +267,11 @@ Connections**. Each service shows whether it is connected and what the next
 step is. Keys go in `.env` (restart the app after editing it); the panel never
 shows or stores a key.
 
+The Scan page has no login, so the app only answers requests addressed to
+`localhost` / `127.0.0.1` and refuses POSTs that come from another website.
+If you serve it under a real hostname (needed for the Stripe webhook), list
+that hostname in `ALLOWED_HOSTS`.
+
 ### eBay (official Sell API)
 
 Each priced card becomes a live fixed-price listing through the Inventory API
@@ -359,8 +364,15 @@ How an order gets settled, whichever comes first (settling twice is harmless):
 
 An unfinished Checkout expires after `STRIPE_CHECKOUT_MINUTES` (31, Stripe's
 minimum is 30) and the card goes back on sale. Backing out of Checkout frees
-it at once. Either side can cancel an unpaid order. If a payment arrives for
-a card that is no longer there, it is refunded.
+it at once. Either side can cancel an unpaid order.
+
+A buyer is never left charged with nothing to show for it. A payment is
+refunded automatically when it lands on an order that was cancelled, when the
+card is no longer there, or when the amount or currency Stripe charged is not
+what the order asked for (for example if tax or a promotion code is switched
+on in the Stripe dashboard). If Stripe refuses a refund, the order is marked
+"refund pending" and the operator sees it at the top of **Seller balances**
+with the session id to refund by hand.
 
 **Where the money goes.** Payments land in the Stripe account whose key is in
 `.env`. The platform fee (`PLATFORM_FEE_PCT`, default 10) stays there and the

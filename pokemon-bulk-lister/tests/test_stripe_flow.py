@@ -29,7 +29,11 @@ class FakeStripe:
     def __init__(self):
         self.sessions: dict[str, dict] = {}
         self.refunds: list[str] = []
+        self.refund_keys: set[str] = set()
         self.fail_create = False
+        self.fail_refund = False
+        self.on_retrieve = None     # hook: runs inside Session.retrieve, once
+        self.on_create = None       # hook: runs inside Session.create, once
         outer = self
 
         class Session:
@@ -37,10 +41,13 @@ class FakeStripe:
             def create(**kw):
                 if outer.fail_create:
                     raise RuntimeError("Invalid API Key provided")
+                if outer.on_create:
+                    hook, outer.on_create = outer.on_create, None
+                    hook()
                 sid = f"cs_test_{len(outer.sessions) + 1}"
                 outer.sessions[sid] = {
                     "id": sid, "object": "checkout.session", "status": "open",
-                    "payment_status": "unpaid", "payment_intent": f"pi_{sid}",
+                    "payment_status": "unpaid", "payment_intent": f"pi_{sid}", "currency": "usd",
                     "amount_total": kw["line_items"][0]["price_data"]["unit_amount"],
                     "metadata": kw["metadata"], "url": f"https://checkout.stripe.test/{sid}",
                     "success_url": kw["success_url"], "cancel_url": kw["cancel_url"],
@@ -50,7 +57,11 @@ class FakeStripe:
 
             @staticmethod
             def retrieve(sid):
-                return outer._obj(sid)
+                obj = outer._obj(sid)       # what Stripe says at this instant
+                if outer.on_retrieve:
+                    hook, outer.on_retrieve = outer.on_retrieve, None
+                    hook()                   # another request acts meanwhile
+                return obj
 
             @staticmethod
             def expire(sid):
@@ -61,7 +72,12 @@ class FakeStripe:
 
         class Refund:
             @staticmethod
-            def create(payment_intent):
+            def create(payment_intent, idempotency_key=None):
+                if outer.fail_refund:
+                    raise RuntimeError("charge has been disputed")
+                if idempotency_key in outer.refund_keys:
+                    return           # Stripe replays the first response
+                outer.refund_keys.add(idempotency_key)
                 outer.refunds.append(payment_intent)
 
         self.checkout = type("checkout", (), {"Session": Session})
@@ -152,29 +168,48 @@ def test_only_the_buyer_can_use_the_return_link(env):
     assert _sold(env.seller)["events"] == []
 
 
-def test_a_wrong_amount_is_not_settled(env):
+def test_a_wrong_amount_is_cancelled_and_refunded_not_left_hanging(env):
     oid, sid = _buy(env)
     env.fake.pay(sid)
-    env.fake.sessions[sid]["amount_total"] = 100
+    env.fake.sessions[sid]["amount_total"] = 2140      # e.g. tax added on Stripe's side
     r = env.buyer.get(f"/market/orders/{oid}/return")
     assert "payment=problem" in r.headers["Location"]
     assert _sold(env.seller)["events"] == []
+    assert env.fake.refunds == [f"pi_{sid}"]
+    assert env.buyer.get("/api/market/my").get_json()["purchases"][0]["status"] == "cancelled"
+    _buy(env, env.user("other@example.com"))           # the card is not locked
+
+
+def test_a_wrong_currency_is_treated_the_same(env):
+    oid, sid = _buy(env)
+    env.fake.pay(sid)
+    env.fake.sessions[sid]["currency"] = "eur"
+    env.buyer.get(f"/market/orders/{oid}/return")
+    assert env.fake.refunds == [f"pi_{sid}"] and _sold(env.seller)["events"] == []
+
+
+def test_the_abandon_link_changes_nothing_by_itself(env):
+    # A link (from any site) must not be able to kill someone's checkout.
+    oid, sid = _buy(env)
+    r = env.buyer.get(f"/market/orders/{oid}/abandon")
+    assert r.headers["Location"].endswith(f"/market?payment=cancelled&order={oid}")
+    assert env.fake.sessions[sid]["status"] == "open"
+    assert env.buyer.get("/api/market/my").get_json()["purchases"][0]["status"] == "pending_payment"
 
 
 def test_backing_out_of_checkout_frees_the_card(env):
     oid, sid = _buy(env)
-    r = env.buyer.get(f"/market/orders/{oid}/abandon")
-    assert "payment=cancelled" in r.headers["Location"]
+    # what the marketplace page does when it lands with ?payment=cancelled
+    assert env.buyer.post(f"/api/market/orders/{oid}/cancel").status_code == 200
     assert env.fake.sessions[sid]["status"] == "expired"
-    other = env.user("other@example.com")
-    _buy(env, other)   # the listing is available again
+    _buy(env, env.user("other@example.com"))   # the listing is available again
 
 
 def test_backing_out_after_paying_settles_instead(env):
     oid, sid = _buy(env)
     env.fake.pay(sid)
-    r = env.buyer.get(f"/market/orders/{oid}/abandon")
-    assert "payment=paid" in r.headers["Location"]
+    r = env.buyer.post(f"/api/market/orders/{oid}/cancel")
+    assert r.status_code == 409 and r.get_json()["status"] == "paid"
     assert _sold(env.seller)["totals"]["sold_cards"] == 1
 
 
@@ -222,6 +257,99 @@ def test_a_failed_checkout_start_does_not_leave_the_card_locked(env):
     assert r.status_code == 502 and "could not start card payment" in r.get_json()["error"]
     env.fake.fail_create = False
     _buy(env)
+
+
+def test_webhook_and_browser_return_racing_do_not_refund_a_good_sale(env):
+    # The browser return has asked Stripe about the session and is waiting
+    # for the answer when the webhook lands and settles the order.
+    oid, sid = _buy(env)
+    env.fake.pay(sid)
+    payload, headers = _signed(_event(env, sid))
+    env.fake.on_retrieve = lambda: env.app.test_client().post(
+        "/api/market/stripe-webhook", data=payload, headers=headers)
+
+    r = env.buyer.get(f"/market/orders/{oid}/return")
+    assert "payment=paid" in r.headers["Location"]
+    assert env.fake.refunds == []                       # nobody got their money back
+    assert _sold(env.seller)["totals"]["sold_cards"] == 1
+    assert len(env.buyer.get("/api/inventory").get_json()["items"]) == 1
+
+
+def test_payment_landing_on_a_cancelled_order_is_refunded(env):
+    # Seller cancels while Stripe is still creating the session.
+    env.fake.on_create = lambda: env.seller.post("/api/market/orders/1/cancel")
+    r = env.buyer.post(f"/api/market/listings/{env.lid}/buy")
+    # The young order is left alone by the cancel (checkout is starting)...
+    assert r.status_code == 200
+    oid, sid = r.get_json()["order_id"], r.get_json()["checkout_url"].rsplit("/", 1)[1]
+    # ...so the seller cancels again once it exists; the session is closed.
+    assert env.seller.post(f"/api/market/orders/{oid}/cancel").status_code == 200
+    assert env.fake.sessions[sid]["status"] == "expired"
+
+    # Worst case: the payment went through anyway. Both paths refund, once.
+    env.fake.pay(sid)
+    r = env.buyer.get(f"/market/orders/{oid}/return")
+    assert "payment=cancelled" in r.headers["Location"]
+    payload, headers = _signed(_event(env, sid))
+    env.app.test_client().post("/api/market/stripe-webhook", data=payload, headers=headers)
+    assert env.fake.refunds == [f"pi_{sid}"]
+    assert _sold(env.seller)["events"] == []
+
+
+def test_checkout_is_not_handed_out_for_an_order_cancelled_meanwhile(env):
+    def cancel_directly():
+        s = models.get_session()
+        try:
+            s.query(models.Order).update({"status": "cancelled"})
+            s.commit()
+        finally:
+            s.close()
+
+    env.fake.on_create = cancel_directly
+    r = env.buyer.post(f"/api/market/listings/{env.lid}/buy")
+    assert r.status_code == 409 and "checkout_url" not in r.get_json()
+    assert [v["status"] for v in env.fake.sessions.values()] == ["expired"]
+
+
+def test_a_refund_stripe_refuses_is_flagged_for_the_operator(env):
+    oid, sid = _buy(env)
+    env.fake.pay(sid)
+    env.fake.sessions[sid]["amount_total"] = 1
+    env.fake.fail_refund = True
+    env.buyer.get(f"/market/orders/{oid}/return")
+    due = env.operator.get("/api/admin/balances").get_json()["refunds_due"]
+    assert [(d["order_id"], d["amount"], d["buyer"]) for d in due] == [(oid, 20.0, "buyer@example.com")]
+    _buy(env, env.user("other@example.com"))           # and the card is still free
+
+
+def test_stale_card_orders_are_released_even_if_the_stripe_key_is_removed(env, monkeypatch):
+    oid, sid = _buy(env)
+    monkeypatch.setattr(marketplace, "_stripe", lambda: None)
+    assert env.seller.post(f"/api/market/orders/{oid}/cancel").status_code == 409   # may still be paid
+    s = models.get_session()
+    try:
+        s.get(models.Order, oid).created_at = models.utcnow() - timedelta(minutes=45)
+        s.commit()
+    finally:
+        s.close()
+    assert env.seller.post(f"/api/market/orders/{oid}/cancel").status_code == 200
+    lid = env.seller.get("/api/market/my").get_json()["active_listings"][0]["listing_id"]
+    assert env.seller.post(f"/api/market/listings/{lid}/cancel").status_code == 200
+
+
+def test_the_database_refuses_a_second_pending_order_on_one_listing(env):
+    from sqlalchemy.exc import IntegrityError
+
+    _buy(env)
+    s = models.get_session()
+    try:
+        s.add(models.Order(listing_id=env.lid, buyer_id=1, seller_id=2, amount=20,
+                           platform_fee=2, seller_proceeds=18))
+        with pytest.raises(IntegrityError):
+            s.commit()
+    finally:
+        s.rollback()
+        s.close()
 
 
 def _signed(event: dict, secret: str = SECRET) -> tuple[bytes, dict]:
@@ -356,12 +484,16 @@ def test_duplicate_active_listings_from_an_older_database_are_cleaned_up(tmp_pat
             s.add(models.MarketListing(seller_id=user.id, inventory_item_id=item.id,
                                        catalog_card_id=cc.id, price=price))
         s.commit()
+        waiting_on = s.query(models.MarketListing).filter_by(price=6).one()
+        s.add(models.Order(listing_id=waiting_on.id, buyer_id=user.id, seller_id=user.id,
+                           amount=6, platform_fee=0.6, seller_proceeds=5.4))
+        s.commit()
     finally:
         s.close()
     models.init_models(url)   # relaunch
     s = models.get_session()
     try:
         active = s.query(models.MarketListing).filter_by(status="active").all()
-        assert [l.price for l in active] == [5]
+        assert [l.price for l in active] == [6]     # the one with a buyer waiting
     finally:
         s.close()

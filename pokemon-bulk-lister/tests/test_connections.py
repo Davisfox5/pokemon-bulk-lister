@@ -272,3 +272,66 @@ def test_portal_routes_reject_unknown_sites_and_missing_sessions(client):
         assert client.post(f"/api/connections/portal/etsy/{action}").status_code == 404
     r = client.post("/api/connections/portal/whatnot/check").get_json()
     assert r["ok"] is False and "sign in first" in r["detail"]
+
+
+def test_a_rebound_hostname_is_refused_even_when_origin_matches_it(client, monkeypatch):
+    # DNS rebinding: evil.example now resolves to 127.0.0.1, so the browser
+    # sends a Host and an Origin that agree with each other.
+    spoofed = {"Host": "evil.example:5050", "Origin": "http://evil.example:5050"}
+    assert client.post("/api/connections/ebay/disconnect", headers=spoofed).status_code == 403
+    assert client.get("/api/connections", headers={"Host": "evil.example:5050"}).status_code == 403
+    for host in ("localhost:5050", "127.0.0.1:5050", "[::1]:5050"):
+        assert client.get("/api/connections", headers={"Host": host}).status_code == 200
+    monkeypatch.setenv("ALLOWED_HOSTS", "cards.example.com")
+    assert client.get("/api/connections", headers={"Host": "cards.example.com"}).status_code == 200
+
+
+def test_ebay_errors_and_files_do_not_expose_tokens(client, monkeypatch, tmp_path):
+    import stat
+
+    _ebay_env(monkeypatch)
+    monkeypatch.setattr("requests.Session.post", lambda self, url, **kw: _Resp(
+        200, {"access_token": "v^1.1#LIVE_ACCESS_TOKEN", "expires_in": 7200}))
+    r = client.post("/api/connections/ebay/authorize", json={"redirect": "https://x/a?code=c"})
+    assert r.status_code == 400 and "LIVE_ACCESS_TOKEN" not in r.get_data(as_text=True)
+    assert "access_token" in r.get_json()["error"]          # the field name is fine
+
+    monkeypatch.setattr("requests.Session.post", lambda self, url, **kw: _Resp(
+        200, {"access_token": "at", "expires_in": 7200, "refresh_token": "rt"}))
+    assert client.post("/api/connections/ebay/authorize",
+                       json={"redirect": "https://x/a?code=c"}).status_code == 200
+    mode = stat.S_IMODE((tmp_path / "ebay_token.json").stat().st_mode)
+    assert mode == 0o600
+
+
+def test_portal_sign_in_follows_a_popup_and_saves_owner_only(client, monkeypatch, tmp_path):
+    import stat
+
+    browser = _fake_playwright(monkeypatch)
+    popup = type("Popup", (), {"is_closed": lambda self: False,
+                               "wait_for_timeout": lambda self, ms: time.sleep(0.01)})()
+    browser.context.pages = [popup]
+    client.post("/api/connections/portal/whatnot/login")
+    _wait_for(client, "whatnot", ("waiting",))
+    browser.close_window = True          # the first tab closes; sign-in continues in the popup
+    time.sleep(0.1)
+    assert client.get("/api/connections").get_json()["whatnot"]["login"]["state"] == "waiting"
+    assert client.post("/api/connections/portal/whatnot/login/finish").status_code == 200
+    state_file = tmp_path / "whatnot_state.json"
+    assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
+    assert not state_file.with_suffix(".tmp").exists()
+
+
+def test_a_browser_that_hangs_while_saving_does_not_block_the_next_sign_in(monkeypatch, tmp_path):
+    browser = _fake_playwright(monkeypatch)
+    browser.context.storage_state = lambda path: time.sleep(1.0)     # never finishes in time
+    capture = portal_uploader.LoginCapture("whatnot", tmp_path / "s.json")
+    capture.start()
+    for _ in range(200):
+        if capture.status()["state"] == "waiting":
+            break
+        time.sleep(0.01)
+    status = capture.finish(timeout=0.1)
+    assert status["state"] == "error" and not capture.active()
+    capture.start()                                                    # a fresh attempt is allowed
+    capture.cancel()

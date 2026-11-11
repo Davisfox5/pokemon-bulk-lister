@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -38,26 +39,45 @@ PORTAL_CLASSES = {
     "tcgplayer": ("lib.tcgplayer_lister", "TCGPlayerLister"),
     "whatnot": ("lib.whatnot_lister", "WhatnotLister"),
 }
-# One live sign-in window per portal.
+# One live sign-in window per portal. The lock makes "is one open? then open
+# one" a single step, so a double click cannot start two browsers.
 _captures: dict[str, Any] = {}
+_captures_lock = threading.Lock()
+
+
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def allowed_hosts() -> set[str]:
+    """Host names this app answers to. ALLOWED_HOSTS (comma separated) adds
+    to the local ones, for an install served under a real domain."""
+    extra = {h.strip().lower() for h in os.getenv("ALLOWED_HOSTS", "").split(",") if h.strip()}
+    return LOCAL_HOSTS | extra
 
 
 def same_origin_only():
-    """before_request hook: refuse state-changing requests another site sent.
+    """before_request hook for the whole app. Two checks.
 
-    The scan bench has no login: it trusts whoever can reach it, which on a
-    local install is the operator. A page on any other site could still make
-    the operator's browser POST to http://localhost:5050/api/publish/ebay.
-    Browsers put an Origin header on such requests, so a POST whose Origin is
-    not this app is turned away. Requests with no Origin (curl, the CLI
-    scripts, Stripe's webhook) are unaffected.
+    1. Host allowlist, every request. The bench has no login and trusts
+       whoever can reach it. A hostile page can point its own domain at
+       127.0.0.1 (DNS rebinding) and then talk to the app as "same origin";
+       the Host header gives that away, because it names the attacker's
+       domain. Anything not on the allowlist is refused.
+    2. Origin, state-changing requests. A page on another site can still make
+       the operator's browser POST here. Browsers put an Origin header on
+       such requests, so a POST whose Origin is not this app is turned away.
+       Requests with no Origin (curl, the CLI scripts, Stripe's webhook) pass.
     """
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(f"//{request.host}").hostname or "").lower()
+    if host not in allowed_hosts():
+        return jsonify({"error": f"host {host!r} is not allowed; add it to ALLOWED_HOSTS"}), 403
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
     origin = request.headers.get("Origin")
     if not origin:
         return None
-    from urllib.parse import urlsplit
     if origin == "null" or urlsplit(origin).netloc != request.host:
         return jsonify({"error": "cross-site request refused"}), 403
     return None
@@ -132,10 +152,6 @@ def ebay_authorize():
     try:
         auth = _ebay_auth()
         auth.exchange_code(EbayUserAuth.extract_code(pasted))
-        try:
-            auth.token_path.chmod(0o600)   # it holds a long-lived refresh token
-        except OSError:
-            pass
     except EbayUserAuthError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -307,17 +323,18 @@ def portal_login(site: str):
         lib = _portal_lib()
     except ImportError as exc:
         return jsonify({"error": str(exc)}), 400
-    capture = _captures.get(site)
-    if capture is not None and capture.active():
-        return jsonify({"error": "a sign-in window is already open for this site"}), 409
-    capture = lib.LoginCapture(
-        site, lib.portal_state_path(site, ROOT),
-        # Test hooks: a headless window and a stand-in login page.
-        headless=os.getenv("PORTAL_LOGIN_HEADLESS") == "1",
-        login_url=os.getenv(f"{site.upper()}_LOGIN_URL") or None,
-    )
-    _captures[site] = capture
-    capture.start()
+    with _captures_lock:
+        capture = _captures.get(site)
+        if capture is not None and capture.active():
+            return jsonify({"error": "a sign-in window is already open for this site"}), 409
+        capture = lib.LoginCapture(
+            site, lib.portal_state_path(site, ROOT),
+            # Test hooks: a headless window and a stand-in login page.
+            headless=os.getenv("PORTAL_LOGIN_HEADLESS") == "1",
+            login_url=os.getenv(f"{site.upper()}_LOGIN_URL") or None,
+        )
+        _captures[site] = capture
+        capture.start()
     return jsonify(_portal_status(site))
 
 

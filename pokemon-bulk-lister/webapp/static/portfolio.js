@@ -680,6 +680,7 @@ const ORDER_STATUS = {
   paid: '<span class="pill ok">paid</span>',
   completed: '<span class="pill ok">completed</span>',
   cancelled: '<span class="pill muted">cancelled</span>',
+  refund_due: '<span class="pill warn">refund pending</span>',
 };
 
 async function loadMarket() {
@@ -894,6 +895,11 @@ let payoutSeller = null;
 
 async function loadOperator() {
   const data = await api("/api/admin/balances");
+  const due = $("#refunds-due");
+  due.classList.toggle("hidden", !data.refunds_due.length);
+  due.innerHTML = data.refunds_due.map((r) =>
+    `<p class="flag-note">Refund ${fmtUsd(r.amount)} to ${esc(r.buyer)} by hand in the Stripe dashboard
+     (order ${r.order_id}, session ${esc(r.payment_ref)}). The automatic refund was refused.</p>`).join("");
   $("#operator-body").innerHTML = data.sellers.map((r) => `<tr data-seller="${r.seller_id}">
       <td>${esc(r.email)}</td>
       <td class="num">${fmtUsd(r.card_proceeds)}</td>
