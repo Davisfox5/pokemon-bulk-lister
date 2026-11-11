@@ -17,6 +17,7 @@ import stripe as stripe_sdk
 from flask import Flask
 
 from webapp import marketplace, models
+from conftest import verify_link
 
 SECRET = "whsec_test_secret"
 
@@ -91,7 +92,7 @@ class FakeStripe:
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path, monkeypatch, mail_outbox):
     models.init_models(f"sqlite:///{tmp_path / 'app.sqlite'}")
     from webapp import catalog
     from webapp.auth import auth_bp
@@ -100,7 +101,7 @@ def env(tmp_path, monkeypatch):
     fake = FakeStripe()
     monkeypatch.setattr(marketplace, "_stripe", lambda: fake)
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", SECRET)
-    monkeypatch.delenv("ADMIN_EMAILS", raising=False)
+    monkeypatch.setenv("ADMIN_EMAILS", "op@example.com")
     templates = Path(__file__).resolve().parent.parent / "webapp" / "templates"
     app = Flask(__name__, template_folder=str(templates))
     app.secret_key = "test"
@@ -110,6 +111,7 @@ def env(tmp_path, monkeypatch):
     def user(email):
         c = app.test_client()
         assert c.post("/register", json={"email": email, "password": "password123"}).status_code == 200
+        assert "verify=done" in c.get(verify_link(mail_outbox, email)).headers["Location"]
         return c
 
     operator, seller, buyer = user("op@example.com"), user("seller@example.com"), user("buyer@example.com")

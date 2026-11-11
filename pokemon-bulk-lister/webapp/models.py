@@ -352,6 +352,93 @@ class Payout(Base):
 Index("idx_payouts_seller", Payout.seller_id)
 
 
+class EmailVerification(Base):
+    """Proof that a user controls their email address.
+
+    One row per user. The link mailed out carries a random token; only its
+    SHA-256 is stored, so reading the database does not yield a usable link.
+    verified_at set = verified. (A separate table rather than a column on
+    users, because this module cannot add columns to an existing table.)
+    """
+
+    __tablename__ = "email_verifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    token_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class ExternalSale(Base):
+    """A sale read back from outside the app: an eBay order line, or a row of
+    a Whatnot / TCGplayer sales export.
+
+    (source, external_id) is unique, so reading the same order twice records
+    it once. status:
+      recorded   matched to a library card; a 'sold' ledger row was written
+      unmatched  no library card with that SKU; shown for a person to handle
+      dismissed  a person said to ignore it
+      void       cancelled or fully refunded at the source; nothing recorded
+    """
+
+    __tablename__ = "external_sales"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    sku: Mapped[Optional[str]] = mapped_column(String(200))
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price: Mapped[Optional[float]] = mapped_column(Float)
+    fees: Mapped[Optional[float]] = mapped_column(Float)
+    sold_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(20), default="unmatched")
+    detail: Mapped[Optional[str]] = mapped_column(Text)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    library_event_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("library_events.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+Index("uq_external_sale", ExternalSale.source, ExternalSale.external_id, unique=True)
+
+
+class SellerPayoutAccount(Base):
+    """A seller's Stripe connected account, for automatic payouts."""
+
+    __tablename__ = "seller_payout_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    stripe_account_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Cached from Stripe; refreshed whenever the account is looked at.
+    transfers_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    payouts_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    details_submitted: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class OrderTransfer(Base):
+    """The Stripe transfer that paid a seller for one order. order_id is
+    unique: an order's proceeds can be transferred once."""
+
+    __tablename__ = "order_transfers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id", ondelete="RESTRICT"), unique=True, nullable=False
+    )
+    transfer_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Deck(Base):
     """A saved decklist. source: 'paste' (user import) | 'popular' (copied
     from a tournament list; source_meta holds the JSON provenance)."""

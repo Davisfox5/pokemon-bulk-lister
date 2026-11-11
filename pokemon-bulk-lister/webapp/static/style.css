@@ -194,3 +194,10 @@ td.actions { display: table-cell; margin-top: 0; }
 .conn-result .ok::before { content: "OK  "; color: #15803d; font-weight: 600; }
 .conn-result .bad::before { content: "Fix  "; color: var(--row-flag-text); font-weight: 600; }
 .conn-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+
+/* Sales read back */
+.sales-panel { display: flex; flex-direction: column; gap: 8px; }
+.sales-panel label.inline { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+#sales-unmatched table { margin-top: 6px; }
+#sales-unmatched td, #sales-unmatched th { padding: 4px 8px; }
+.sold-tag { margin-left: 6px; font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; color: var(--muted); }

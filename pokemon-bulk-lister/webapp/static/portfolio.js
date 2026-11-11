@@ -889,6 +889,92 @@ async function listOnEbay(item, btn) {
   }
 }
 
+/* ---------------- account: email confirmation ---------------- */
+
+async function loadAccount() {
+  const acct = await api("/api/account");
+  lib.account = acct;
+  const banner = $("#verify-banner");
+  banner.classList.toggle("hidden", acct.verified);
+  if (!acct.verified) {
+    $("#verify-text").textContent =
+      (acct.mail === "smtp"
+        ? ` We sent a link to ${acct.email}. Open it to sell, buy and get paid.`
+        : ` This install has no mail server set up, so the link for ${acct.email} is printed in the app's console window. Open it to sell, buy and get paid.`)
+      + (acct.admin_pending ? " Operator tools unlock once this address is confirmed." : "");
+  }
+}
+
+$("#btn-resend").addEventListener("click", async () => {
+  const btn = $("#btn-resend");
+  btn.disabled = true;
+  try {
+    const res = await postJson("/api/account/resend-verification");
+    toast(res.verified ? "This address is already confirmed."
+      : res.via === "smtp" ? "Sent. Check your inbox."
+      : "A new link was printed in the app's console window.");
+    loadAccount().catch(() => {});
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ---------------- seller: automatic payouts ---------------- */
+
+async function loadPayoutAccount() {
+  const p = await api("/api/payouts/account");
+  const line = $("#payout-line");
+  line.classList.toggle("hidden", !p.available);
+  if (!p.available) return;
+  const label = { none: "Set up payouts", incomplete: "Continue payout setup" }[p.state];
+  line.innerHTML = `<span><strong>Payouts${p.state === "active" ? " are on" : ""}.</strong> ${esc(p.next)}</span>
+    ${label ? `<button class="btn btn-primary" id="btn-connect-payouts">${label}</button>` : ""}`;
+  const btn = $("#btn-connect-payouts");
+  if (btn) btn.addEventListener("click", async () => {
+    const { ok } = await askConfirm({
+      title: "Set up payouts with Stripe?",
+      html: `<p>You'll go to Stripe to enter your details and bank account. Stripe holds them; this app never sees them.</p>
+             <p class="muted">After that, your share of each card sale is sent to you automatically, including anything already owed.</p>`,
+      confirm: "Continue to Stripe",
+    });
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const res = await postJson("/api/payouts/connect");
+      window.location = res.url;
+    } catch (err) {
+      btn.disabled = false;
+      toast(err.message, "err");
+    }
+  });
+}
+
+$("#btn-run-payouts").addEventListener("click", async () => {
+  const btn = $("#btn-run-payouts");
+  const { ok } = await askConfirm({
+    title: "Pay out now?",
+    html: `<p>Every seller who has finished payout setup is sent what they are owed from card sales, by Stripe transfer from your account.</p>
+           <p class="muted">Sellers without payout setup are skipped. Nobody is paid twice.</p>`,
+    confirm: "Send payouts",
+  });
+  if (!ok) return;
+  btn.disabled = true;
+  try {
+    const r = await postJson("/api/admin/payouts/run");
+    toast(r.errors.length
+      ? `Sent ${fmtUsd(r.transferred)} for ${r.orders} order(s). ${r.errors.length} failed: ${r.errors[0]}`
+      : r.orders ? `Sent ${fmtUsd(r.transferred)} across ${r.orders} order(s).`
+      : "Nothing to send: nobody with payout setup is owed anything.", r.errors.length ? "err" : "ok");
+    loadMarket().catch(console.error);
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 /* ---------------- operator: seller balances and payouts ---------------- */
 
 let payoutSeller = null;
@@ -906,9 +992,10 @@ async function loadOperator() {
       <td class="num">${fmtUsd(r.paid_out)}</td>
       <td class="num"><strong>${fmtUsd(r.balance)}</strong></td>
       <td class="num">${r.fees_owed ? fmtUsd(r.fees_owed) : "—"}</td>
+      <td>${r.auto_payouts ? '<span class="pill ok">automatic</span>' : '<span class="pill">by hand</span>'}</td>
       <td><div class="row-actions">${r.balance > 0
         ? `<button class="btn" data-act="payout" data-email="${esc(r.email)}" data-balance="${r.balance}">Record payout</button>` : ""}</div></td>
-    </tr>`).join("") || emptyRow(6, "No sales have been paid for yet.");
+    </tr>`).join("") || emptyRow(7, "No sales have been paid for yet.");
 }
 
 $("#operator-body").addEventListener("click", (e) => {
@@ -936,6 +1023,33 @@ $("#payout-form").addEventListener("submit", async (e) => {
   }
 });
 
+/* ---------------- coming back from a link: email, payout setup ---------------- */
+
+(function linkOutcome() {
+  const params = new URLSearchParams(location.search);
+  const messages = {
+    verify: {
+      sent: ["Account created. Confirm your email with the link we sent to start selling and buying.", "ok"],
+      done: ["Email confirmed. You can sell, buy and get paid.", "ok"],
+      expired: ["That link has expired. Use “Send the link again” for a new one.", "err"],
+      invalid: ["That link is not valid any more. Use “Send the link again” for a new one.", "err"],
+      needed: ["Confirm your email address first.", "err"],
+    },
+    payouts: {
+      active: ["Payouts are set up. Your share of card sales is sent to you automatically.", "ok"],
+      incomplete: ["Stripe still needs a few details before it can pay you. Use “Continue payout setup”.", "err"],
+      retry: ["That Stripe link expired. Use “Continue payout setup” for a new one.", "err"],
+      unknown: ["Could not reach Stripe to check your payout setup. It is checked again when you reload.", "err"],
+    },
+  };
+  for (const [key, table] of Object.entries(messages)) {
+    const hit = table[params.get(key)];
+    if (!hit) continue;
+    if (!params.get("payment")) history.replaceState(null, "", location.pathname);
+    setTimeout(() => toast(hit[0], hit[1]), 300);
+  }
+})();
+
 /* ---------------- coming back from card checkout ---------------- */
 
 (function paymentOutcome() {
@@ -962,6 +1076,8 @@ function refreshAll() {
     .catch(() => {})
     .then(() => loadSummary().then(loadMarket))
     .catch((err) => toast(err.message, "err"));
+  loadAccount().catch(console.error);
+  loadPayoutAccount().catch(console.error);
   loadLedger().catch(console.error);
   loadChart().catch(console.error);
   loadAlerts().catch(console.error);

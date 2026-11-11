@@ -202,6 +202,9 @@ def api_list_cards():
             unidentified_only=unidentified_only,
         )
         stats = db.card_stats(conn)
+    sold = _sold_stems()
+    for row in rows:
+        row["sold"] = Path(row["crop_path"]).stem in sold
     return jsonify({"cards": rows, "stats": stats})
 
 
@@ -1047,6 +1050,23 @@ def _identify_job() -> Optional[int]:
 # Export + image upload
 # ----------------------------------------------------------------------
 
+def _sold_stems() -> set[str]:
+    try:
+        from webapp import sales_sync
+        return sales_sync.sold_stems()
+    except Exception as exc:   # the bench must keep working without the library layer
+        print(f"[bench] sold lookup failed: {exc}", file=sys.stderr)
+        return set()
+
+
+def _unsold(cards: list[dict]) -> list[dict]:
+    """Drop cards that have already sold somewhere. Publishing or exporting
+    one again would offer a card that is no longer there."""
+    sold = _sold_stems()
+    return [c for c in cards
+            if Path(c["crop_path"]).stem not in sold and c.get("ebay_listing_status") != "sold"]
+
+
 def _cards_payload(cards: list[dict]) -> list[dict]:
     """Coerce DB rows into the dict shape the CSV generator + listers expect."""
     payload = []
@@ -1075,7 +1095,7 @@ def _cards_payload(cards: list[dict]) -> list[dict]:
 def api_export_csvs():
     gc = get_csv_gen()
     with db.connect(DB_PATH) as conn:
-        cards = db.list_cards(conn, sort="newest")
+        cards = _unsold(db.list_cards(conn, sort="newest"))
     payload = _cards_payload(cards)
 
     CSVS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1229,7 +1249,7 @@ def api_publish_status():
     can_upload = connections.cloudinary_ready()
 
     with db.connect(DB_PATH) as conn:
-        cards = db.list_cards(conn, sort="newest")
+        cards = _unsold(db.list_cards(conn, sort="newest"))
     # Each site's filter mirrors what its publish path really sends: eBay
     # needs a hosted photo (uploaded on the way when Cloudinary is set up),
     # the TCGplayer CSV drops rows with no TCGplayer product id, Whatnot
@@ -1311,7 +1331,7 @@ def api_publish_ebay():
 
             can_upload = connections.cloudinary_ready()
             with db.connect(DB_PATH) as conn:
-                cards = _cards_payload(db.list_cards(conn, sort="newest"))
+                cards = _cards_payload(_unsold(db.list_cards(conn, sort="newest")))
             eligible = [c for c in cards
                         if c.get("final_price") and (c.get("image_url") or can_upload)]
             if skip_flagged:
@@ -1396,7 +1416,7 @@ def api_publish_portal():
         try:
             gc = get_csv_gen()
             with db.connect(DB_PATH) as conn:
-                payload = _cards_payload(db.list_cards(conn, sort="newest"))
+                payload = _cards_payload(_unsold(db.list_cards(conn, sort="newest")))
             CSVS_DIR.mkdir(parents=True, exist_ok=True)
             if site == "tcgplayer":
                 filename, rows_fn = "tcgplayer_bulk.csv", gc.tcgplayer_rows
@@ -1496,6 +1516,15 @@ backfill_order_events()
 from webapp.connections import connections_bp  # noqa: E402
 
 app.register_blueprint(connections_bp)
+
+# Sales read back from eBay (API) and Whatnot / TCGplayer (CSV exports), and
+# automatic seller payouts through Stripe Connect.
+from webapp import sales_sync  # noqa: E402
+from webapp.payouts import payouts_bp  # noqa: E402
+
+app.register_blueprint(sales_sync.sales_bp)
+app.register_blueprint(payouts_bp)
+sales_sync.start_background()
 
 
 @app.route("/api/session")

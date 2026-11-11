@@ -118,7 +118,10 @@ def _ebay_status() -> dict:
                        "RuName under User Tokens, not a URL.")
     else:
         try:
-            out["authorized"] = _ebay_auth().is_authorized()
+            from lib.ebay_oauth import SALES_SCOPE
+            auth = _ebay_auth()
+            out["authorized"] = auth.is_authorized()
+            out["can_read_sales"] = auth.has_scope(SALES_SCOPE)
         except Exception as exc:
             out["error"] = str(exc)
         if not out["authorized"]:
@@ -128,6 +131,10 @@ def _ebay_status() -> dict:
                            "values to .env so photos upload automatically when you publish.")
         else:
             out["next"] = "Connected. Run the account check once before your first publish."
+        if out["authorized"] and not out.get("can_read_sales"):
+            out["next"] += (" This connection was made before sales could be read back: "
+                            "disconnect and connect again to let the app see what sold.")
+    out.setdefault("can_read_sales", False)
     out["ready"] = bool(out["configured"] and out["authorized"])
     return out
 

@@ -60,6 +60,24 @@ python -m webapp.app
 Scan works without an account. Library, Decks and Marketplace need a login
 (`/register`).
 
+### Accounts, email confirmation and the operator
+
+Registering sends a link to confirm the email address. Until it is opened the
+account can keep a library and build decks, but cannot list, buy, or set up
+payouts. The link works once and lasts 24 hours; **Send the link again** on
+the Library page issues a new one.
+
+- With `SMTP_HOST` set (plus `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
+  `SMTP_FROM`), the link is emailed.
+- With no SMTP settings, the link is printed in the console window the app
+  runs in. That suits a local install: whoever can read the console runs it.
+
+The **operator** sees every seller's balance, triggers payouts and sees
+refunds that need doing by hand. An account is the operator when its address
+is listed in `ADMIN_EMAILS` (default `davisfox5@gmail.com`) **and** that
+address has been confirmed. Registering first, or registering a listed
+address without access to its mailbox, grants nothing.
+
 ### Scan
 
 1. Drop photos on the drop zone, or use **Take a photo** on a phone. Pick
@@ -300,9 +318,6 @@ prices unless you tick the box, and reports how many listed and the first
 error if any failed. Listing ids are written back to the database, so a
 second run updates offers instead of duplicating them.
 
-Not covered: the app does not read sales back from eBay. When a card sells
-there, record it in the library with **Sold elsewhere**.
-
 `python -m webapp.setup_ebay` still does step 2 from a terminal.
 
 ### TCGplayer and Whatnot (CSV upload through your seller portal)
@@ -337,6 +352,43 @@ on first use.
 
 `python -m webapp.setup_portal --site whatnot` still does steps 2 and 3 from a
 terminal.
+
+### Sales read back (eBay, Whatnot, TCGplayer)
+
+When a card sells on another site, the app records it so the library, the
+marketplace and the Scan page all agree the card is gone. The **Sales** panel
+on the Scan page does this.
+
+Every listing this app creates carries a SKU: the card photo's file name
+without its extension (`page01_r0c2`). That SKU is how a sale finds its card.
+
+- **eBay**: read over eBay's Fulfillment API (`getOrders`), every 30 minutes
+  (`EBAY_SALES_SYNC_MINUTES`, 0 turns it off) and on **Sync eBay sales**. It
+  covers your account and any user who connected their own. It needs the
+  read-only orders permission, which the consent page now asks for. **A
+  connection made before this change does not have it: disconnect and connect
+  eBay again under Connections.** Until then publishing keeps working and the
+  panel says sales cannot be read.
+- **Whatnot and TCGplayer**: neither has an orders API for regular sellers.
+  Export your sales from the site as a CSV, pick the site, and **Choose
+  CSV…**. The file needs a SKU column and a price column; order id, quantity,
+  fees and date are used when present. The app shows what it found and which
+  columns it read before recording anything.
+
+For each sale: the sold copies leave the owner's library, the card comes off
+this marketplace (an unpaid order for it is cancelled), a row with price and
+fees goes in the ledger under **Sold**, and the Scan page tags the card
+**sold** and stops including it in publishing and exports. Reading the same
+order or file again records nothing twice. Orders that were cancelled or
+fully refunded are skipped; unpaid ones are picked up once paid.
+
+A sale whose SKU matches no card in any library is listed under the Sales
+panel with the reason. Nothing is guessed from the title. Record it by hand
+with **Sold elsewhere**, then **Dismiss** it.
+
+Limits: a refund that happens after a sale was recorded is not undone here,
+and the real Whatnot and TCGplayer export column names have not been seen,
+only inferred, so the first import may report a missing column.
 
 ### Stripe (card payments on the marketplace)
 
@@ -376,16 +428,30 @@ with the session id to refund by hand.
 
 **Where the money goes.** Payments land in the Stripe account whose key is in
 `.env`. The platform fee (`PLATFORM_FEE_PCT`, default 10) stays there and the
-rest is owed to the seller. The operator sees **Seller balances** on the
-Library page and records each payout made (Venmo, cash, bank) with **Record
-payout**; sellers see what they are owed under **Listings & open orders**.
-The operator is the first account registered, or the addresses in
-`ADMIN_EMAILS`. Paying sellers out automatically (Stripe Connect) is not
-built.
+rest belongs to the seller.
 
-Card payments were tested with the real Stripe library's objects and
-signature check against an in-memory stand-in for Stripe's API, not against
-Stripe itself. Do one test-mode purchase before going live.
+**Automatic payouts (Stripe Connect).** A seller clicks **Set up payouts**
+under **Listings & open orders** and is sent to Stripe to enter their details
+and bank account; this app never sees them. From then on, when one of their
+card sales settles, their share is sent to their Stripe account by transfer,
+and Stripe pays it out to their bank on its schedule. Anything already owed
+is sent the moment setup finishes. Each order is paid at most once, and money
+the operator already paid by hand is not sent again.
+
+This needs **Connect switched on for your Stripe account** (Stripe dashboard,
+Connect). Without it, "Set up payouts" reports Stripe's error.
+
+A seller who has not set up payouts keeps a balance. The operator sees it in
+**Seller balances**, can pay it some other way and note it with **Record
+payout**, and can retry failed transfers with **Pay out now**.
+
+Checkout takes cards only. Payment methods that can fail days later would let
+a seller be paid for a charge that then bounces.
+
+Card payments and payouts were tested with the real Stripe library's objects
+and signature check against an in-memory stand-in for Stripe's API, not
+against Stripe itself. The calls follow Stripe's published docs. In test
+mode, do one purchase and one payout setup before going live.
 
 ## Pricing aggregation
 
@@ -452,6 +518,8 @@ pokemon-bulk-lister/
 │  ├─ tcgplayer_lister.py      # TCGPlayer seller-portal CSV upload
 │  ├─ whatnot_lister.py        # Whatnot Seller Hub CSV upload
 │  ├─ decks.py                 # decklist parser, library matching, Limitless popular decks
+│  ├─ ebay_orders.py           # eBay Fulfillment API: read sold orders
+│  ├─ mailer.py                # SMTP, or the console when SMTP is not set
 │  └─ cloudinary_client.py
 ├─ webapp/
 │  ├─ app.py                   # Scan bench: upload, identify, price, publish
@@ -462,6 +530,8 @@ pokemon-bulk-lister/
 │  ├─ decks.py                 # deck endpoints
 │  ├─ marketplace.py           # list, buy, orders, Stripe checkout, payouts
 │  ├─ connections.py           # setup + checks for eBay, portals, Stripe
+│  ├─ sales_sync.py            # sales read back: eBay orders, CSV exports
+│  ├─ payouts.py               # Stripe Connect onboarding + automatic transfers
 │  ├─ portfolio.py             # valuation, price history, alerts
 │  └─ templates/, static/      # index, portfolio, decks, market, login, register
 ├─ data/

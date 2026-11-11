@@ -34,7 +34,7 @@ from datetime import timedelta
 from flask import Blueprint, abort, jsonify, redirect, render_template, request
 from sqlalchemy.exc import IntegrityError
 
-from webapp.auth import current_user_id, login_required
+from webapp.auth import current_user_id, is_operator, login_required, verified_required
 from webapp.catalog import price_provenance
 from webapp.models import (
     CatalogCard,
@@ -42,6 +42,7 @@ from webapp.models import (
     MarketListing,
     Order,
     Payout,
+    SellerPayoutAccount,
     User,
     get_session,
     log_event,
@@ -111,7 +112,7 @@ def _create_listing(s, item: InventoryItem, price: float) -> MarketListing:
 
 
 @market_bp.route("/api/inventory/<int:item_id>/list-for-sale", methods=["POST"])
-@login_required
+@verified_required
 def list_for_sale(item_id: int):
     """One-click sell. Body: {"price": float?}, defaults to current market price."""
     body = request.get_json(silent=True) or {}
@@ -152,7 +153,7 @@ def list_for_sale(item_id: int):
 
 
 @market_bp.route("/api/inventory/list-for-sale", methods=["POST"])
-@login_required
+@verified_required
 def bulk_list_for_sale():
     """List many cards at their current market price in one go.
 
@@ -323,7 +324,7 @@ def browse():
 # ----------------------------------------------------------------------
 
 @market_bp.route("/api/market/listings/<int:listing_id>/buy", methods=["POST"])
-@login_required
+@verified_required
 def buy(listing_id: int):
     uid = current_user_id()
     s = get_session()
@@ -381,6 +382,11 @@ def buy(listing_id: int):
                     }],
                     metadata={"order_id": str(order.id)},
                     client_reference_id=str(order.id),
+                    # Cards only: they confirm at once. Payment methods that
+                    # can fail days later would let a seller be paid for a
+                    # charge that then bounces.
+                    payment_method_types=["card"],
+                    payment_intent_data={"transfer_group": f"order-{order.id}"},
                     # Stripe substitutes the session id into the template.
                     success_url=(f"{base}/market/orders/{order.id}/return"
                                  "?session_id={CHECKOUT_SESSION_ID}"),
@@ -623,6 +629,10 @@ def _apply_stripe_session(s, order: Order, session_obj) -> str:
             _refund(s, session_obj, order, "card no longer available")
             raise
         s.commit()
+        # The sale is done. Now send the seller their share, if they have
+        # payouts set up. A failure here leaves a balance to retry, nothing more.
+        from webapp import payouts
+        payouts.pay_seller_quietly(order.seller_id)
         return "paid"
 
     if session_obj["status"] == "expired":
@@ -949,24 +959,8 @@ def seller_balance(s, seller_id: int) -> dict:
     }
 
 
-def is_operator(s, uid) -> bool:
-    """The operator runs the install and holds the Stripe account. Set
-    ADMIN_EMAILS (comma separated) to name them; otherwise it is the first
-    account registered."""
-    if not uid:
-        return False
-    user = s.get(User, uid)
-    if user is None:
-        return False
-    admins = {e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()}
-    if admins:
-        return user.email.lower() in admins
-    first = s.query(User).order_by(User.id.asc()).first()
-    return first is not None and first.id == user.id
-
-
 @market_bp.route("/api/admin/balances")
-@login_required
+@verified_required
 def admin_balances():
     """Operator only: every seller with money moving, and what is owed."""
     s = get_session()
@@ -979,7 +973,9 @@ def admin_balances():
         rows = []
         for sid in sorted(seller_ids):
             user = s.get(User, sid)
+            acct = s.query(SellerPayoutAccount).filter_by(user_id=sid).one_or_none()
             rows.append({"seller_id": sid, "email": user.email if user else "?",
+                         "auto_payouts": bool(acct and acct.transfers_active),
                          **seller_balance(s, sid)})
         refunds_due = [{
             "order_id": o.id, "amount": o.amount, "payment_ref": o.payment_ref,
@@ -997,7 +993,7 @@ def admin_balances():
 
 
 @market_bp.route("/api/admin/payouts", methods=["POST"])
-@login_required
+@verified_required
 def record_payout():
     """Operator only. Body: {seller_id, amount, method?, note?}. Records that
     the operator sent a seller money; it does not move any money itself."""
@@ -1016,15 +1012,19 @@ def record_payout():
             seller = None
         if seller is None:
             return jsonify({"error": "unknown seller"}), 400
-        owed = seller_balance(s, seller.id)["balance"]
-        if amount > owed + 0.005:
-            return jsonify({"error": f"that is more than the ${owed:.2f} owed to this seller"}), 400
-        s.add(Payout(
-            seller_id=seller.id, amount=amount, recorded_by=uid,
-            method=str(body.get("method") or "")[:40] or None,
-            note=str(body.get("note") or "")[:500] or None,
-        ))
-        s.commit()
+        from webapp.payouts import payout_lock
+        # Check and record as one step, so a double submit (or an automatic
+        # transfer running at the same moment) cannot overdraw the balance.
+        with payout_lock:
+            owed = seller_balance(s, seller.id)["balance"]
+            if amount > owed + 0.005:
+                return jsonify({"error": f"that is more than the ${owed:.2f} owed to this seller"}), 400
+            s.add(Payout(
+                seller_id=seller.id, amount=amount, recorded_by=uid,
+                method=str(body.get("method") or "")[:40] or None,
+                note=str(body.get("note") or "")[:500] or None,
+            ))
+            s.commit()
         out = {"seller_id": seller.id, **seller_balance(s, seller.id)}
     finally:
         s.close()

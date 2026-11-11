@@ -10,10 +10,11 @@ from flask import Flask
 
 from webapp import catalog, decks as decks_view, models
 from webapp import db as bench_db
+from conftest import verify_link
 
 
 @pytest.fixture
-def app(tmp_path, monkeypatch):
+def app(tmp_path, monkeypatch, mail_outbox):
     monkeypatch.setenv("PRICE_REFRESH_ENABLED", "0")
     models.init_models(f"sqlite:///{tmp_path / 'app.sqlite'}")
     from webapp.auth import auth_bp
@@ -31,13 +32,18 @@ def app(tmp_path, monkeypatch):
     for bp in (auth_bp, catalog.catalog_bp, market_bp, library_bp, decks_view.decks_bp):
         flask_app.register_blueprint(bp)
     flask_app.bench_path = bench
+    flask_app.outbox = mail_outbox
     return flask_app
 
 
-def _user(app, email):
+def _user(app, email, verify=True):
+    from webapp import auth
     c = app.test_client()
     r = c.post("/register", json={"email": email, "password": "password123"})
     assert r.status_code == 200, r.get_data(as_text=True)
+    if verify:
+        # open the link from the email, as the user would
+        assert "verify=done" in c.get(verify_link(app.outbox, email)).headers["Location"]
     return c
 
 

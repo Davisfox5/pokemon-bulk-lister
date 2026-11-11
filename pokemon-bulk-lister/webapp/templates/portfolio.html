@@ -25,6 +25,15 @@
   </header>
 
   <main class="wrap wide">
+    <!-- Shown until the account's email address is confirmed -->
+    <section class="panel notice hidden" id="verify-banner" role="status">
+      <div>
+        <strong>Confirm your email address.</strong>
+        <span id="verify-text"></span>
+      </div>
+      <button id="btn-resend" class="btn">Send the link again</button>
+    </section>
+
     <!-- Stat tiles -->
     <section class="tiles">
       <div class="tile">
@@ -154,6 +163,7 @@
         <span id="fee-note" class="muted"></span>
       </div>
       <div id="money-line" class="totals-strip hidden"></div>
+      <div id="payout-line" class="totals-strip hidden"></div>
       <ul id="market-list" class="rules-list"><li class="muted">Nothing yet.</li></ul>
     </section>
 
@@ -161,14 +171,15 @@
     <section class="panel hidden" id="operator-panel">
       <div class="panel-head">
         <h2>Seller balances</h2>
-        <span class="muted">Card payments land in your Stripe account. This tracks what you owe each seller.</span>
+        <span class="muted">Card payments land in your Stripe account. Sellers with payouts set up are paid automatically; this tracks the rest.</span>
+        <button id="btn-run-payouts" class="btn" title="Send every seller with payouts set up what they are owed">Pay out now</button>
       </div>
       <div id="refunds-due" class="hidden"></div>
       <div class="table-scroll">
         <table class="inv-table">
           <thead><tr>
             <th>Seller</th><th class="num">Card sales, their share</th><th class="num">Paid out</th>
-            <th class="num">You owe them</th><th class="num">Fees they owe you</th><th></th>
+            <th class="num">You owe them</th><th class="num">Fees they owe you</th><th>Payouts</th><th></th>
           </tr></thead>
           <tbody id="operator-body"></tbody>
         </table>

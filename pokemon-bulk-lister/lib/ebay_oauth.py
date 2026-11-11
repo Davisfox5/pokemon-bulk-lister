@@ -45,6 +45,10 @@ USER_SCOPES = [
     "https://api.ebay.com/oauth/api_scope/sell.inventory",
     "https://api.ebay.com/oauth/api_scope/sell.account",
 ]
+# Read-only access to the seller's orders, for reading sales back
+# (lib/ebay_orders.py). Asked for at consent time from now on.
+SALES_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
+CONSENT_SCOPES = USER_SCOPES + [SALES_SCOPE]
 
 
 class EbayUserAuthError(RuntimeError):
@@ -82,6 +86,11 @@ class EbayUserAuth:
         self._access_token: Optional[str] = None
         self._access_expiry: float = 0.0
         self._refresh_token: Optional[str] = None
+        # What the saved authorization covers. A token saved before sales
+        # read-back existed has no list on file and covers USER_SCOPES only;
+        # refreshing it with a scope the user never granted would fail, so
+        # each token is refreshed with exactly the scopes it was granted.
+        self._scopes: list[str] = list(USER_SCOPES)
         self._load_refresh_token()
 
     # ------------------------------------------------------------------
@@ -96,6 +105,9 @@ class EbayUserAuth:
         except (json.JSONDecodeError, OSError):
             return
         self._refresh_token = data.get("refresh_token")
+        scopes = data.get("scopes")
+        if isinstance(scopes, list) and scopes:
+            self._scopes = [str(x) for x in scopes]
 
     def _save_refresh_token(self, refresh_token: str, expires_in: Optional[int]) -> None:
         payload = {
@@ -103,6 +115,7 @@ class EbayUserAuth:
             "saved_at": int(time.time()),
             "refresh_expires_in": expires_in,
             "env": "sandbox" if self.is_sandbox else "production",
+            "scopes": self._scopes,
         }
         # Owner-only from the first byte: this is a long-lived credential.
         fd = os.open(self.token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -115,6 +128,9 @@ class EbayUserAuth:
 
     def is_authorized(self) -> bool:
         return bool(self._refresh_token)
+
+    def has_scope(self, scope: str) -> bool:
+        return self.is_authorized() and scope in self._scopes
 
     def _basic_header(self) -> str:
         if not self.client_id or not self.client_secret:
@@ -137,7 +153,7 @@ class EbayUserAuth:
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "response_type": "code",
-            "scope": " ".join(scopes or USER_SCOPES),
+            "scope": " ".join(scopes or CONSENT_SCOPES),
             "state": state,
         }
         return f"{self.auth_url}?{urllib.parse.urlencode(params)}"
@@ -159,8 +175,10 @@ class EbayUserAuth:
         # Otherwise assume the user pasted the bare code.
         return urllib.parse.unquote(redirect_response)
 
-    def exchange_code(self, code: str) -> dict:
-        """Trade an authorization code for access + refresh tokens; persist refresh."""
+    def exchange_code(self, code: str, scopes: Optional[list[str]] = None) -> dict:
+        """Trade an authorization code for access + refresh tokens; persist
+        refresh. `scopes` is what the consent URL asked for (default: the
+        full set build_consent_url requests)."""
         resp = self._session.post(
             f"{self.base_url}/identity/v1/oauth2/token",
             headers={
@@ -184,6 +202,7 @@ class EbayUserAuth:
             raise EbayUserAuthError(
                 f"no refresh_token in eBay's response (fields: {sorted(payload)})")
         self._refresh_token = refresh
+        self._scopes = list(scopes or CONSENT_SCOPES)
         self._access_token = payload.get("access_token")
         self._access_expiry = time.time() + int(payload.get("expires_in", 7200))
         self._save_refresh_token(refresh, payload.get("refresh_token_expires_in"))
@@ -211,7 +230,7 @@ class EbayUserAuth:
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": self._refresh_token,
-                "scope": " ".join(USER_SCOPES),
+                "scope": " ".join(self._scopes),
             },
             timeout=self.timeout,
         )

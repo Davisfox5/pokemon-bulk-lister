@@ -86,6 +86,27 @@
     <div id="publish-msg" class="muted"></div>
   </section>
 
+  <section class="panel sales-panel">
+    <div class="publish-row">
+      <strong>Sales</strong>
+      <button id="sync-ebay-btn" title="Read recent orders from eBay and record what sold">Sync eBay sales</button>
+      <label class="inline">Import a sales export from
+        <select id="sales-source"><option value="whatnot">Whatnot</option><option value="tcgplayer">TCGplayer</option></select>
+      </label>
+      <button id="sales-import-btn" type="button">Choose CSV…</button>
+      <input id="sales-file" type="file" accept=".csv,text/csv" hidden />
+      <span id="sales-meta" class="muted small"></span>
+    </div>
+    <div id="sales-msg" class="muted" role="status"></div>
+    <div id="sales-unmatched" class="hidden">
+      <div class="muted small">Sales that could not be tied to a card in a library. Record them by hand with “Sold elsewhere” in the library, then dismiss.</div>
+      <table>
+        <thead><tr><th>Sold</th><th>Where</th><th>SKU</th><th>Title</th><th>Qty</th><th>Each</th><th>Why</th><th></th></tr></thead>
+        <tbody id="sales-unmatched-body"></tbody>
+      </table>
+    </div>
+  </section>
+
   <section id="publish-bar" class="panel job-bar hidden">
     <div class="job-message" id="publish-bar-msg">Publishing…</div>
     <div class="progress"><div id="publish-progress-fill" class="progress-fill"></div></div>

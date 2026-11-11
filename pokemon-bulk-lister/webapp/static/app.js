@@ -92,6 +92,7 @@ function renderRow(card) {
       <td>
         <strong>${escapeHtml(card.name) || "<span class='muted'>(unidentified)</span>"}</strong>
         ${card.is_holo ? "<span class='muted'> · holo</span>" : ""}
+        ${card.sold ? "<span class='sold-tag' title='Sold. It is left out of publishing and exports.'>sold</span>" : ""}
         <div class="muted small">${escapeHtml(card.condition_guess || "")}</div>
       </td>
       <td class="muted small">${escapeHtml(setBits)}</td>
@@ -821,6 +822,112 @@ function setupPublish() {
 
 let refreshPublishStatus = () => {};
 
+// ---------------------------------------------------------------- sales read back
+// eBay orders come over its API; Whatnot and TCGplayer sales come in as the
+// CSV those sites export. Either way a sale finds its card by SKU.
+async function loadSales() {
+  const s = await api("/api/sales/status");
+  const e = s.ebay;
+  $("#sales-meta").textContent = !e.connected ? "eBay not connected"
+    : !e.can_read_sales ? "reconnect eBay under Connections to read its sales"
+    : s.last_sync_at ? `eBay last checked ${new Date(s.last_sync_at).toLocaleTimeString()}; checked automatically every 30 minutes`
+    : "eBay is checked automatically every 30 minutes";
+  $("#sync-ebay-btn").disabled = !e.connected;
+  const box = $("#sales-unmatched");
+  box.classList.toggle("hidden", !s.unmatched.length);
+  $("#sales-unmatched-body").innerHTML = s.unmatched.map(u => `<tr class="flag" data-id="${u.id}">
+      <td>${u.sold_at ? new Date(u.sold_at).toLocaleDateString() : "—"}</td>
+      <td>${escapeHtml(u.source)}</td>
+      <td>${escapeHtml(u.sku || "—")}</td>
+      <td>${escapeHtml(u.title || "")}</td>
+      <td class="price">${u.quantity}</td>
+      <td class="price">${fmt(u.unit_price)}</td>
+      <td class="small">${escapeHtml(u.detail || "")}</td>
+      <td class="actions"><button data-act="dismiss-sale">Dismiss</button></td>
+    </tr>`).join("");
+}
+
+function salesSummary(r, where) {
+  const bits = [`${plural(r.recorded, "sale")} recorded from ${where} ($${(r.total || 0).toFixed(2)})`];
+  if (r.unmatched) bits.push(`${r.unmatched} could not be matched to a library card (listed below)`);
+  if (r.duplicates) bits.push(`${r.duplicates} already recorded`);
+  if (r.void) bits.push(`${r.void} cancelled or refunded`);
+  if (r.not_paid_yet) bits.push(`${r.not_paid_yet} not paid yet`);
+  if (r.skipped) bits.push(`${r.skipped} rows skipped (no SKU or price)`);
+  return bits.join("; ") + ".";
+}
+
+function setupSales() {
+  const msg = $("#sales-msg");
+  $("#sync-ebay-btn").addEventListener("click", async () => {
+    const btn = $("#sync-ebay-btn");
+    btn.disabled = true; msg.textContent = "Reading eBay orders from the last 30 days…";
+    try {
+      const r = await api("/api/sales/sync/ebay", { method: "POST", body: "{}" });
+      msg.textContent = salesSummary(r, "eBay") + (r.problems.length ? ` Problems: ${r.problems.join("; ")}` : "");
+      await loadCards();
+    } catch (err) {
+      msg.textContent = `eBay sync did not run: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+      loadSales().catch(() => {});
+    }
+  });
+
+  const file = $("#sales-file");
+  $("#sales-import-btn").addEventListener("click", () => file.click());
+  file.addEventListener("change", async () => {
+    if (!file.files.length) return;
+    const source = $("#sales-source").value;
+    const name = source === "whatnot" ? "Whatnot" : "TCGplayer";
+    const send = async dryRun => {
+      const fd = new FormData();
+      fd.append("file", file.files[0]);
+      fd.append("source", source);
+      if (dryRun) fd.append("dry_run", "1");
+      const res = await fetch("/api/sales/import", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `import failed (${res.status})`);
+      return data;
+    };
+    try {
+      const p = await send(true);
+      const fresh = p.sales - p.already_imported;
+      if (!fresh) {
+        msg.textContent = p.sales
+          ? `Nothing new: all ${p.sales} sales in that file were imported before.`
+          : `No sales found in that file (${p.rows} rows, ${p.skipped} without a SKU or price).`;
+        return;
+      }
+      const { ok } = await askConfirm({
+        title: `Record ${plural(fresh, "sale")} from ${name}?`,
+        html: `<p>${plural(fresh, "sale")} worth $${p.total.toFixed(2)} will be recorded. Each sold card leaves its
+          owner's library, comes off the marketplace, and shows under Sold.</p>
+          <p class="muted">Read from columns: SKU “${escapeHtml(p.columns.sku)}”, price “${escapeHtml(p.columns.price)}”${p.columns.quantity ? `, quantity “${escapeHtml(p.columns.quantity)}”` : ""}${p.columns.date ? `, date “${escapeHtml(p.columns.date)}”` : ""}.
+          ${p.already_imported ? `${p.already_imported} were imported before and are skipped.` : ""}
+          ${p.skipped ? `${p.skipped} rows have no SKU or price and are skipped.` : ""}</p>`,
+        confirm: "Record sales",
+      });
+      if (!ok) return;
+      msg.textContent = salesSummary(await send(false), name);
+      await loadCards();   // sold cards get their tag and leave the publish counts
+    } catch (err) {
+      msg.textContent = `Could not import: ${err.message}`;
+    } finally {
+      file.value = "";
+      loadSales().catch(() => {});
+    }
+  });
+
+  $("#sales-unmatched-body").addEventListener("click", async ev => {
+    const btn = ev.target.closest('[data-act="dismiss-sale"]');
+    if (!btn) return;
+    await api(`/api/sales/external/${btn.closest("tr").dataset.id}/dismiss`, { method: "POST", body: "{}" });
+    loadSales().catch(() => {});
+  });
+  loadSales().catch(() => {});
+}
+
 // ---------------------------------------------------------------- connections
 // One panel that says, for each outside service, whether it is connected and
 // what the next step is, and runs that step where it can.
@@ -1042,5 +1149,6 @@ setupBundleModal();
 setupToolbar();
 setupPublish();
 setupConnections();
+setupSales();
 setupKeyboard();
 loadCards();
