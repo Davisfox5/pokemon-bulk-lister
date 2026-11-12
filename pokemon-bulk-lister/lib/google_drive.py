@@ -14,6 +14,10 @@ Google's documented endpoints:
   export    GET  .../drive/v3/files/{id}/export?mimeType=text/csv
                  (a Google Sheet as CSV: its first sheet, up to 10 MB)
 
+Two ways in. A person signs in with OAuth and the app sees their Drive. Or
+a service account (GOOGLE_SA_EMAIL / GOOGLE_SA_PRIVATE_KEY) acts as itself
+and sees only what was shared with its email address.
+
 The only scope asked for is drive.readonly. Nothing here can change, share
 or delete a file. Not run against Google in this environment (no client id
 was available); the tests use stand-in HTTP responses in these shapes.
@@ -94,6 +98,38 @@ def access_token(client_id: str, client_secret: str, refresh_token: str,
     return body["access_token"]
 
 
+def service_account_token(email: str, private_key_pem: str, http: Any = None, timeout: int = 20) -> str:
+    """An access token for a Google service account (the JWT bearer grant:
+    a claim set signed with the account's private key, traded at the token
+    endpoint). The account acts as itself, with no user impersonated, so it
+    only sees files and folders that were shared with its email address."""
+    import base64
+    import json
+    import time
+
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    def b64(raw: bytes) -> bytes:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+    # Environment variables often carry the key with literal "\n" in it.
+    pem = private_key_pem.strip().strip('"').replace("\\n", "\n").encode()
+    try:
+        key = serialization.load_pem_private_key(pem, password=None)
+    except Exception as exc:
+        raise DriveError("the service account private key could not be read (it should be the PEM text "
+                         "from the key file, starting with -----BEGIN PRIVATE KEY-----)") from exc
+    now = int(time.time())
+    signing_input = b64(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()) + b"." + b64(json.dumps({
+        "iss": email, "scope": SCOPE, "aud": TOKEN_URL, "iat": now, "exp": now + 3600}).encode())
+    signature = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    body = _token_request({
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": (signing_input + b"." + b64(signature)).decode()}, http, timeout)
+    return body["access_token"]
+
+
 def revoke(token: str, http: Any = None, timeout: int = 20) -> None:
     try:
         (http or requests).post(REVOKE_URL, params={"token": token}, timeout=timeout)
@@ -113,6 +149,11 @@ class Drive:
             raise DriveNotAuthorized("Google no longer accepts this sign-in; connect Google Drive again")
         if resp.status_code == 404:
             raise DriveError("that file was not found in your Drive")
+        if resp.status_code == 403 and ("has not been used in project" in resp.text
+                                        or "accessNotConfigured" in resp.text):
+            raise DriveError("The Google Drive API is switched off in the Google Cloud project these "
+                             "credentials belong to. In Google Cloud Console, open that project, go to "
+                             "APIs & Services, Library, find Google Drive API and click Enable.")
         if resp.status_code != 200:
             raise DriveError(f"Google Drive answered {resp.status_code}: {resp.text[:200]}")
         return resp

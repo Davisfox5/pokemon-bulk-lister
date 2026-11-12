@@ -9,7 +9,12 @@ Photos are imported by the scan bench (webapp/app.py, `/api/drive/import/photo`)
 which uses `drive_for` from here. Spreadsheets go through the same importers
 as an uploaded file (webapp/listing_import.py).
 
-Setup: a Google Cloud OAuth client (type "Web application") with
+An install can also have a Google service account (GOOGLE_SA_EMAIL,
+GOOGLE_SA_PRIVATE_KEY). It needs no sign-in: the operator shares a Drive
+folder with the service account's address and imports from it. Only the
+operator gets it.
+
+Setup for per-account sign-in: a Google Cloud OAuth client (type "Web application") with
 `<this site>/api/drive/callback` as an authorized redirect URI, the Drive API
 enabled, and GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET set.
 """
@@ -35,7 +40,43 @@ MAX_SHEET_BYTES = 40 * 1024 * 1024
 
 
 def configured() -> bool:
+    """Per-account sign-in (OAuth) is set up."""
     return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
+
+
+def service_account() -> Optional[tuple[str, str]]:
+    """(email, private key) of the install's Google service account, if set."""
+    email, key = os.getenv("GOOGLE_SA_EMAIL", "").strip(), os.getenv("GOOGLE_SA_PRIVATE_KEY", "")
+    return (email, key) if email and key.strip() else None
+
+
+def _uses_service_account(uid: int) -> bool:
+    """The service account stands for the install, so it is the operator's
+    alone: what is shared with it must not be browsable by every account.
+    An operator who connected their own Drive uses that instead."""
+    from webapp.auth import is_operator
+    from webapp.models import get_session
+
+    if service_account() is None or (configured() and connected(uid)):
+        return False
+    s = get_session()
+    try:
+        return is_operator(s, uid)
+    finally:
+        s.close()
+
+
+_sa_token: dict = {"value": None, "until": 0.0, "for": None}
+
+
+def _service_account_drive() -> google_drive.Drive:
+    import time
+
+    email, key = service_account()
+    if _sa_token["for"] != email or time.time() >= _sa_token["until"]:
+        _sa_token.update(value=google_drive.service_account_token(email, key),
+                         until=time.time() + 3000, **{"for": email})
+    return google_drive.Drive(_sa_token["value"])
 
 
 def _client() -> tuple[str, str]:
@@ -77,8 +118,12 @@ def connected(uid: int) -> bool:
 def drive_for(uid: int) -> google_drive.Drive:
     """A Drive client for this account. Raises DriveNotAuthorized when the
     account has not connected Drive or Google has withdrawn the sign-in."""
+    if _uses_service_account(uid):
+        return _service_account_drive()
     if not configured():
-        raise google_drive.DriveError("Google Drive is not set up on this install")
+        raise google_drive.DriveError(
+            "Google Drive on this install is the operator's only" if service_account()
+            else "Google Drive is not set up on this install")
     token = _saved_token(uid)
     if token is None:
         raise google_drive.DriveNotAuthorized("Google Drive is not connected for this account")
@@ -110,7 +155,12 @@ def _local_path(target: Optional[str]) -> str:
 @drive_bp.route("/api/drive/status")
 @login_required
 def status():
-    return jsonify({"configured": configured(), "connected": configured() and connected(current_user_id())})
+    uid = current_user_id()
+    if _uses_service_account(uid):
+        # The address is what the operator shares a Drive folder with.
+        return jsonify({"configured": True, "connected": True, "mode": "service_account",
+                        "share_with": service_account()[0]})
+    return jsonify({"configured": configured(), "connected": configured() and connected(uid), "mode": "oauth"})
 
 
 @drive_bp.route("/api/drive/connect")
@@ -156,7 +206,7 @@ def disconnect():
     if token:
         google_drive.revoke(token)
     runtime.state_set(_key(uid), None)
-    return jsonify({"configured": configured(), "connected": False})
+    return jsonify({"configured": configured(), "connected": False, "mode": "oauth"})
 
 
 @drive_bp.route("/api/drive/files")

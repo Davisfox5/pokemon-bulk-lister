@@ -610,7 +610,8 @@ async function postListingFile(source, file, dryRun) {
 $("#btn-import-listings").addEventListener("click", () => {
   openDialog($("#listings-dialog"));
   loadListingImport().catch((err) => toast(err.message, "err"));
-  api("/api/drive/status").then((d) => $("#btn-drive-disconnect").classList.toggle("hidden", !d.connected))
+  api("/api/drive/status").then((d) => $("#btn-drive-disconnect").classList.toggle(
+    "hidden", !d.connected || d.mode === "service_account"))
     .catch(() => {});
 });
 

@@ -26,7 +26,7 @@ class FakeGoogle:
     """accounts.google.com, oauth2.googleapis.com and the Drive API."""
 
     def __init__(self):
-        self.calls, self.revoked = [], []
+        self.calls, self.revoked, self.assertions = [], [], []
         self.refresh_ok = True
         self.files = {
             "f1": {"id": "f1", "name": "Binder", "mimeType": FOLDER},
@@ -48,6 +48,9 @@ class FakeGoogle:
         if url == google_drive.REVOKE_URL:
             self.revoked.append(params["token"])
             return _Resp(200, {})
+        if data["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer":
+            self.assertions.append(data["assertion"])
+            return _Resp(200, {"access_token": "at-2", "expires_in": 3600})
         if data["grant_type"] == "authorization_code":
             if data["code"] != "good-code":
                 return _Resp(400, {"error": "invalid_grant", "error_description": "Bad Request"})
@@ -98,7 +101,7 @@ def _connect(client):
 
 def test_connecting_asks_google_for_read_only_access_and_keeps_the_token_sealed(google):
     me = _user(google, "a@example.com")
-    assert me.get("/api/drive/status").get_json() == {"configured": True, "connected": False}
+    assert me.get("/api/drive/status").get_json() == {"configured": True, "connected": False, "mode": "oauth"}
     assert google.test_client().get("/api/drive/status").status_code == 401
 
     r, q = _connect(me)
@@ -138,7 +141,7 @@ def test_a_sign_in_this_browser_did_not_start_is_refused(google):
 def test_without_google_credentials_the_feature_says_so(google, monkeypatch):
     monkeypatch.delenv("GOOGLE_CLIENT_ID")
     me = _user(google, "a@example.com")
-    assert me.get("/api/drive/status").get_json() == {"configured": False, "connected": False}
+    assert me.get("/api/drive/status").get_json() == {"configured": False, "connected": False, "mode": "oauth"}
     assert me.get("/api/drive/connect?next=/").headers["Location"] == "/?drive=not-set-up"
     assert me.get("/api/drive/files").status_code == 400
 
@@ -228,3 +231,61 @@ def test_oversized_files_are_refused_before_and_after_download():
         d.download("lies", 100)
     with pytest.raises(google_drive.DriveError, match="not a Drive file id"):
         d.download("../etc", 100)
+
+
+def test_a_service_account_gives_the_operator_what_was_shared_with_it_and_nobody_else(google, monkeypatch):
+    import base64
+    import json
+
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    monkeypatch.delenv("GOOGLE_CLIENT_ID")                       # no per-account sign-in on this install
+    monkeypatch.setenv("GOOGLE_SA_EMAIL", "bot@proj.iam.gserviceaccount.com")
+    monkeypatch.setenv("GOOGLE_SA_PRIVATE_KEY", pem.replace("\n", "\\n"))    # the way env vars carry it
+    monkeypatch.setattr(drive, "_sa_token", {"value": None, "until": 0.0, "for": None})
+
+    op, seller = _user(google, "op@example.com"), _user(google, "seller@example.com")
+    assert op.get("/api/drive/status").get_json() == {
+        "configured": True, "connected": True, "mode": "service_account",
+        "share_with": "bot@proj.iam.gserviceaccount.com"}
+    listing = op.get("/api/drive/files?kind=sheets&folder=shared-with-me").get_json()
+    assert sorted(f["name"] for f in listing["files"]) == ["My cards", "whatnot.csv"]
+
+    # Google was sent a claim signed by the account's key, for read-only Drive, impersonating nobody.
+    head, claims, signature = google.google.assertions[0].split(".")
+    unb64 = lambda part: base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))   # noqa: E731
+    key.public_key().verify(unb64(signature), f"{head}.{claims}".encode(), padding.PKCS1v15(), hashes.SHA256())
+    said = json.loads(unb64(claims))
+    assert (said["iss"], said["scope"], said["aud"]) == (
+        "bot@proj.iam.gserviceaccount.com", google_drive.SCOPE, google_drive.TOKEN_URL)
+    assert "sub" not in said and said["exp"] - said["iat"] == 3600
+    op.get("/api/drive/files?kind=sheets&folder=shared-with-me")
+    assert len(google.google.assertions) == 1                    # the token is reused, not minted per request
+
+    r = op.post("/api/drive/import/sheet", json={"file_id": "s1", "source": "cards"}).get_json()
+    assert (r["added"], r["cards"]) == (2, 3)
+
+    # Everyone else: no Drive, and nothing of what was shared with the install.
+    assert seller.get("/api/drive/status").get_json() == {"configured": False, "connected": False, "mode": "oauth"}
+    r = seller.get("/api/drive/files?kind=sheets&folder=shared-with-me")
+    assert r.status_code == 400 and "operator" in r.get_json()["error"]
+    assert seller.post("/api/drive/import/sheet", json={"file_id": "s1", "source": "cards"}).status_code == 400
+
+    monkeypatch.setenv("GOOGLE_SA_PRIVATE_KEY", "not a key")
+    monkeypatch.setattr(drive, "_sa_token", {"value": None, "until": 0.0, "for": None})
+    r = op.get("/api/drive/files?kind=sheets&folder=shared-with-me")
+    assert r.status_code == 400 and "private key could not be read" in r.get_json()["error"]
+
+
+def test_a_project_with_the_drive_api_off_says_how_to_turn_it_on():
+    class Off:
+        def get(self, url, headers=None, params=None, timeout=None):
+            return _Resp(403, {"error": {"code": 403, "message": "Google Drive API has not been used in "
+                                         "project 123 before or it is disabled."}})
+
+    with pytest.raises(google_drive.DriveError, match="switched off.*click Enable"):
+        google_drive.Drive("at", http=Off()).list("root", "photos")

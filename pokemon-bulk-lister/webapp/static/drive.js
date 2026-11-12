@@ -18,7 +18,7 @@
     return data;
   }
 
-  let dlg, opts, trail, picked, listing;
+  let dlg, opts, trail, picked, listing, shareWith;
 
   function build() {
     if (dlg) return;
@@ -77,7 +77,7 @@
       if (err.reconnect || err.status === 409) return offerConnect();
       return note(h(err.message));
     }
-    const top = trail.length === 1 ? [{ id: "shared-with-me", name: "Shared with me" }] : [];
+    const top = trail.length === 1 && !shareWith ? [{ id: "shared-with-me", name: "Shared with me" }] : [];
     const rows = top.concat(listing.folders).map((f) =>
       `<li class="drive-row"><button type="button" class="folder" data-drive="open" data-id="${h(f.id)}" data-name="${h(f.name)}">📁 ${h(f.name)}</button></li>`)
       .concat(listing.files.map((f) =>
@@ -86,7 +86,8 @@
     const what = opts.kind === "photos" ? "photos" : "Google Sheets or CSV files";
     dlg.querySelector(".drive-body").innerHTML = rows.length
       ? `<ul>${rows.join("")}</ul>` + (listing.next ? `<p class="drive-note"><button type="button" data-drive="more">Show more</button></p>` : "")
-      : `<p class="drive-note">No ${what} in this folder.</p>`;
+      : `<p class="drive-note">No ${what} in this folder.${shareWith && trail.length === 1
+          ? `<br><br>In Google Drive, share a folder with <strong>${h(shareWith)}</strong> (Viewer is enough). It shows up here.` : ""}</p>`;
   }
 
   async function offerConnect() {
@@ -124,10 +125,14 @@
     }
   }
 
-  window.openDrivePicker = function (options) {
+  window.openDrivePicker = async function (options) {
     build();
     opts = options;
-    trail = [{ id: "root", name: "My Drive" }];
+    // An install with a service account has no Drive of its own to show:
+    // the starting point is whatever was shared with its address.
+    const status = await get("/api/drive/status").catch(() => ({}));
+    shareWith = status.mode === "service_account" ? status.share_with : null;
+    trail = shareWith ? [{ id: "shared-with-me", name: "Shared with this app" }] : [{ id: "root", name: "My Drive" }];
     picked = new Map();
     listing = { folders: [], files: [], next: null };
     dlg.querySelector("h2").textContent = options.title || "Google Drive";

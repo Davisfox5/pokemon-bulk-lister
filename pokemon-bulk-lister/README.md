@@ -480,7 +480,14 @@ when a row does not give one. Each row is added as the card it states, with
 a count first and a confirmation. Reading the same sheet again adds nothing.
 Excel files are not read; save as Google Sheets or CSV.
 
-Setup, once, in Google Cloud Console:
+**With a service account** (`GOOGLE_SA_EMAIL`, `GOOGLE_SA_PRIVATE_KEY`) there
+is no sign-in. In Google Drive, share a folder with the service account's
+address (Viewer is enough) and it appears in the picker under "Shared with
+this app". The **Google Drive API** must be enabled in the service account's
+Google Cloud project. Only the operator gets this; what is shared with the
+install is not shown to other accounts.
+
+**With per-account sign-in**, once, in Google Cloud Console:
 
 1. Create a project, enable the **Google Drive API**.
 2. **OAuth consent screen**: External, add the scope
@@ -497,7 +504,8 @@ ends each sign-in after 7 days and only test users can connect; publishing
 the consent screen lifts both, and `drive.readonly` then needs Google's
 verification for use by the public.
 
-Not run against Google here (no client id was available).
+The service account path was run against Google (token and Drive calls).
+The per-account sign-in was not (no client id was available).
 
 ### Stripe (card payments on the marketplace)
 
