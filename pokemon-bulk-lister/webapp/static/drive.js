@@ -18,7 +18,7 @@
     return data;
   }
 
-  let dlg, opts, trail, picked, listing, shareWith;
+  let dlg, opts, trail, picked, listing, shareWith, startId;
 
   function build() {
     if (dlg) return;
@@ -26,7 +26,12 @@
     style.textContent = `
       #drive-dialog { width: min(640px, 94vw); border: 1px solid var(--border, #e2e2e2); border-radius: 8px; padding: 16px; }
       #drive-dialog h2 { margin: 0 0 8px; font-size: 16px; }
-      #drive-dialog .drive-link { display: flex; gap: 6px; margin-bottom: 8px; }
+      #drive-dialog .drive-link { display: flex; gap: 6px; margin-top: 6px; }
+      #drive-dialog .drive-more { margin-top: 8px; font-size: 13px; color: var(--muted, #6b7280); }
+      #drive-dialog .drive-more summary { cursor: pointer; }
+      #drive-dialog .drive-tools { display: flex; gap: 12px; align-items: center; font-size: 13px; margin-bottom: 6px; min-height: 18px; }
+      #drive-dialog .drive-tools button { background: none; border: 0; padding: 0; color: var(--accent, #2563eb); cursor: pointer; font: inherit; }
+      #drive-dialog .drive-tools .said { color: var(--muted, #6b7280); }
       #drive-dialog .drive-link input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border, #e2e2e2); border-radius: 6px; font: inherit; }
       #drive-dialog .drive-trail { font-size: 13px; margin-bottom: 6px; }
       #drive-dialog .drive-trail button, #drive-dialog .drive-row button.folder { background: none; border: 0; padding: 0; color: var(--accent, #2563eb); cursor: pointer; font: inherit; }
@@ -43,9 +48,12 @@
     dlg = document.createElement("dialog");
     dlg.id = "drive-dialog";
     dlg.innerHTML = `<h2></h2>
-      <form class="drive-link"><input type="url" name="link" placeholder="Paste a Drive folder link to open it" aria-label="Drive folder link">
-        <button type="submit">Open</button></form>
-      <div class="drive-trail"></div><div class="drive-body"></div>
+      <div class="drive-trail"></div>
+      <div class="drive-tools"></div>
+      <div class="drive-body"></div>
+      <details class="drive-more"><summary>Folder not listed? Open it by link</summary>
+        <form class="drive-link"><input type="url" name="link" placeholder="Paste a Drive folder link" aria-label="Drive folder link">
+          <button type="submit">Open</button></form></details>
       <div class="drive-foot"><span class="count"></span>
         <button type="button" data-drive="cancel">Cancel</button>
         <button type="button" data-drive="use" class="primary btn-primary btn" disabled>Import</button></div>`;
@@ -63,6 +71,33 @@
     dlg.querySelector(".drive-trail").innerHTML = trail.map((f, i) =>
       i === trail.length - 1 ? `<strong>${h(f.name)}</strong>`
         : `<button type="button" data-drive="up" data-depth="${i}">${h(f.name)}</button>`).join(" / ");
+  }
+
+  // Above the list: tick everything here, and make this folder the place
+  // the picker opens at from now on.
+  function drawTools() {
+    const here = trail[trail.length - 1];
+    const real = trail.length > 1 && here.id !== "shared-with-me";
+    const parts = [];
+    if (opts.multiple && listing.files.length) {
+      const all = listing.files.every((f) => picked.has(f.id));
+      parts.push(`<button type="button" data-drive="all">${all ? "Clear selection here" : `Select all ${listing.files.length} here`}</button>`);
+    }
+    if (real) {
+      parts.push(here.id === startId
+        ? `<span class="said">The picker opens in this folder.</span> <button type="button" data-drive="unpin">Stop</button>`
+        : `<button type="button" data-drive="pin">Always open in this folder</button>`);
+    }
+    dlg.querySelector(".drive-tools").innerHTML = parts.join("");
+  }
+
+  async function pin(link) {
+    const res = await fetch("/api/drive/folder", link
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ link }) }
+      : { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) startId = data.start_folder ? data.start_folder.id : null;
+    drawTools();
   }
 
   function drawFoot() {
@@ -89,11 +124,12 @@
       .concat(listing.files.map((f) =>
         `<li class="drive-row"><label><input type="${opts.multiple ? "checkbox" : "radio"}" name="drive-file" value="${h(f.id)}" ${picked.has(f.id) ? "checked" : ""}>
            <span class="name">${h(f.name)}</span></label><span class="meta">${size(f.size)}</span></li>`));
+    drawTools();
     const what = opts.kind === "photos" ? "photos" : "Google Sheets or CSV files";
     dlg.querySelector(".drive-body").innerHTML = rows.length
       ? `<ul>${rows.join("")}</ul>` + (listing.next ? `<p class="drive-note"><button type="button" data-drive="more">Show more</button></p>` : "")
       : `<p class="drive-note">No ${what} in this folder.${shareWith && trail.length === 1
-          ? `<br><br>Paste the link of a folder shared as “anyone with the link” above. A private folder has to be shared with <strong>${h(shareWith)}</strong> first.` : ""}</p>`;
+          ? `<br><br>Paste the link of a folder shared as “anyone with the link” below. A private folder has to be shared with <strong>${h(shareWith)}</strong> first.` : ""}</p>`;
   }
 
   async function offerConnect() {
@@ -120,6 +156,8 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw Object.assign(new Error(data.error || "could not open that folder"), data, { status: res.status });
       input.value = "";
+      startId = data.start_folder.id;
+      dlg.querySelector(".drive-more").open = false;
       trail = [trail[0], data.start_folder];
       load();
     } catch (err) {
@@ -133,7 +171,7 @@
     const file = listing.files.find((f) => f.id === e.target.value);
     if (!opts.multiple) picked.clear();
     if (e.target.checked) picked.set(file.id, file); else picked.delete(file.id);
-    drawFoot();
+    drawFoot(); drawTools();
   }
 
   function onClick(e) {
@@ -144,6 +182,14 @@
     else if (act === "open") { trail.push({ id: btn.dataset.id, name: btn.dataset.name }); load(); }
     else if (act === "up") { trail = trail.slice(0, Number(btn.dataset.depth) + 1); load(); }
     else if (act === "more") load(listing.next);
+    else if (act === "pin") pin(trail[trail.length - 1].id);
+    else if (act === "unpin") pin(null);
+    else if (act === "all") {
+      const all = listing.files.every((f) => picked.has(f.id));
+      for (const f of listing.files) { if (all) picked.delete(f.id); else picked.set(f.id, f); }
+      dlg.querySelectorAll('input[name="drive-file"]').forEach((box) => { box.checked = !all; });
+      drawFoot(); drawTools();
+    }
     else if (act === "use") {
       const files = Array.from(picked.values());
       dlg.close();
@@ -159,7 +205,9 @@
     const status = await get("/api/drive/status").catch(() => ({}));
     shareWith = status.mode === "service_account" ? status.share_with : null;
     trail = shareWith ? [{ id: "shared-with-me", name: "Shared with this app" }] : [{ id: "root", name: "My Drive" }];
+    startId = status.start_folder ? status.start_folder.id : null;
     if (status.start_folder) trail.push(status.start_folder);
+    dlg.querySelector(".drive-tools").innerHTML = "";
     picked = new Map();
     listing = { folders: [], files: [], next: null };
     dlg.querySelector("h2").textContent = options.title || "Google Drive";

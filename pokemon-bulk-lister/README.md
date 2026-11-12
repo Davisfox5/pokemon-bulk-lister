@@ -480,10 +480,12 @@ when a row does not give one. Each row is added as the card it states, with
 a count first and a confirmation. Reading the same sheet again adds nothing.
 Excel files are not read; save as Google Sheets or CSV.
 
-**Open a folder by link.** Paste a Drive folder's address into the box at
-the top of the picker to jump to it; the picker starts there next time. It
-works for any folder the sign-in can open: your own, one shared with you, or
-one shared as "anyone with the link". Nothing has to change in Drive.
+**Choosing a folder.** After you connect, the picker lists your Drive: click
+into the folder you want, tick files (or **Select all here**), and import.
+**Always open in this folder** makes the picker start there from then on.
+For a folder that is not in your own Drive (someone else's, shared as
+"anyone with the link"), open **Folder not listed? Open it by link** and
+paste its address. Nothing has to change in Drive either way.
 
 **With a service account** (`GOOGLE_SA_EMAIL`, `GOOGLE_SA_PRIVATE_KEY`) there
 is no sign-in. In Google Drive, share a folder with the service account's
