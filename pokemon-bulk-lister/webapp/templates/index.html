@@ -29,6 +29,7 @@
       <label><input type="radio" name="scan-mode" value="grid" checked /> Binder pages (3×3)</label>
       <label><input type="radio" name="scan-mode" value="single" /> Single cards (one per photo)</label>
       <button id="camera-btn" type="button" title="Opens the camera on a phone or tablet">Take a photo</button>
+      <button id="drive-photos-btn" type="button" title="Pick photos from your Google Drive">From Google Drive</button>
       <label title="After each upload: identify the new cards, then price them">
         <input type="checkbox" id="auto-process" checked /> Identify and price automatically
       </label>
@@ -256,5 +257,6 @@
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='drive.js') }}"></script>
 </body>
 </html>

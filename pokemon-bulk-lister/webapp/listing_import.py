@@ -53,8 +53,11 @@ from webapp.models import (
 
 listings_bp = Blueprint("listings", __name__)
 
-SOURCES = {"ebay": "eBay", "tcgplayer": "TCGplayer", "whatnot": "Whatnot"}
-CSV_SOURCES = ("tcgplayer", "whatnot")
+SOURCES = {"ebay": "eBay", "tcgplayer": "TCGplayer", "whatnot": "Whatnot", "cards": "Spreadsheet"}
+CSV_SOURCES = ("tcgplayer", "whatnot", "cards")
+# "cards" is a list of cards you own, not listings on another site: its rows
+# say what each card is, and nothing is shown as listed elsewhere.
+STATED_SOURCES = ("tcgplayer", "cards")
 CONDITIONS = ("NM", "LP", "MP", "HP", "DMG")
 MAX_ROWS = 5000
 MAX_FILE_BYTES = 40 * 1024 * 1024
@@ -167,6 +170,68 @@ def parse_tcgplayer_listings(text: str) -> tuple[list[dict], dict]:
             }
             line["note"] = printing.title() if printing and printing != "holofoil" else None
         lines.append(line)
+    return lines, info
+
+
+_CARD_COLUMNS = {
+    "name": ("name", "card", "cardname", "productname"),
+    "set": ("set", "setname", "expansion"),
+    "number": ("number", "cardnumber", "no", "collectornumber"),
+    "quantity": ("quantity", "qty", "count", "owned"),
+    "condition": ("condition", "cond"),
+    "holo": ("holo", "foil", "isholo", "holofoil"),
+    "cost": ("pricepaid", "paid", "cost", "purchaseprice", "boughtfor"),
+}
+_YES = ("y", "yes", "true", "1", "x", "holo", "foil", "holofoil")
+
+
+def parse_card_list(text: str) -> tuple[list[dict], dict]:
+    """A spreadsheet of cards you own, read by header name. Only a name
+    column is required; Set, Number, Quantity, Condition, Holo and Price paid
+    are used when present. Condition is NM when a row does not give one this
+    app knows, the same default as adding a card by hand."""
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    headers = reader.fieldnames or []
+    cols = _columns(headers, _CARD_COLUMNS)
+    if not cols["name"]:
+        raise ValueError("no Name column found (looked for: Name, Card, Card name). "
+                         "Columns in this sheet: " + (", ".join(h for h in headers if h) or "none"))
+    info = {"rows": 0, "skipped": 0, "not_listed": 0}
+    lines: list[dict] = []
+    seen: dict[str, int] = {}
+
+    def cell(raw: dict, field: str) -> str:
+        return (raw.get(cols[field]) or "").strip() if cols[field] else ""
+
+    for raw in reader:
+        info["rows"] += 1
+        name = cell(raw, "name")
+        if not name:
+            info["skipped"] += 1
+            continue
+        quantity = _count(cell(raw, "quantity")) if cols["quantity"] and cell(raw, "quantity") else 1
+        if quantity < 1:
+            info["not_listed"] += 1
+            continue
+        if len(lines) >= MAX_ROWS:
+            raise ValueError(f"that sheet has more than {MAX_ROWS} cards; split it up")
+        set_name, number_raw = cell(raw, "set"), cell(raw, "number")
+        number = number_raw.split("/")[0].lstrip("0") or number_raw.split("/")[0]
+        given = cell(raw, "condition")
+        condition = given.upper() if given.upper() in CONDITIONS else (_split_condition(given)[0] or "NM")
+        holo = cell(raw, "holo").lower() in _YES
+        # The row's own content is its identity, so the same sheet read again
+        # adds nothing. Two identical rows are told apart by a counter.
+        base = "|".join((_norm(name), _norm(set_name), number, condition, "h" if holo else "n"))
+        seen[base] = seen.get(base, 0) + 1
+        lines.append({
+            "external_id": base if seen[base] == 1 else f"{base}#{seen[base]}",
+            "sku": None, "quantity": quantity, "price": None, "url": None, "image_url": None,
+            "title": " · ".join(p for p in (name, set_name, number_raw, condition) if p),
+            "condition": condition, "cost": _amount(cell(raw, "cost")),
+            "card": {"name": name, "set_name": set_name or None, "card_number": number or None,
+                     "rarity": None, "is_holo": holo},
+        })
     return lines, info
 
 
@@ -342,17 +407,18 @@ def _catalog_card(s, card: dict) -> CatalogCard:
     return get_or_create_catalog_card(s, card)
 
 
-def _place(s, row: ExternalListing, card: dict, condition: str, note: Optional[str] = None) -> InventoryItem:
+def _place(s, row: ExternalListing, card: dict, condition: str, note: Optional[str] = None,
+           cost: Optional[float] = None) -> InventoryItem:
     cc = _catalog_card(s, card)
-    where = SOURCES[row.source]
+    came_from = "a spreadsheet" if row.source == "cards" else f"a {SOURCES[row.source]} listing"
     item = InventoryItem(
         user_id=row.user_id, catalog_card_id=cc.id, quantity=row.quantity, condition=condition,
-        image_url=row.image_url, notes=note)
+        image_url=row.image_url, notes=note, acquired_price=cost)
     s.add(item)
     s.flush()
-    log_event(s, row.user_id, cc.id, "added", channel=row.source, quantity=row.quantity,
-              condition=condition, image_url=row.image_url,
-              note=f"imported from a {where} listing" + (f" ({note})" if note else ""))
+    log_event(s, row.user_id, cc.id, "added", channel="other" if row.source == "cards" else row.source,
+              quantity=row.quantity, condition=condition, image_url=row.image_url,
+              note=f"imported from {came_from}" + (f" ({note})" if note else ""))
     row.status, row.detail, row.inventory_item_id, row.condition = "imported", None, item.id, condition
     return item
 
@@ -430,7 +496,7 @@ def import_lines(uid: int, source: str, lines: list[dict]) -> dict:
             condition = line.get("condition")
             if line.get("multi"):
                 card, why = None, "one listing with several variations"
-            elif source == "tcgplayer":
+            elif source in STATED_SOURCES:
                 # These rows say what they are outright; one that does not is
                 # not a single card (sealed product) or has an unknown condition.
                 why = "" if card else "the row has no card number, set or known condition"
@@ -444,7 +510,7 @@ def import_lines(uid: int, source: str, lines: list[dict]) -> dict:
             note = line.get("note")
             if _GRADED.search(row.title or ""):
                 note = "graded; see the listing title"
-            item = _place(s, row, card, condition or "NM", note)
+            item = _place(s, row, card, condition or "NM", note, cost=line.get("cost"))
             if row.sku:
                 skus[row.sku] = item.id
             out["added"] += 1
@@ -502,6 +568,20 @@ def _run(uid: int, source: str, lines: list[dict], dry_run: bool, info: Optional
         _import_lock.release()
 
 
+_PARSERS = {"tcgplayer": parse_tcgplayer_listings, "whatnot": parse_whatnot_listings,
+            "cards": parse_card_list}
+
+
+def import_text(uid: int, source: str, text: str, dry_run: bool, extra: Optional[dict] = None):
+    """One CSV, wherever it came from (an upload, Google Drive): preview it
+    or import it. Returns a Flask response."""
+    try:
+        lines, info = _PARSERS[source](text)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return _run(uid, source, lines, dry_run, {**info, **(extra or {})})
+
+
 @listings_bp.route("/api/listings/external", methods=["GET"])
 @login_required
 def external_status():
@@ -526,7 +606,7 @@ def external_status():
 @listings_bp.route("/api/listings/import", methods=["POST"])
 @login_required
 def import_file():
-    """multipart: source=tcgplayer|whatnot, file=<csv>. dry_run=1 reads the
+    """multipart: source=tcgplayer|whatnot|cards, file=<csv>. dry_run=1 reads the
     file and reports what it holds without changing anything."""
     source = (request.form.get("source") or "").lower()
     if source not in CSV_SOURCES:
@@ -537,12 +617,8 @@ def import_file():
     raw = upload.read(MAX_FILE_BYTES + 1)
     if len(raw) > MAX_FILE_BYTES:
         return jsonify({"error": "that file is over 40 MB"}), 400
-    parse = parse_tcgplayer_listings if source == "tcgplayer" else parse_whatnot_listings
-    try:
-        lines, info = parse(raw.decode("utf-8", errors="replace"))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return _run(current_user_id(), source, lines, request.form.get("dry_run") == "1", info)
+    return import_text(current_user_id(), source, raw.decode("utf-8", errors="replace"),
+                       request.form.get("dry_run") == "1")
 
 
 @listings_bp.route("/api/listings/import/ebay", methods=["POST"])
@@ -591,7 +667,7 @@ def rematch():
     try:
         for row in (s.query(ExternalListing)
                     .filter_by(user_id=uid, status="unmatched").order_by(ExternalListing.id).all()):
-            if row.source == "tcgplayer" or (row.detail or "").startswith("one listing"):
+            if row.source in STATED_SOURCES or (row.detail or "").startswith("one listing"):
                 out["still_unmatched"] += 1
                 continue
             card, why = match_title(s, row.title or "", budget)
@@ -665,6 +741,7 @@ def listed_on(s, item_ids: list[int]) -> dict[int, list[dict]]:
         return out
     for row in s.query(ExternalListing).filter(
             ExternalListing.inventory_item_id.in_(item_ids),
+            ExternalListing.source != "cards",          # a list of cards owned, not a listing
             ExternalListing.status.in_(("imported", "linked"))).all():
         out.setdefault(row.inventory_item_id, []).append(
             {"source": row.source, "site": SOURCES.get(row.source, row.source),

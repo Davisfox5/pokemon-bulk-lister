@@ -531,8 +531,11 @@ async function loadListingImport() {
       </span></li>`).join("");
 }
 
+// A card list has rows of cards you own; the other sources have listings.
+const listingNoun = (site, n) => (site === "Your card list" ? "row" : "listing") + (n === 1 ? "" : "s");
+
 function listingPreviewHtml(site, p) {
-  return `<p>${esc(site)} has <strong>${p.listings}</strong> listing${p.listings === 1 ? "" : "s"}.</p>
+  return `<p>${esc(site)} has <strong>${p.listings}</strong> ${listingNoun(site, p.listings)}${p.file ? ` (${esc(p.file)})` : ""}.</p>
     <ul>
       <li><strong>${p.new}</strong> new (${p.new_cards} card${p.new_cards === 1 ? "" : "s"}) will be identified and added to your library</li>
       <li>${p.already_in_library} already in your library (matched by SKU); nothing added</li>
@@ -542,7 +545,7 @@ function listingPreviewHtml(site, p) {
 }
 
 function listingResultText(site, r) {
-  return `${site}: added ${r.added} listing${r.added === 1 ? "" : "s"} (${r.cards} card${r.cards === 1 ? "" : "s"})`
+  return `${site}: added ${r.added} ${listingNoun(site, r.added)} (${r.cards} card${r.cards === 1 ? "" : "s"})`
     + (r.linked ? `, ${r.linked} already in your library` : "")
     + (r.unmatched ? `, ${r.unmatched} need a look` : "")
     + (r.duplicates ? `, ${r.duplicates} imported before` : "") + ".";
@@ -552,11 +555,11 @@ async function runListingImport(site, send) {
   try {
     const p = await send(true);
     if (!p.new && !p.already_in_library) {
-      toast(`${site}: ${p.listings} listing${p.listings === 1 ? "" : "s"} read, nothing new to import.`);
+      toast(`${site}: ${p.listings} ${listingNoun(site, p.listings)} read, nothing new to import.`);
       return;
     }
     const { ok } = await askConfirm({
-      title: `Import ${p.new} ${site} listing${p.new === 1 ? "" : "s"}?`,
+      title: `Import ${p.new} ${listingNoun(site, p.new)} from ${site === "Your card list" ? "your card list" : site}?`,
       html: listingPreviewHtml(site, p), confirm: "Import",
     });
     if (!ok) return;
@@ -607,7 +610,25 @@ async function postListingFile(source, file, dryRun) {
 $("#btn-import-listings").addEventListener("click", () => {
   openDialog($("#listings-dialog"));
   loadListingImport().catch((err) => toast(err.message, "err"));
+  api("/api/drive/status").then((d) => $("#btn-drive-disconnect").classList.toggle("hidden", !d.connected))
+    .catch(() => {});
 });
+
+// Back from Google's consent page.
+{
+  const drive = new URLSearchParams(location.search).get("drive");
+  if (drive) {
+    history.replaceState(null, "", location.pathname);
+    const said = {
+      connected: ["Google Drive connected. Choose “From Drive” to pick a spreadsheet.", "ok"],
+      declined: ["Google Drive was not connected: access was declined.", "err"],
+      failed: ["Google Drive could not be connected. Try again.", "err"],
+      "not-set-up": ["Google Drive is not set up on this install (GOOGLE_CLIENT_ID is missing).", "err"],
+    }[drive];
+    if (said) toast(said[0], said[1]);
+    if (drive === "connected") $("#btn-import-listings").click();
+  }
+}
 
 $("#btn-li-ebay").addEventListener("click", () =>
   runListingImport("eBay", (dryRun) => postJson("/api/listings/import/ebay", { dry_run: dryRun })));
@@ -621,10 +642,40 @@ $("#listing-sources").addEventListener("click", (e) => {
     const file = input.files[0];
     if (!file) return;
     const source = btn.dataset.liFile;
-    runListingImport(source === "tcgplayer" ? "TCGplayer" : "Whatnot",
-      (dryRun) => postListingFile(source, file, dryRun));
+    runListingImport(LISTING_SITES[source], (dryRun) => postListingFile(source, file, dryRun));
   };
   input.click();
+});
+
+const LISTING_SITES = { tcgplayer: "TCGplayer", whatnot: "Whatnot", cards: "Your card list" };
+
+// A spreadsheet picked from Google Drive goes through the same preview and
+// confirmation as an uploaded file.
+$("#listing-sources").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-li-drive]");
+  if (!btn) return;
+  const source = btn.dataset.liDrive;
+  openDrivePicker({
+    kind: "sheets", multiple: false, title: `Choose the ${LISTING_SITES[source]} spreadsheet`,
+    onPick: ([file]) => runListingImport(LISTING_SITES[source],
+      (dryRun) => postJson("/api/drive/import/sheet", { file_id: file.id, source, dry_run: dryRun })),
+  });
+});
+
+$("#btn-drive-disconnect").addEventListener("click", async () => {
+  const { ok } = await askConfirm({
+    title: "Disconnect Google Drive?",
+    html: "<p>This app forgets your Google sign-in and asks Google to withdraw its access. Cards already imported stay.</p>",
+    confirm: "Disconnect",
+  });
+  if (!ok) return;
+  try {
+    await postJson("/api/drive/disconnect");
+    $("#btn-drive-disconnect").classList.add("hidden");
+    toast("Google Drive disconnected.");
+  } catch (err) {
+    toast(err.message, "err");
+  }
 });
 
 $("#btn-li-rematch").addEventListener("click", async () => {

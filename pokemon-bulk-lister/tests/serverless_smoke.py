@@ -102,6 +102,37 @@ r = client.post("/api/grids/upload", data={"file": (io.BytesIO(jpg.tobytes()), "
 assert r.get_json()["grids"][0]["filename"] == "IMG_1-2.jpg", r.get_json()
 total = n + 1
 
+# ---------------------------------------------------------------- a photo from Google Drive is filed like an upload
+from webapp import drive as drive_mod  # noqa: E402
+
+assert client.post("/api/drive/import/photo", json={"file_id": "p1"}).status_code == 401      # needs a login
+
+
+class FakeDrive:
+    def download(self, file_id, max_bytes):
+        assert max_bytes == 40 * 1024 * 1024
+        if file_id == "doc":
+            return b"%PDF", {"name": "notes.pdf"}
+        return jpg.tobytes(), {"name": "IMG_1.jpg"}                    # the same camera name a third time
+
+
+drive_mod.drive_for = lambda uid: FakeDrive()
+appmod.app.config["TESTING"] = True
+with client.session_transaction() as sess:
+    sess["uid"] = 1                                                    # some signed-in account
+real_uid = auth.current_user_id
+auth.current_user_id = lambda: 1
+r = client.post("/api/drive/import/photo", json={"file_id": "p1", "mode": "single"})
+assert r.status_code == 200, r.get_data(as_text=True)
+assert r.get_json()["grids"] == [{"filename": "IMG_1-3.jpg", "crops": 1}], r.get_json()
+assert "output/crops/IMG_1-3_r0c0.jpg" in blob.files
+assert client.post("/api/drive/import/photo", json={"file_id": "doc"}).get_json()["skipped"] == ["notes.pdf"]
+auth.current_user_id = real_uid
+with client.session_transaction() as sess:
+    sess.clear()
+total += 1
+crop_keys = sorted(k for k in blob.files if k.startswith("output/crops/"))
+
 # ---------------------------------------------------------------- photos are served from Blob
 new_instance()
 r = client.get("/" + crop_keys[0])

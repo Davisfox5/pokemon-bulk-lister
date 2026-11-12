@@ -309,10 +309,17 @@
       <li><span><strong>eBay</strong> <span id="li-ebay-note" class="muted small"></span></span>
         <button class="btn" id="btn-li-ebay">Read my eBay listings</button></li>
       <li><span><strong>TCGplayer</strong> <span class="muted small">the pricing export from the seller portal (Pricing, Export). Rows with a quantity are your listings.</span></span>
-        <button class="btn" data-li-file="tcgplayer">Upload export</button></li>
+        <span class="row-actions"><button class="btn" data-li-file="tcgplayer">Upload export</button>
+          <button class="btn btn-ghost" data-li-drive="tcgplayer">From Drive</button></span></li>
       <li><span><strong>Whatnot</strong> <span class="muted small">a CSV of your listings with Title, Quantity, Price and SKU columns.</span></span>
-        <button class="btn" data-li-file="whatnot">Upload CSV</button></li>
+        <span class="row-actions"><button class="btn" data-li-file="whatnot">Upload CSV</button>
+          <button class="btn btn-ghost" data-li-drive="whatnot">From Drive</button></span></li>
+      <li><span><strong>Your own card list</strong> <span class="muted small">a spreadsheet of cards you own. Needs a Name column; Set, Number, Quantity, Condition, Holo and Price paid are used when present.</span></span>
+        <span class="row-actions"><button class="btn" data-li-file="cards">Upload CSV</button>
+          <button class="btn btn-ghost" data-li-drive="cards">From Drive</button></span></li>
     </ul>
+    <p class="muted small">“From Drive” reads a Google Sheet (its first sheet) or a CSV file from your Google Drive.
+      Access is read-only. <button type="button" class="btn btn-ghost hidden" id="btn-drive-disconnect">Disconnect Google Drive</button></p>
     <input id="li-file" type="file" accept=".csv,text/csv" hidden>
     <div id="li-unmatched-wrap" class="hidden">
       <h2 style="margin-top:14px">Needs a look <span id="li-unmatched-count" class="count"></span>
@@ -379,5 +386,6 @@
 
   <script src="{{ url_for('static', filename='common.js') }}"></script>
   <script src="{{ url_for('static', filename='portfolio.js') }}"></script>
+  <script src="{{ url_for('static', filename='drive.js') }}"></script>
 </body>
 </html>

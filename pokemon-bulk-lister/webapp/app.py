@@ -311,6 +311,37 @@ def api_upload_grid():
     return jsonify({"grids": grids_added, "total_crops": total_crops, "skipped": skipped})
 
 
+MAX_DRIVE_PHOTO_BYTES = 40 * 1024 * 1024
+
+
+@app.route("/api/drive/import/photo", methods=["POST"])
+def api_drive_import_photo():
+    """Body: {file_id, mode: "grid"|"single"}. Fetches one photo from the
+    signed-in account's Google Drive and files it exactly as an upload would
+    be. The page sends one photo per request. The server reads Drive itself,
+    so a host's cap on upload size does not apply."""
+    from webapp import drive as drive_mod
+    from webapp.auth import current_user_id
+
+    uid = current_user_id()
+    if not uid:
+        return jsonify({"error": "log in to use Google Drive"}), 401
+    body = request.get_json(silent=True) or {}
+    try:
+        content, info = drive_mod.drive_for(uid).download(str(body.get("file_id") or ""), MAX_DRIVE_PHOTO_BYTES)
+    except Exception as exc:
+        return drive_mod.error_response(exc)
+    name = _safe_filename(info.get("name") or "drive-photo.jpg")
+    if Path(name).suffix.lower() not in ALLOWED_EXT:
+        return jsonify({"grids": [], "total_crops": 0, "skipped": [info.get("name") or name]})
+    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    dest = INPUT_DIR / _unique_upload_name(name)
+    dest.write_bytes(content)
+    sg = get_split_grids()
+    n = _record_single(sg, dest) if body.get("mode") == "single" else _split_and_record(sg, dest)
+    return jsonify({"grids": [{"filename": dest.name, "crops": n}], "total_crops": n, "skipped": []})
+
+
 def _unique_upload_name(name: str) -> str:
     """Phone cameras reuse names like image.jpg; a second upload with the same
     name must not overwrite the first photo or collide with its crops."""
@@ -2000,6 +2031,11 @@ app.register_blueprint(refunds_bp)
 from webapp.listing_import import listings_bp  # noqa: E402
 
 app.register_blueprint(listings_bp)
+
+# Google Drive: connect an account, import photos and spreadsheets from it.
+from webapp.drive import drive_bp  # noqa: E402
+
+app.register_blueprint(drive_bp)
 if not SERVERLESS:
     sales_sync.start_background()
 

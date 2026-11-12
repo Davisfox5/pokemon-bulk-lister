@@ -246,6 +246,46 @@ function setupDropzone() {
   remember();
 }
 
+// Photos picked from Google Drive: the server fetches each one itself.
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = $("#drive-photos-btn");
+  if (!btn) return;
+  const status = $("#upload-status");
+  btn.addEventListener("click", () => openDrivePicker({
+    kind: "photos", multiple: true, title: "Choose card photos from Google Drive",
+    onPick: async (files) => {
+      const mode = scanMode();
+      let crops = 0, done = 0;
+      const skipped = [];
+      for (const file of files) {
+        status.textContent = `Importing photo ${++done} of ${files.length} from Google Drive…`;
+        try {
+          const one = await api("/api/drive/import/photo", {
+            method: "POST", body: JSON.stringify({ file_id: file.id, mode }) });
+          crops += one.total_crops;
+          skipped.push(...(one.skipped || []));
+        } catch (err) {
+          skipped.push(`${file.name} (${err.message})`);
+        }
+      }
+      status.textContent = `Added ${crops} card(s) from ${files.length - skipped.length} Drive photo(s).`
+        + (skipped.length ? ` Skipped: ${skipped.join(", ")}.` : "");
+      await loadCards();
+      if (crops && $("#auto-process").checked) startProcess();
+    },
+  }));
+  const back = new URLSearchParams(location.search).get("drive");
+  if (back) {
+    history.replaceState(null, "", location.pathname);
+    status.textContent = {
+      connected: "Google Drive connected. Click “From Google Drive” to pick photos.",
+      declined: "Google Drive was not connected: access was declined.",
+      failed: "Google Drive could not be connected. Try again.",
+      "not-set-up": "Google Drive is not set up on this install (GOOGLE_CLIENT_ID is missing).",
+    }[back] || "";
+  }
+});
+
 // What the server will accept in one request, or null for no cap.
 let uploadLimitCache;
 async function uploadLimit() {

@@ -462,6 +462,43 @@ library; sales come back through the sales read-back above.
 Not checked against the real sites: that eBay accepts this app's OAuth token
 for the Trading call, and the column names of a real Whatnot listings file.
 
+### Google Drive (photos and spreadsheets)
+
+Each account can connect its own Google Drive, read-only, and import from it:
+
+- **Scan, From Google Drive**: pick binder-page or single-card photos. The
+  server fetches each one from Drive and files it exactly as an upload, so a
+  host's upload size cap does not apply (photos up to 40 MB).
+- **Library, Import listings, From Drive**: pick a Google Sheet (its first
+  sheet is read) or a CSV file as a TCGplayer export, a Whatnot listings
+  file, or **your own card list**.
+
+**Your own card list** is a spreadsheet of cards you own, from Drive or
+uploaded as CSV. It needs a `Name` column. `Set`, `Number`, `Quantity`,
+`Condition`, `Holo` and `Price paid` are used when present; condition is NM
+when a row does not give one. Each row is added as the card it states, with
+a count first and a confirmation. Reading the same sheet again adds nothing.
+Excel files are not read; save as Google Sheets or CSV.
+
+Setup, once, in Google Cloud Console:
+
+1. Create a project, enable the **Google Drive API**.
+2. **OAuth consent screen**: External, add the scope
+   `.../auth/drive.readonly`, and add yourself as a test user.
+3. **Credentials, Create OAuth client ID**, type **Web application**, with
+   authorized redirect URIs `https://your.domain/api/drive/callback` and, for
+   local use, `http://localhost:5050/api/drive/callback`.
+4. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+
+The Google sign-in is stored encrypted in the database and no route returns
+it. **Disconnect Google Drive** in the import dialog forgets it and asks
+Google to withdraw access. While the consent screen is in Testing, Google
+ends each sign-in after 7 days and only test users can connect; publishing
+the consent screen lifts both, and `drive.readonly` then needs Google's
+verification for use by the public.
+
+Not run against Google here (no client id was available).
+
 ### Stripe (card payments on the marketplace)
 
 Without Stripe, a buyer and seller settle directly and the seller clicks
@@ -710,6 +747,7 @@ pokemon-bulk-lister/
 │  ├─ decks.py                 # decklist parser, library matching, Limitless popular decks
 │  ├─ ebay_orders.py           # eBay Fulfillment API: read sold orders
 │  ├─ ebay_listings.py         # eBay Trading API: read active listings
+│  ├─ google_drive.py          # Google OAuth + Drive v3, read-only
 │  ├─ tcgplayer_catalog.py     # real TCGplayer Ids from the seller's export
 │  ├─ mailer.py                # SMTP, or the console when SMTP is not set
 │  └─ cloudinary_client.py
@@ -724,6 +762,7 @@ pokemon-bulk-lister/
 │  ├─ connections.py           # setup + checks for eBay, portals, Stripe
 │  ├─ sales_sync.py            # sales read back: eBay orders, CSV exports
 │  ├─ listing_import.py        # listings on other sites read into the library
+│  ├─ drive.py                 # Google Drive: connect, browse, import spreadsheets
 │  ├─ payouts.py               # Stripe Connect onboarding + automatic transfers
 │  ├─ refunds.py               # refunds and disputes after a sale settled
 │  ├─ runtime.py               # local vs serverless: files, tokens, job state
