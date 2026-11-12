@@ -1,10 +1,17 @@
-/* Google Drive file picker, shared by the Scan and Library pages.
+/* Choosing files from Google Drive, shared by the Scan and Library pages.
 
    openDrivePicker({ kind: "photos" | "sheets", multiple, title, onPick(files) })
 
-   Lists the signed-in account's Drive through this app's own endpoints
-   (read-only). If the account has not connected Drive yet, the dialog offers
-   to, and Google sends the browser back to this page afterwards. */
+   For an account that signed in to Google this opens Google's own picker
+   (the Google Picker API, loaded from apis.google.com): the same Drive
+   dialog every Google-connected app shows. Files can be picked, and for
+   photos a whole folder can be picked, in which case every photo directly
+   inside it is used.
+
+   The plain list further down is the fallback: it offers "Connect Google
+   Drive" to an account that has not signed in yet, serves an install that
+   reads Drive through a service account (Google's picker needs a person's
+   sign-in), and steps in if Google's script cannot be loaded. */
 "use strict";
 
 (function () {
@@ -197,12 +204,90 @@
     }
   }
 
-  window.openDrivePicker = async function (options) {
+  const FOLDER = "application/vnd.google-apps.folder";
+  const MIME = {
+    photos: "image/jpeg,image/png,image/webp,image/tiff",
+    sheets: "application/vnd.google-apps.spreadsheet,text/csv",
+  };
+
+  let pickerLoading = null;
+  function loadGooglePicker() {
+    if (!pickerLoading) {
+      pickerLoading = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://apis.google.com/js/api.js";
+        script.onload = () => window.gapi.load("picker", { callback: resolve, onerror: reject });
+        script.onerror = () => reject(new Error("could not load Google's picker"));
+        document.head.appendChild(script);
+      }).catch((err) => { pickerLoading = null; throw err; });
+    }
+    return pickerLoading;
+  }
+
+  // Folders chosen in the picker become the files directly inside them.
+  async function filesFor(docs, kind) {
+    const files = [], folders = [];
+    for (const doc of docs) {
+      if (doc.mimeType !== FOLDER) { files.push({ id: doc.id, name: doc.name }); continue; }
+      const inside = await get(`/api/drive/folder-files?kind=${kind}&folder=${encodeURIComponent(doc.id)}`);
+      folders.push({ name: inside.folder.name, count: inside.files.length });
+      files.push(...inside.files.map((f) => ({ id: f.id, name: f.name })));
+    }
+    const seen = new Set();
+    return { folders, files: files.filter((f) => !seen.has(f.id) && seen.add(f.id)) };
+  }
+
+  async function openGooglePicker(options, config) {
+    await loadGooglePicker();
+    const picker = window.google.picker;
+    const view = new picker.DocsView(picker.ViewId.DOCS)
+      .setMimeTypes(MIME[options.kind])
+      .setIncludeFolders(true)
+      .setMode(picker.DocsViewMode.LIST);
+    // A whole folder can be chosen for photos; a spreadsheet import reads one file.
+    if (options.kind === "photos") view.setSelectFolderEnabled(true);
+    const builder = new picker.PickerBuilder()
+      .setOAuthToken(config.token)
+      .setAppId(config.app_id)
+      .setTitle(options.title || "Google Drive")
+      .addView(view)
+      .setCallback(async (data) => {
+        if (data.action !== picker.Action.PICKED) return;
+        try {
+          const chosen = await filesFor(data.docs || [], options.kind);
+          if (!chosen.files.length) {
+            return say(`No ${options.kind === "photos" ? "photos" : "spreadsheets"} in what you picked.`);
+          }
+          // A folder can hold hundreds of photos: say how many before using them.
+          if (chosen.folders.length && typeof askConfirm === "function") {
+            const where = chosen.folders.map((f) => `<strong>${h(f.name)}</strong> (${f.count})`).join(", ");
+            const { ok } = await askConfirm({
+              title: `Import ${chosen.files.length} photo${chosen.files.length === 1 ? "" : "s"} from Google Drive?`,
+              html: `<p>From ${where}. Photos in sub-folders are not included.</p>`,
+              confirm: "Import",
+            });
+            if (!ok) return;
+          }
+          options.onPick(chosen.files);
+        } catch (err) {
+          say(err.message);
+        }
+      });
+    if (config.api_key) builder.setDeveloperKey(config.api_key);
+    if (options.multiple) builder.enableFeature(picker.Feature.MULTISELECT_ENABLED);
+    builder.build().setVisible(true);
+  }
+
+  function say(message) {
+    if (typeof toast === "function") toast(message, "err");
+    else { const el = document.querySelector("#upload-status"); if (el) el.textContent = message; }
+  }
+
+  function openList(options, status) {
     build();
     opts = options;
     // An install with a service account has no Drive of its own to show:
     // the starting point is whatever was shared with its address.
-    const status = await get("/api/drive/status").catch(() => ({}));
     shareWith = status.mode === "service_account" ? status.share_with : null;
     trail = shareWith ? [{ id: "shared-with-me", name: "Shared with this app" }] : [{ id: "root", name: "My Drive" }];
     startId = status.start_folder ? status.start_folder.id : null;
@@ -214,5 +299,20 @@
     drawFoot();
     dlg.showModal();
     load();
+  }
+
+  window.openDrivePicker = async function (options) {
+    const status = await get("/api/drive/status").catch(() => ({}));
+    if (status.mode === "oauth" && status.connected) {
+      try {
+        const config = await get("/api/drive/picker");
+        return await openGooglePicker(options, config);
+      } catch (err) {
+        // Sign-in withdrawn: the list offers to connect again. Anything else
+        // (Google's script blocked, say): the list still works.
+        console.warn("Google picker unavailable, using the built-in list:", err.message);
+      }
+    }
+    return openList(options, status);
   };
 })();

@@ -311,3 +311,35 @@ def test_a_folder_is_opened_by_its_link_and_remembered_as_the_starting_point(goo
     assert r.status_code == 400                                                    # no such folder
     assert me.delete("/api/drive/folder").get_json() == {"start_folder": None}
     assert other.post("/api/drive/folder", json={"link": "1AbCdEfGhIjKlMnOpQrStUv"}).status_code == 409   # not connected
+
+
+def test_googles_picker_gets_a_short_lived_token_only_for_the_signed_in_owner(google, monkeypatch):
+    me, other = _user(google, "a@example.com"), _user(google, "b@example.com")
+    assert me.get("/api/drive/picker").status_code == 409                      # not connected yet
+    _connect(me)
+    r = me.get("/api/drive/picker")
+    assert r.get_json() == {"token": "at-2", "app_id": "client", "api_key": None}
+    assert r.headers["Cache-Control"] == "no-store"
+    assert "rt-SECRET" not in r.get_data(as_text=True)                         # never the long-lived sign-in
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "565652544958-abc123.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_API_KEY", "AIza-browser-key")
+    assert me.get("/api/drive/picker").get_json()["app_id"] == "565652544958"   # the project number
+    assert me.get("/api/drive/picker").get_json()["api_key"] == "AIza-browser-key"
+    r = other.get("/api/drive/picker")
+    assert r.status_code == 409 and r.get_json()["reconnect"] is True
+    assert google.test_client().get("/api/drive/picker").status_code == 401
+
+    google.google.refresh_ok = False
+    assert me.get("/api/drive/picker").status_code == 409
+    assert me.get("/api/drive/status").get_json()["connected"] is False
+
+
+def test_a_folder_chosen_in_the_picker_becomes_the_files_inside_it(google):
+    me = _user(google, "a@example.com")
+    _connect(me)
+    r = me.get("/api/drive/folder-files?kind=sheets&folder=1AbCdEfGhIjKlMnOpQrStUv").get_json()
+    assert r["folder"] == {"id": "1AbCdEfGhIjKlMnOpQrStUv", "name": "Public scans"}
+    assert sorted(f["name"] for f in r["files"]) == ["My cards", "whatnot.csv"]
+    assert "'1AbCdEfGhIjKlMnOpQrStUv' in parents" in google.google.calls[-1][2]["q"]
+    assert me.get("/api/drive/folder-files?folder=s1s1s1s1s1s1").status_code == 400      # not a folder we can open
+    assert me.get("/api/drive/folder-files?folder=x' or 1=1").status_code == 400

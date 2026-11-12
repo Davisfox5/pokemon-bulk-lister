@@ -657,7 +657,7 @@ $("#listing-sources").addEventListener("click", (e) => {
   if (!btn) return;
   const source = btn.dataset.liDrive;
   openDrivePicker({
-    kind: "sheets", multiple: false, title: `Choose the ${LISTING_SITES[source]} spreadsheet`,
+    kind: "sheets", multiple: false, title: source === "cards" ? "Choose your card list spreadsheet" : `Choose the ${LISTING_SITES[source]} spreadsheet`,
     onPick: ([file]) => runListingImport(LISTING_SITES[source],
       (dryRun) => postJson("/api/drive/import/sheet", { file_id: file.id, source, dry_run: dryRun })),
   });

@@ -249,6 +249,53 @@ def files():
         return error_response(exc)
 
 
+@drive_bp.route("/api/drive/picker")
+@login_required
+def picker_config():
+    """What Google's own file picker needs to open for this account: a
+    short-lived access token for the account's read-only Drive sign-in, the
+    Google Cloud project number, and the browser API key if one is set.
+
+    The token goes only to the signed-in owner's own browser, lasts about an
+    hour and can only read. The long-lived sign-in never leaves the server."""
+    uid = current_user_id()
+    if _uses_service_account(uid) or not configured():
+        return jsonify({"error": "Google's picker needs a Google sign-in on this account"}), 400
+    saved = _saved_token(uid)
+    if saved is None:
+        return jsonify({"error": "Google Drive is not connected for this account", "reconnect": True}), 409
+    client_id, client_secret = _client()
+    try:
+        token = google_drive.access_token(client_id, client_secret, saved)
+    except google_drive.DriveNotAuthorized as exc:
+        runtime.state_set(_key(uid), None)
+        return error_response(exc)
+    except Exception as exc:
+        return error_response(exc)
+    response = jsonify({
+        "token": token,
+        # A client id is "<project number>-<random>.apps.googleusercontent.com".
+        "app_id": client_id.split("-")[0],
+        "api_key": os.getenv("GOOGLE_API_KEY") or None,
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@drive_bp.route("/api/drive/folder-files")
+@login_required
+def folder_files():
+    """?folder=<id>&kind=photos|sheets: every such file directly inside a
+    folder that was chosen in the picker."""
+    try:
+        drive = drive_for(current_user_id())
+        folder_id = google_drive.folder_id_from_link(request.args.get("folder") or "")
+        info = drive.folder(folder_id)
+        return jsonify({"folder": info, "files": drive.list_all(folder_id, request.args.get("kind") or "photos")})
+    except Exception as exc:
+        return error_response(exc)
+
+
 @drive_bp.route("/api/drive/import/sheet", methods=["POST"])
 @login_required
 def import_sheet():

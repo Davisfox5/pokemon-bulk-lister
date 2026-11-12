@@ -198,6 +198,19 @@ class Drive:
             "next": body.get("nextPageToken"),
         }
 
+    def list_all(self, folder: str, kind: str, limit: int = 1000) -> list[dict]:
+        """Every file of `kind` directly inside a folder (not its sub-folders),
+        following pages, up to `limit`."""
+        found: list[dict] = []
+        token = None
+        while len(found) < limit:
+            page = self.list(folder, kind, token)
+            found.extend(page["files"])
+            token = page["next"]
+            if not token:
+                break
+        return found[:limit]
+
     def folder(self, folder_id: str) -> dict:
         """{"id", "name"} of a folder this sign-in can open. A folder shared
         as "anyone with the link" can be opened by any sign-in that has its

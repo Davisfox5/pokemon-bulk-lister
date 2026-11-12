@@ -480,12 +480,17 @@ when a row does not give one. Each row is added as the card it states, with
 a count first and a confirmation. Reading the same sheet again adds nothing.
 Excel files are not read; save as Google Sheets or CSV.
 
-**Choosing a folder.** After you connect, the picker lists your Drive: click
-into the folder you want, tick files (or **Select all here**), and import.
-**Always open in this folder** makes the picker start there from then on.
-For a folder that is not in your own Drive (someone else's, shared as
-"anyone with the link"), open **Folder not listed? Open it by link** and
-paste its address. Nothing has to change in Drive either way.
+**Choosing files and folders.** After you connect, **From Google Drive**
+opens Google's own picker (the Google Picker API), the same Drive dialog
+other Google-connected apps show. Pick photos, or pick a whole folder: every
+photo directly inside it is imported, after a confirmation that says how
+many. For a spreadsheet import you pick the one file. Nothing has to change
+in Drive.
+
+The app's own plain list is only a fallback: it is what offers **Connect
+Google Drive** before you have signed in, what a service-account install
+uses (Google's picker needs a person's sign-in), and what opens if Google's
+script cannot be loaded.
 
 **With a service account** (`GOOGLE_SA_EMAIL`, `GOOGLE_SA_PRIVATE_KEY`) there
 is no sign-in. In Google Drive, share a folder with the service account's
@@ -496,13 +501,18 @@ install is not shown to other accounts.
 
 **With per-account sign-in**, once, in Google Cloud Console:
 
-1. Create a project, enable the **Google Drive API**.
+1. Create a project, enable the **Google Drive API** and the **Google
+   Picker API**.
 2. **OAuth consent screen**: External, add the scope
    `.../auth/drive.readonly`, and add yourself as a test user.
 3. **Credentials, Create OAuth client ID**, type **Web application**, with
    authorized redirect URIs `https://your.domain/api/drive/callback` and, for
    local use, `http://localhost:5050/api/drive/callback`.
-4. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+4. **Credentials, Create credentials, API key** for the picker. Restrict it
+   to websites `https://your.domain/*` and `https://docs.google.com/*` (the
+   picker runs in a frame on docs.google.com), and to the Google Picker API
+   and Google Drive API.
+5. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_API_KEY`.
 
 The Google sign-in is stored encrypted in the database and no route returns
 it. **Disconnect Google Drive** in the import dialog forgets it and asks
