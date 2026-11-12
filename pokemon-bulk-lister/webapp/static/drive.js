@@ -26,6 +26,8 @@
     style.textContent = `
       #drive-dialog { width: min(640px, 94vw); border: 1px solid var(--border, #e2e2e2); border-radius: 8px; padding: 16px; }
       #drive-dialog h2 { margin: 0 0 8px; font-size: 16px; }
+      #drive-dialog .drive-link { display: flex; gap: 6px; margin-bottom: 8px; }
+      #drive-dialog .drive-link input { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border, #e2e2e2); border-radius: 6px; font: inherit; }
       #drive-dialog .drive-trail { font-size: 13px; margin-bottom: 6px; }
       #drive-dialog .drive-trail button, #drive-dialog .drive-row button.folder { background: none; border: 0; padding: 0; color: var(--accent, #2563eb); cursor: pointer; font: inherit; }
       #drive-dialog ul { list-style: none; margin: 0; padding: 0; max-height: 52vh; overflow: auto; border: 1px solid var(--border, #e2e2e2); border-radius: 6px; }
@@ -40,13 +42,17 @@
     document.head.appendChild(style);
     dlg = document.createElement("dialog");
     dlg.id = "drive-dialog";
-    dlg.innerHTML = `<h2></h2><div class="drive-trail"></div><div class="drive-body"></div>
+    dlg.innerHTML = `<h2></h2>
+      <form class="drive-link"><input type="url" name="link" placeholder="Paste a Drive folder link to open it" aria-label="Drive folder link">
+        <button type="submit">Open</button></form>
+      <div class="drive-trail"></div><div class="drive-body"></div>
       <div class="drive-foot"><span class="count"></span>
         <button type="button" data-drive="cancel">Cancel</button>
         <button type="button" data-drive="use" class="primary btn-primary btn" disabled>Import</button></div>`;
     document.body.appendChild(dlg);
     dlg.addEventListener("click", onClick);
     dlg.addEventListener("change", onChange);
+    dlg.querySelector(".drive-link").addEventListener("submit", onLink);
   }
 
   const size = (n) => n == null ? "" : n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
@@ -87,7 +93,7 @@
     dlg.querySelector(".drive-body").innerHTML = rows.length
       ? `<ul>${rows.join("")}</ul>` + (listing.next ? `<p class="drive-note"><button type="button" data-drive="more">Show more</button></p>` : "")
       : `<p class="drive-note">No ${what} in this folder.${shareWith && trail.length === 1
-          ? `<br><br>In Google Drive, share a folder with <strong>${h(shareWith)}</strong> (Viewer is enough). It shows up here.` : ""}</p>`;
+          ? `<br><br>Paste the link of a folder shared as “anyone with the link” above. A private folder has to be shared with <strong>${h(shareWith)}</strong> first.` : ""}</p>`;
   }
 
   async function offerConnect() {
@@ -100,6 +106,26 @@
     }
     note(`Connect your Google Drive to pick files from it. Access is read-only: this app cannot change or delete anything there.
       <br><br><a class="btn primary" href="/api/drive/connect?next=${encodeURIComponent(location.pathname)}">Connect Google Drive</a>`);
+  }
+
+  // Open a folder by its link (your own, one shared with you, or a public
+  // one) and start there next time.
+  async function onLink(e) {
+    e.preventDefault();
+    const input = e.target.link;
+    if (!input.value.trim()) return;
+    try {
+      const res = await fetch("/api/drive/folder", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ link: input.value }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw Object.assign(new Error(data.error || "could not open that folder"), data, { status: res.status });
+      input.value = "";
+      trail = [trail[0], data.start_folder];
+      load();
+    } catch (err) {
+      if (err.reconnect) return offerConnect();
+      note(h(err.message));
+    }
   }
 
   function onChange(e) {
@@ -133,6 +159,7 @@
     const status = await get("/api/drive/status").catch(() => ({}));
     shareWith = status.mode === "service_account" ? status.share_with : null;
     trail = shareWith ? [{ id: "shared-with-me", name: "Shared with this app" }] : [{ id: "root", name: "My Drive" }];
+    if (status.start_folder) trail.push(status.start_folder);
     picked = new Map();
     listing = { folders: [], files: [], next: null };
     dlg.querySelector("h2").textContent = options.title || "Google Drive";

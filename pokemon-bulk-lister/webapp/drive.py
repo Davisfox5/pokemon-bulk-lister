@@ -152,15 +152,42 @@ def _local_path(target: Optional[str]) -> str:
     return target.split("?")[0]
 
 
+def _folder_key(uid: int) -> str:
+    return f"drive-folder:user-{uid}"
+
+
 @drive_bp.route("/api/drive/status")
 @login_required
 def status():
     uid = current_user_id()
+    # The folder this account opened by link last time; the picker starts there.
+    start = runtime.state_get(_folder_key(uid))
     if _uses_service_account(uid):
-        # The address is what the operator shares a Drive folder with.
+        # The address is what the operator shares a private Drive folder with.
         return jsonify({"configured": True, "connected": True, "mode": "service_account",
-                        "share_with": service_account()[0]})
-    return jsonify({"configured": configured(), "connected": configured() and connected(uid), "mode": "oauth"})
+                        "share_with": service_account()[0], "start_folder": start})
+    return jsonify({"configured": configured(), "connected": configured() and connected(uid),
+                    "mode": "oauth", "start_folder": start})
+
+
+@drive_bp.route("/api/drive/folder", methods=["POST", "DELETE"])
+@login_required
+def folder_link():
+    """POST {link}: open a folder by its Drive link and remember it as this
+    account's starting point. The folder has to be one the sign-in can open:
+    the account's own, one shared with it, or one shared as "anyone with the
+    link". DELETE forgets it."""
+    uid = current_user_id()
+    if request.method == "DELETE":
+        runtime.state_set(_folder_key(uid), None)
+        return jsonify({"start_folder": None})
+    body = request.get_json(silent=True) or {}
+    try:
+        found = drive_for(uid).folder(google_drive.folder_id_from_link(str(body.get("link") or "")))
+    except Exception as exc:
+        return error_response(exc)
+    runtime.state_set(_folder_key(uid), found)
+    return jsonify({"start_folder": found})
 
 
 @drive_bp.route("/api/drive/connect")

@@ -50,6 +50,21 @@ class DriveError(RuntimeError):
     pass
 
 
+_LINK_ID = re.compile(r"(?:/folders/|[?&]id=)([A-Za-z0-9_-]{10,200})")
+
+
+def folder_id_from_link(text: str) -> str:
+    """The folder id in a Drive link ("https://drive.google.com/drive/folders/<id>?usp=sharing",
+    ".../open?id=<id>") or a bare id. Raises DriveError for anything else."""
+    text = (text or "").strip()
+    hit = _LINK_ID.search(text)
+    if hit and "google.com" in text:
+        return hit.group(1)
+    if _ID.match(text) and len(text) >= 10:
+        return text
+    raise DriveError("that is not a Google Drive folder link; copy the address of the folder from your browser")
+
+
 class DriveNotAuthorized(DriveError):
     """The saved sign-in no longer works (revoked, or expired). Connect again."""
 
@@ -182,6 +197,15 @@ class Drive:
                       for f in entries if f.get("mimeType") != FOLDER],
             "next": body.get("nextPageToken"),
         }
+
+    def folder(self, folder_id: str) -> dict:
+        """{"id", "name"} of a folder this sign-in can open. A folder shared
+        as "anyone with the link" can be opened by any sign-in that has its
+        id, whoever owns it."""
+        info = self.meta(folder_id)
+        if info.get("mimeType") != FOLDER:
+            raise DriveError(f"{info.get('name')} is a file, not a folder; paste the link of the folder it is in")
+        return {"id": info["id"], "name": info.get("name") or "Folder"}
 
     def meta(self, file_id: str) -> dict:
         if not _ID.match(file_id):

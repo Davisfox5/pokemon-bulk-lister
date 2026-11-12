@@ -30,6 +30,7 @@ class FakeGoogle:
         self.refresh_ok = True
         self.files = {
             "f1": {"id": "f1", "name": "Binder", "mimeType": FOLDER},
+            "1AbCdEfGhIjKlMnOpQrStUv": {"id": "1AbCdEfGhIjKlMnOpQrStUv", "name": "Public scans", "mimeType": FOLDER},
             "s1": {"id": "s1", "name": "My cards", "mimeType": SHEET},
             "c1": {"id": "c1", "name": "whatnot.csv", "mimeType": "text/csv", "size": "60"},
             "d1": {"id": "d1", "name": "notes.docx", "mimeType": "application/msword", "size": "10"},
@@ -101,7 +102,7 @@ def _connect(client):
 
 def test_connecting_asks_google_for_read_only_access_and_keeps_the_token_sealed(google):
     me = _user(google, "a@example.com")
-    assert me.get("/api/drive/status").get_json() == {"configured": True, "connected": False, "mode": "oauth"}
+    assert me.get("/api/drive/status").get_json() == {"configured": True, "connected": False, "mode": "oauth", "start_folder": None}
     assert google.test_client().get("/api/drive/status").status_code == 401
 
     r, q = _connect(me)
@@ -141,7 +142,7 @@ def test_a_sign_in_this_browser_did_not_start_is_refused(google):
 def test_without_google_credentials_the_feature_says_so(google, monkeypatch):
     monkeypatch.delenv("GOOGLE_CLIENT_ID")
     me = _user(google, "a@example.com")
-    assert me.get("/api/drive/status").get_json() == {"configured": False, "connected": False, "mode": "oauth"}
+    assert me.get("/api/drive/status").get_json() == {"configured": False, "connected": False, "mode": "oauth", "start_folder": None}
     assert me.get("/api/drive/connect?next=/").headers["Location"] == "/?drive=not-set-up"
     assert me.get("/api/drive/files").status_code == 400
 
@@ -150,7 +151,7 @@ def test_browsing_lists_folders_and_only_the_kind_of_file_asked_for(google):
     me = _user(google, "a@example.com")
     _connect(me)
     listing = me.get("/api/drive/files?kind=sheets").get_json()
-    assert [f["name"] for f in listing["folders"]] == ["Binder"]
+    assert [f["name"] for f in listing["folders"]] == ["Binder", "Public scans"]
     assert sorted(f["name"] for f in listing["files"]) == ["My cards", "whatnot.csv"]
     query = google.google.calls[-1][2]["q"]
     assert query.startswith("'root' in parents and trashed = false")
@@ -251,7 +252,7 @@ def test_a_service_account_gives_the_operator_what_was_shared_with_it_and_nobody
     op, seller = _user(google, "op@example.com"), _user(google, "seller@example.com")
     assert op.get("/api/drive/status").get_json() == {
         "configured": True, "connected": True, "mode": "service_account",
-        "share_with": "bot@proj.iam.gserviceaccount.com"}
+        "share_with": "bot@proj.iam.gserviceaccount.com", "start_folder": None}
     listing = op.get("/api/drive/files?kind=sheets&folder=shared-with-me").get_json()
     assert sorted(f["name"] for f in listing["files"]) == ["My cards", "whatnot.csv"]
 
@@ -270,7 +271,7 @@ def test_a_service_account_gives_the_operator_what_was_shared_with_it_and_nobody
     assert (r["added"], r["cards"]) == (2, 3)
 
     # Everyone else: no Drive, and nothing of what was shared with the install.
-    assert seller.get("/api/drive/status").get_json() == {"configured": False, "connected": False, "mode": "oauth"}
+    assert seller.get("/api/drive/status").get_json() == {"configured": False, "connected": False, "mode": "oauth", "start_folder": None}
     r = seller.get("/api/drive/files?kind=sheets&folder=shared-with-me")
     assert r.status_code == 400 and "operator" in r.get_json()["error"]
     assert seller.post("/api/drive/import/sheet", json={"file_id": "s1", "source": "cards"}).status_code == 400
@@ -289,3 +290,24 @@ def test_a_project_with_the_drive_api_off_says_how_to_turn_it_on():
 
     with pytest.raises(google_drive.DriveError, match="switched off.*click Enable"):
         google_drive.Drive("at", http=Off()).list("root", "photos")
+
+
+def test_a_folder_is_opened_by_its_link_and_remembered_as_the_starting_point(google):
+    me, other = _user(google, "a@example.com"), _user(google, "b@example.com")
+    _connect(me)
+    assert me.get("/api/drive/status").get_json()["start_folder"] is None
+    for link in ("https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv?usp=sharing",
+                 "https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOpQrStUv",
+                 "https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUv", "1AbCdEfGhIjKlMnOpQrStUv"):
+        r = me.post("/api/drive/folder", json={"link": link})
+        assert r.get_json() == {"start_folder": {"id": "1AbCdEfGhIjKlMnOpQrStUv", "name": "Public scans"}}, link
+    assert me.get("/api/drive/status").get_json()["start_folder"]["name"] == "Public scans"
+    assert other.get("/api/drive/status").get_json()["start_folder"] is None       # per account
+
+    for bad in ("https://evil.example/folders/1AbCdEfGhIjKlMnOpQrStUv", "not a link", ""):
+        r = me.post("/api/drive/folder", json={"link": bad})
+        assert r.status_code == 400 and "not a Google Drive folder link" in r.get_json()["error"], bad
+    r = me.post("/api/drive/folder", json={"link": "https://drive.google.com/open?id=s1s1s1s1s1s1"})
+    assert r.status_code == 400                                                    # no such folder
+    assert me.delete("/api/drive/folder").get_json() == {"start_folder": None}
+    assert other.post("/api/drive/folder", json={"link": "1AbCdEfGhIjKlMnOpQrStUv"}).status_code == 409   # not connected

@@ -480,6 +480,11 @@ when a row does not give one. Each row is added as the card it states, with
 a count first and a confirmation. Reading the same sheet again adds nothing.
 Excel files are not read; save as Google Sheets or CSV.
 
+**Open a folder by link.** Paste a Drive folder's address into the box at
+the top of the picker to jump to it; the picker starts there next time. It
+works for any folder the sign-in can open: your own, one shared with you, or
+one shared as "anyone with the link". Nothing has to change in Drive.
+
 **With a service account** (`GOOGLE_SA_EMAIL`, `GOOGLE_SA_PRIVATE_KEY`) there
 is no sign-in. In Google Drive, share a folder with the service account's
 address (Viewer is enough) and it appears in the picker under "Shared with
