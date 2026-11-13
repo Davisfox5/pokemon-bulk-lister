@@ -64,7 +64,7 @@ const SOURCE_NAMES = {
 /* Where a price came from and how far to trust it. Every price on these
    pages gets one of these under it: one compact line, full names on hover. */
 function provenanceHtml(p) {
-  if (!p || !p.priced_at) return '<span class="prov">no market price on file</span>';
+  if (!p || !p.priced_at) return '<span class="prov">no price yet</span>';
   const keys = Object.keys(SOURCE_LABELS).filter((k) => p.sources && p.sources[k] != null);
   const short = keys.map((k) => `${SOURCE_LABELS[k]} ${fmtUsd(p.sources[k])}`);
   const long = keys.map((k) => `${SOURCE_NAMES[k]}: ${fmtUsd(p.sources[k])}`);

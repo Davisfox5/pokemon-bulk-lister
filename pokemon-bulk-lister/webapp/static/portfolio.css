@@ -341,8 +341,35 @@ dialog textarea { width: 100%; min-height: 220px; font-family: ui-monospace, "SF
   border-left: 3px solid var(--accent); }
 .totals-strip .btn { padding: 2px 10px; font-size: 12px; }
 
+/* Actions for the ticked cards. Sticks to the bottom of the screen so it is
+   in reach however long the list is. */
+.bulk-bar {
+  position: sticky; bottom: 8px; z-index: 5; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin: 8px 0; padding: 8px 12px; border: 1px solid var(--accent, #2563eb); border-radius: 10px;
+  background: var(--surface-1); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+.bulk-bar strong { margin-right: auto; font-variant-numeric: tabular-nums; }
+.phone-only { display: none; }
+.m-meta { font-size: 12px; color: var(--ink-2); }
+
 /* ---------- phones ---------- */
 @media (max-width: 700px) {
+  .phone-only { display: inline-flex; }
+  div.phone-only { display: block; }
+  /* Each card is a block: photo, name and price on top, its actions under
+     it. No sideways scrolling to reach a button. */
+  #have-table { min-width: 0; }
+  #have-table thead { display: none; }
+  #have-table tr[data-id] {
+    display: grid; grid-template-columns: 26px 44px minmax(0, 1fr) auto; gap: 4px 8px; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--grid);
+  }
+  #have-table tr[data-id] td { border: 0; padding: 0; }
+  #have-table tr[data-id] td:nth-child(4), #have-table tr[data-id] td:nth-child(5),
+  #have-table tr[data-id] td:nth-child(7), #have-table tr[data-id] td:nth-child(8) { display: none; }
+  #have-table tr[data-id] td:nth-child(9) { grid-column: 1 / -1; }
+  #have-table .row-actions { justify-content: flex-start; flex-wrap: wrap; white-space: normal; }
+  #have-table .row-actions .btn { padding: 7px 12px; font-size: 13px; }
   .topbar { padding-left: 12px; padding-right: 12px; gap: 8px; }
   .topbar-left { flex-wrap: wrap; gap: 6px 14px; }
   .topbar-right { flex-wrap: wrap; }

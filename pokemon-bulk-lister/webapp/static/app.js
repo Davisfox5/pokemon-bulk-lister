@@ -238,8 +238,8 @@ function setupDropzone() {
   const remember = () => {
     localStorage.setItem("scan-settings", JSON.stringify({ mode: scanMode(), auto: $("#auto-process").checked }));
     $("#dropzone-hint").textContent = scanMode() === "single"
-      ? "Each photo is one card. Shoot it flat on a plain, darker background."
-      : "Binder pages are split into up to 9 cards. Empty pockets are skipped.";
+      ? "One card per photo. Drop, or tap to choose"
+      : "Drop, or tap to choose";
   };
   $$('input[name="scan-mode"]').forEach(r => r.addEventListener("change", remember));
   $("#auto-process").addEventListener("change", remember);
@@ -278,7 +278,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (back) {
     history.replaceState(null, "", location.pathname);
     status.textContent = {
-      connected: "Google Drive connected. Click “From Google Drive” to pick photos.",
+      connected: "Google Drive connected. Tap Google Drive to pick photos.",
       declined: "Google Drive was not connected: access was declined.",
       failed: "Google Drive could not be connected. Try again.",
       "not-set-up": "Google Drive is not set up on this install (GOOGLE_CLIENT_ID is missing).",

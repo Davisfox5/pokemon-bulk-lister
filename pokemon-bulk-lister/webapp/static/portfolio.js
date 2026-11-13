@@ -118,8 +118,7 @@ function renderHave() {
   $("#lib-count").textContent = lib.items.length
     ? `${rows.length} of ${lib.items.length} entries` : "";
   if (!lib.items.length) {
-    body.innerHTML = `<tr><td colspan="9" class="empty">Your library is empty.
-      <a href="/">Scan binder pages</a> and click “Import scanned cards”, or use “Add a card”.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="empty">No cards yet. <a href="/">Scan</a> some, or use Import.</td></tr>`;
   } else if (!rows.length) {
     body.innerHTML = '<tr><td colspan="9" class="empty">No cards match these filters.</td></tr>';
   } else {
@@ -137,7 +136,7 @@ function haveRow(it) {
     ? `<span class="listed">Listed ${fmtUsd(listing.price)}</span>
        <button class="btn btn-ghost" data-act="reprice" title="Change the asking price">Reprice</button>
        <button class="btn btn-ghost" data-act="unlist" title="Take the listing down">Unlist</button>`
-    : `<button class="btn" data-act="sell" title="List on the marketplace">Sell</button>`;
+    : `<button class="btn btn-primary" data-act="sell" title="List on the marketplace">Sell</button>`;
   return `<tr data-id="${it.id}" class="${it.provenance.flagged ? "flag" : ""}">
     <td class="sel"><input type="checkbox" data-act="select" ${lib.selected.has(it.id) ? "checked" : ""}
         ${listing ? "disabled" : ""} aria-label="Select ${esc(it.name)}"></td>
@@ -145,7 +144,8 @@ function haveRow(it) {
     <td>${cardLine(it)}${(it.listed_on || []).map((l) =>
         `<${l.url ? `a href="${esc(l.url)}" target="_blank" rel="noopener"` : "span"} class="pill"
           title="Listed on ${esc(l.site)}${l.price == null ? "" : ` at ${fmtUsd(l.price)}`}">${esc(l.site)}${
-          l.price == null ? "" : " " + fmtUsd(l.price)}</${l.url ? "a" : "span"}>`).join(" ")}</td>
+          l.price == null ? "" : " " + fmtUsd(l.price)}</${l.url ? "a" : "span"}>`).join(" ")}
+      <div class="m-meta phone-only">${esc(it.condition)} · ×${it.quantity}</div></td>
     <td>${esc(it.condition)}</td>
     <td class="num">${it.quantity}</td>
     <td class="num price-cell">${fmtUsd(it.price)}${provenanceHtml(it.provenance)}</td>
@@ -154,7 +154,7 @@ function haveRow(it) {
     <td>
       <div class="row-actions">
         ${sellCell}
-        <button class="btn btn-ghost" data-act="sold" title="Record a sale made somewhere else">Sold elsewhere</button>
+        <button class="btn btn-ghost" data-act="sold" title="Record a sale made somewhere else">Mark sold</button>
         ${ebayStatus.authorized
           ? '<button class="btn btn-ghost" data-act="ebay" title="List on your eBay account">eBay</button>' : ""}
         <button class="btn btn-ghost" data-act="remove" title="Remove from library (not a sale)" aria-label="Remove">✕</button>
@@ -169,9 +169,11 @@ function syncSelection(rows = visibleItems()) {
   const all = $("#lib-select-all");
   all.checked = pickable.length > 0 && picked === pickable.length;
   all.indeterminate = picked > 0 && picked < pickable.length;
-  const btn = $("#btn-bulk-list");
-  btn.textContent = `List selected (${lib.selected.size})`;
-  btn.disabled = lib.selected.size === 0;
+  // The bar with what can be done to the ticked cards shows only when some are.
+  const n = lib.selected.size;
+  $("#bulk-bar").classList.toggle("hidden", n === 0 || lib.tab !== "have");
+  $("#bulk-count").textContent = `${n} selected`;
+  $("#btn-select-all-m").textContent = all.checked ? "Select none" : "Select all";
 }
 
 function renderLedger(kind) {
@@ -222,7 +224,7 @@ function renderLedger(kind) {
         : `<span class="chg ${e.gain >= 0 ? "up" : "down"}">${e.gain >= 0 ? "+" : ""}${fmtUsd(e.gain)}</span>`}</td>
     </tr>`).join("") || emptyRow(10, events.length
       ? "No sales match this search."
-      : "No sales yet. Use “Sell” to list a card here, or “Sold elsewhere” to record a sale made off this site.");
+      : "No sales yet.");
   } else {
     const unpriced = t.purchased_unpriced
       ? ` (${t.purchased_unpriced} cards have no price paid on file)` : "";
@@ -239,7 +241,7 @@ function renderLedger(kind) {
       <td class="num">${fmtUsd(e.total)}</td><td class="num">${fmtUsd(e.market_price_now)}</td>
     </tr>`).join("") || emptyRow(9, events.length
       ? "No purchases match this search."
-      : "No purchases yet. Cards you buy on the marketplace land here; use “Add a card” with a price paid for anything bought elsewhere.");
+      : "No purchases yet.");
   }
 }
 
@@ -291,9 +293,7 @@ $("#inv-body").addEventListener("click", async (e) => {
     } else if (act === "remove") {
       const { ok } = await askConfirm({
         title: "Remove from library?",
-        html: `<p><strong>${esc(item.name)}</strong> (${item.quantity}) leaves your library with no sale recorded.
-               Any active listing for it is taken down.</p>
-               <p class="muted">If you sold it, use “Sold elsewhere” so it shows in your sales.</p>`,
+        html: `<p><strong>${esc(item.name)}</strong> (${item.quantity}) is removed with no sale recorded.</p>`,
         confirm: "Remove",
       });
       if (!ok) return;
@@ -363,7 +363,41 @@ $("#sell-form").addEventListener("submit", async (e) => {
   }
 });
 
-/* ---------------- bulk list ---------------- */
+/* ---------------- bulk actions ---------------- */
+
+$("#btn-select-all-m").addEventListener("click", () => {
+  const all = $("#lib-select-all");
+  all.checked = !all.checked;
+  all.dispatchEvent(new Event("change"));
+});
+
+$("#btn-bulk-clear").addEventListener("click", () => {
+  lib.selected.clear();
+  renderLibrary();
+});
+
+$("#btn-bulk-remove").addEventListener("click", async () => {
+  const ids = [...lib.selected];
+  const { ok } = await askConfirm({
+    title: `Remove ${ids.length} card${ids.length === 1 ? "" : "s"}?`,
+    html: "<p>They leave your library with no sale recorded.</p>",
+    confirm: "Remove",
+  });
+  if (!ok) return;
+  let removed = 0, failed = 0;
+  for (const id of ids) {
+    try {
+      await api(`/api/inventory/${id}`, { method: "DELETE" });
+      lib.selected.delete(id);
+      removed += 1;
+    } catch (err) {
+      failed += 1;
+    }
+  }
+  toast(`Removed ${removed} card${removed === 1 ? "" : "s"}.` + (failed ? ` ${failed} could not be removed.` : ""),
+    failed ? "err" : undefined);
+  refreshAll();
+});
 
 $("#btn-bulk-list").addEventListener("click", async () => {
   const item_ids = [...lib.selected];
@@ -520,7 +554,7 @@ async function loadListingImport() {
   $("#btn-li-ebay").disabled = !data.ebay_connected;
   $("#li-ebay-note").textContent = data.ebay_connected
     ? "your active listings, read from the connected account"
-    : "not connected for this account; connect eBay first";
+    : "not connected";
   $("#li-unmatched-wrap").classList.toggle("hidden", !data.unmatched_total);
   $("#li-unmatched-count").textContent = data.unmatched_total || "";
   $("#li-unmatched").innerHTML = data.unmatched.map((u) => `<li data-id="${u.id}">
@@ -643,7 +677,7 @@ $("#btn-import-listings").addEventListener("click", () => {
   if (drive) {
     history.replaceState(null, "", location.pathname);
     const said = {
-      connected: ["Google Drive connected. Choose “From Drive” to pick a spreadsheet.", "ok"],
+      connected: ["Google Drive connected. Tap Google Drive to pick a spreadsheet.", "ok"],
       declined: ["Google Drive was not connected: access was declined.", "err"],
       failed: ["Google Drive could not be connected. Try again.", "err"],
       "not-set-up": ["Google Drive is not set up on this install (GOOGLE_CLIENT_ID is missing).", "err"],
@@ -780,7 +814,7 @@ function priceCards(mode = "new") {
       if (tried) {
         const missing = tried - priced;
         toast(`Prices looked up for ${priced} of ${tried} card${tried === 1 ? "" : "s"}.`
-          + (missing ? ` ${missing} ha${missing === 1 ? "s" : "ve"} no market price on file.` : ""));
+          + (missing ? ` ${missing} ha${missing === 1 ? "s" : "ve"} no price yet.` : ""));
         refreshAll();
       }
       return { tried, priced };
@@ -1206,9 +1240,8 @@ async function loadAccount() {
   if (!acct.verified) {
     $("#verify-text").textContent =
       (acct.mail === "smtp"
-        ? ` We sent a link to ${acct.email}. Open it to sell, buy and get paid.`
-        : ` This install has no mail server set up, so the link for ${acct.email} is printed in the app's console window. Open it to sell, buy and get paid.`)
-      + (acct.admin_pending ? " Operator tools unlock once this address is confirmed." : "");
+        ? ` Open the link we sent to ${acct.email}.`
+        : ` Email is not set up on this site yet, so no link was sent to ${acct.email}.`);
   }
 }
 
@@ -1219,7 +1252,7 @@ $("#btn-resend").addEventListener("click", async () => {
     const res = await postJson("/api/account/resend-verification");
     toast(res.verified ? "This address is already confirmed."
       : res.via === "smtp" ? "Sent. Check your inbox."
-      : "A new link was printed in the app's console window.");
+      : "Email is not set up on this site, so nothing was sent.", res.verified || res.via === "smtp" ? undefined : "err");
     loadAccount().catch(() => {});
   } catch (err) {
     toast(err.message, "err");
