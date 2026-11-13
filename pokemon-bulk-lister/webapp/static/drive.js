@@ -301,9 +301,21 @@
     load();
   }
 
+  // Google's picker runs in a frame from google.com and needs that site's
+  // sign-in cookie. Safari, and every browser on an iPhone or iPad, withhold
+  // it from frames, and the picker then says "can't access your account,
+  // enable cookies or sign in". There the built-in list is used instead: it
+  // reads the same Drive through this app's own connection.
+  function blocksGooglePicker() {
+    const ua = navigator.userAgent || "";
+    const ios = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const safari = /Safari\//.test(ua) && !/Chrome\/|Chromium\/|Edg\/|OPR\/|Android/.test(ua);
+    return ios || safari;
+  }
+
   window.openDrivePicker = async function (options) {
     const status = await get("/api/drive/status").catch(() => ({}));
-    if (status.mode === "oauth" && status.connected) {
+    if (status.mode === "oauth" && status.connected && !blocksGooglePicker()) {
       try {
         const config = await get("/api/drive/picker");
         return await openGooglePicker(options, config);
