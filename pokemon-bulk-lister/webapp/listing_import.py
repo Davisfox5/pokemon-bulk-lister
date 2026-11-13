@@ -49,6 +49,7 @@ from webapp.models import (
     get_or_create_catalog_card,
     get_session,
     log_event,
+    record_price,
 )
 
 listings_bp = Blueprint("listings", __name__)
@@ -181,43 +182,83 @@ _CARD_COLUMNS = {
     "quantity": ("quantity", "qty", "count", "owned", "amount", "copies"),
     "condition": ("condition", "cond", "grade"),
     "holo": ("holo", "foil", "isholo", "holofoil"),
-    "printing": ("printing", "variant", "finish", "version", "type"),
+    "printing": ("printing", "variant", "finish", "version"),
     "rarity": ("rarity",),
     "cost": ("pricepaid", "paid", "cost", "purchaseprice", "boughtfor", "costbasis", "acquiredprice"),
-    "note": ("notes", "note", "comment", "comments", "description", "language"),
+    "market": ("marketprice", "marketvalue", "tcgmarketprice", "currentprice", "tcgplayermarket"),
+    "price_source": ("pricesource", "pricesourceurl", "sourceurl"),
+    "note": ("notes", "note", "comment", "comments", "description"),
 }
 # Shown to the user so they can see what each of their columns became.
 _CARD_FIELD_LABELS = {
     "name": "card name", "set": "set", "set_code": "set code", "number": "card number",
-    "quantity": "quantity", "condition": "condition", "holo": "holo", "printing": "printing (holo or not, kept as a note)",
-    "rarity": "rarity", "cost": "price paid", "note": "note",
+    "quantity": "quantity", "condition": "condition", "holo": "holo",
+    "printing": "printing (holo or not; the wording is kept in the note)",
+    "rarity": "rarity (and holo or not, if it says foil or holo)",
+    "cost": "price paid", "market": "market price (used until a live price is found)",
+    "price_source": "where the market price came from", "note": "note",
 }
 _YES = ("y", "yes", "true", "1", "x", "holo", "foil", "holofoil")
+_PLAIN_PRINTINGS = ("", "holo", "holofoil", "foil", "normal", "non holo", "nonholo")
+
+
+def _card_columns(headers: list[str]) -> dict[str, Optional[str]]:
+    """Which header is which field. An exact header name wins; then a header
+    that starts with one ("Condition (est.)", "Rarity/variant", "Market price
+    USD"). A header is used for one field only."""
+    by_norm = {_header(h): h for h in headers if h}
+    cols: dict[str, Optional[str]] = {}
+    taken: set[str] = set()
+    for field, names in _CARD_COLUMNS.items():
+        hit = next((by_norm[n] for n in names if n in by_norm and by_norm[n] not in taken), None)
+        cols[field] = hit
+        if hit:
+            taken.add(hit)
+    for field, names in _CARD_COLUMNS.items():
+        if cols[field]:
+            continue
+        for norm, original in by_norm.items():
+            if original not in taken and any(len(n) >= 4 and norm.startswith(n) for n in names):
+                cols[field] = original
+                taken.add(original)
+                break
+    return cols
+
+
+def card_identity(external_id: str) -> str:
+    """What makes two card-list rows "the same row": name, set and number
+    (plus the counter that tells identical rows apart). Condition and holo
+    are left out, so reading the sheet again after they changed, or after
+    this app learned to read them, finds the row it added before."""
+    core, _, counter = external_id.partition("#")
+    return "|".join(core.split("|")[:3]) + (f"#{counter}" if counter else "")
 
 
 def parse_card_list(text: str) -> tuple[list[dict], dict]:
     """A spreadsheet of cards you own, read by header name. Only a name
-    column is required; Set, Set code, Number, Quantity, Condition, Holo,
-    Printing, Rarity, Price paid and Notes are used when present.
+    column is required. Set, set code, number, quantity, condition, holo,
+    printing, rarity, price paid, market price and notes are read when
+    present, under the usual spellings of those headers.
 
-    Two values are filled in when a row does not give them, because a library
-    row cannot be without them: quantity 1, and condition NM. `info` counts
-    both and lists every column that was read and every column that was not,
-    and the preview shows that before anything is added."""
+    Nothing in a row is dropped: a column this app has no field for is kept
+    in the card's note as "Header: value". Two values are filled in when a
+    row does not give them, because a library row cannot be without them:
+    quantity 1 and condition NM. `info` says which column was read as what,
+    which went to the note, and how many rows were filled in; the preview
+    shows that before anything is added."""
     reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
-    headers = reader.fieldnames or []
-    cols = _columns(headers, _CARD_COLUMNS)
+    headers = [h for h in (reader.fieldnames or []) if h]
+    cols = _card_columns(headers)
     if not cols["name"]:
         raise ValueError("no Name column found (looked for: Name, Card, Card name). "
-                         "Columns in this sheet: " + (", ".join(h for h in headers if h) or "none"))
+                         "Columns in this sheet: " + (", ".join(headers) or "none"))
     used = {cols[f]: _CARD_FIELD_LABELS[f] for f in _CARD_COLUMNS if cols[f]}
+    leftover = [h for h in headers if h not in used]
     info = {
         "rows": 0, "skipped": 0, "not_listed": 0,
-        # What each column of the sheet was read as, which columns were not
-        # read at all, and how many rows got a value the sheet did not give.
         "columns_read": [{"column": c, "as": used[c]} for c in headers if c in used],
-        "columns_ignored": [c for c in headers if c and c not in used],
-        "assumed_condition": 0, "assumed_quantity": 0,
+        "columns_noted": leftover,
+        "assumed_condition": 0, "assumed_quantity": 0, "with_market_price": 0,
     }
     lines: list[dict] = []
     seen: dict[str, int] = {}
@@ -242,36 +283,50 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
         if len(lines) >= MAX_ROWS:
             raise ValueError(f"that sheet has more than {MAX_ROWS} cards; split it up")
         set_name, number_raw = cell(raw, "set"), cell(raw, "number")
-        number = number_raw.split("/")[0].lstrip("0") or number_raw.split("/")[0]
+        first = number_raw.split("/")[0].strip()
+        number = first.lstrip("0") or first
         given = cell(raw, "condition")
         condition = given.upper() if given.upper() in CONDITIONS else _split_condition(given)[0]
-        if condition is None:
+        assumed = condition is None
+        if assumed:
             condition = "NM"
             info["assumed_condition"] += 1
-        printing = cell(raw, "printing")
-        printing_norm = _norm(printing)
+        printing, rarity = cell(raw, "printing"), cell(raw, "rarity")
+        # "Holofoil", "Reverse Holo", "Rare (sparkle foil)": the finish can sit
+        # in a printing column or inside the rarity.
+        finish = _norm(f"{printing} {rarity}")
         holo = cell(raw, "holo").lower() in _YES or (
-            ("holo" in printing_norm or "foil" in printing_norm)
-            and "reverse" not in printing_norm and "non" not in printing_norm.split())
-        # Kept word for word, so nothing the sheet said about the card is lost:
-        # a printing this app has no field for, a grade, the owner's own note.
-        extras = [x for x in (
-            printing if printing and printing_norm not in ("holo", "holofoil", "foil", "normal", "non holo", "") else "",
-            given if given and given.upper() != condition and _split_condition(given)[0] is None else "",
-            cell(raw, "note")) if x]
-        # The row's own content is its identity, so the same sheet read again
-        # adds nothing. Two identical rows are told apart by a counter.
-        base = "|".join((_norm(name), _norm(set_name), number, condition, "h" if holo else "n"))
+            ("holo" in finish or "foil" in finish)
+            and "reverse" not in finish and "non" not in finish.split())
+        market = _amount(cell(raw, "market"))
+        if market is not None:
+            info["with_market_price"] += 1
+
+        # Kept word for word, so nothing the sheet said is lost.
+        extras = [cell(raw, "note")]
+        if printing and _norm(printing) not in _PLAIN_PRINTINGS:
+            extras.append(f"Printing: {printing}")
+        if given and (assumed or _norm(given) not in [full for full, _ in _FULL_CONDITIONS] + [c.lower() for c in CONDITIONS]):
+            extras.append(f"Condition as written: {given}")
+        if number_raw and number_raw not in (number, first) and "/" in number_raw:
+            extras.append(f"Number as written: {number_raw}")
+        extras += [f"{h}: {(raw.get(h) or '').strip()}" for h in leftover if (raw.get(h) or "").strip()]
+        note = "; ".join(x for x in extras if x)[:1000] or None
+
+        # The row's identity: name, set and number, so the same sheet read
+        # again finds the rows it added. Identical rows get a counter.
+        base = "|".join((_norm(name), _norm(set_name), number))
         seen[base] = seen.get(base, 0) + 1
         lines.append({
             "external_id": base if seen[base] == 1 else f"{base}#{seen[base]}",
             "sku": None, "quantity": quantity, "price": None, "url": None, "image_url": None,
             "title": " · ".join(p for p in (name, set_name, number_raw, condition) if p),
-            "condition": condition, "cost": _amount(cell(raw, "cost")),
-            "note": "; ".join(extras)[:300] or None,
+            "condition": condition, "condition_assumed": assumed,
+            "cost": _amount(cell(raw, "cost")), "note": note,
+            "sheet_price": market, "sheet_price_source": cell(raw, "price_source")[:200] or None,
             "card": {"name": name, "set_name": set_name or None,
                      "set_code": cell(raw, "set_code").lower() or None, "card_number": number or None,
-                     "rarity": cell(raw, "rarity") or None, "is_holo": holo},
+                     "rarity": rarity[:80] or None, "is_holo": holo},
         })
     return lines, info
 
@@ -464,6 +519,48 @@ def _place(s, row: ExternalListing, card: dict, condition: str, note: Optional[s
     return item
 
 
+def _use_sheet_price(s, cc: CatalogCard, line: dict) -> bool:
+    """A card with no price takes the market price its owner's sheet gives,
+    marked as such. A live price found later replaces it."""
+    price = line.get("sheet_price")
+    if price is None or cc.final_price is not None:
+        return False
+    source = line.get("sheet_price_source")
+    record_price(s, cc, {
+        "final_price": price, "pricing_confidence": 0.5,
+        "pricing_notes": "From your spreadsheet" + (f" ({source})" if source else ""),
+    })
+    return True
+
+
+def _repair_from_sheet(s, row: ExternalListing, line: dict) -> bool:
+    """A sheet row this account imported before, read again. The library row
+    it made is brought up to what the sheet says now: finish, rarity, note,
+    price paid, market price, and a condition the sheet states. Quantity is
+    left alone (cards may have been sold or added by hand since). Returns
+    whether anything changed."""
+    item = s.get(InventoryItem, row.inventory_item_id) if row.inventory_item_id else None
+    if item is None or item.user_id != row.user_id or item.quantity < 1:
+        return False
+    changed = False
+    cc = _catalog_card(s, line["card"])
+    if cc.id != item.catalog_card_id:           # the finish was read differently before
+        item.catalog_card_id, changed = cc.id, True
+    if line["card"].get("rarity") and not cc.rarity:
+        cc.rarity, changed = line["card"]["rarity"], True
+    if line.get("note") and item.notes != line["note"]:
+        item.notes, changed = line["note"], True
+    if line.get("cost") is not None and item.acquired_price is None:
+        item.acquired_price, changed = line["cost"], True
+    if not line.get("condition_assumed") and item.condition != line["condition"]:
+        item.condition = row.condition = line["condition"]
+        changed = True
+    if _use_sheet_price(s, cc, line):
+        changed = True
+    row.title = (line.get("title") or row.title or "")[:500]
+    return changed
+
+
 def _sku_index(s, uid: int) -> dict[str, int]:
     """SKU -> library row. A card this app listed carries its photo's file
     stem as its SKU; a listing imported earlier keeps the SKU it came with."""
@@ -479,8 +576,14 @@ def _sku_index(s, uid: int) -> dict[str, int]:
 
 
 def _existing(s, uid: int, source: str, lines: list[dict]) -> dict[str, ExternalListing]:
+    """Rows already on file for these lines, keyed by the line's id."""
     rows = s.query(ExternalListing).filter_by(user_id=uid, source=source).all()
     wanted = {line["external_id"][:160] for line in lines}
+    if source == "cards":
+        # Matched on name, set and number: an older import wrote condition
+        # and holo into the id as well.
+        by_identity = {card_identity(r.external_id): r for r in rows}
+        return {w: by_identity[card_identity(w)] for w in wanted if card_identity(w) in by_identity}
     return {r.external_id: r for r in rows if r.external_id in wanted}
 
 
@@ -495,6 +598,8 @@ def preview(uid: int, source: str, lines: list[dict]) -> dict:
     linked = [l for l in fresh if l.get("sku") and l["sku"] in skus]
     return {
         "dry_run": True, "source": source, "listings": len(lines),
+        # A card list read again brings the rows it added before up to date.
+        "will_update": len(seen) if source == "cards" else 0,
         "already_imported": len(lines) - len([l for l in lines if l["external_id"][:160] not in seen]),
         "already_in_library": len(linked),
         "new": len(fresh) - len(linked),
@@ -505,7 +610,7 @@ def preview(uid: int, source: str, lines: list[dict]) -> dict:
 def import_lines(uid: int, source: str, lines: list[dict]) -> dict:
     """Record listings and add the identified ones to `uid`'s library."""
     out = {"dry_run": False, "source": source, "listings": len(lines), "added": 0, "cards": 0,
-           "linked": 0, "unmatched": 0, "duplicates": 0}
+           "linked": 0, "unmatched": 0, "duplicates": 0, "updated": 0}
     budget = _Budget()
     s = get_session()
     try:
@@ -519,6 +624,8 @@ def import_lines(uid: int, source: str, lines: list[dict]) -> dict:
                 row = seen[ext]
                 row.price, row.url = line.get("price"), line.get("url") or row.url
                 out["duplicates"] += 1
+                if source == "cards" and row.status == "imported" and _repair_from_sheet(s, row, line):
+                    out["updated"] += 1
                 continue
             if line["quantity"] < 1:
                 continue
@@ -552,6 +659,7 @@ def import_lines(uid: int, source: str, lines: list[dict]) -> dict:
             if _GRADED.search(row.title or ""):
                 note = "graded; see the listing title"
             item = _place(s, row, card, condition or "NM", note, cost=line.get("cost"))
+            _use_sheet_price(s, s.get(CatalogCard, item.catalog_card_id), line)
             if row.sku:
                 skus[row.sku] = item.id
             out["added"] += 1

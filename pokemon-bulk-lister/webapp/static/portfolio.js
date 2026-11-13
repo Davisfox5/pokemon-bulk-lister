@@ -543,10 +543,12 @@ function cardListReadHtml(p) {
   const filled = [];
   if (p.assumed_condition) filled.push(`${p.assumed_condition} row${p.assumed_condition === 1 ? " has" : "s have"} no condition this app knows and will be recorded as NM`);
   if (p.assumed_quantity) filled.push(`${p.assumed_quantity} row${p.assumed_quantity === 1 ? " has" : "s have"} no quantity and will be recorded as 1`);
+  const noted = p.columns_noted || [];
   return `<p><strong>From your sheet</strong></p><ul>${read}</ul>
-    ${p.columns_ignored.length ? `<p class="flag-note">Not imported (no place for them here): ${p.columns_ignored.map(esc).join(", ")}</p>` : ""}
+    ${noted.length ? `<p>Kept word for word in each card's note: ${noted.map(esc).join(", ")}</p>` : ""}
     ${filled.length ? `<p class="flag-note">Filled in, not from your sheet: ${filled.join("; ")}.</p>` : ""}
-    <p class="muted small">Market prices are looked up right after the import.</p>`;
+    ${p.will_update ? `<p>${p.will_update} row${p.will_update === 1 ? " was" : "s were"} imported before and will be brought up to date from the sheet (quantity is left as it is).</p>` : ""}
+    <p class="muted small">${p.with_market_price ? `${p.with_market_price} row${p.with_market_price === 1 ? " gives" : "s give"} a market price, used until a live price is found. ` : ""}Live prices are looked up right after the import.</p>`;
 }
 
 function listingPreviewHtml(site, p) {
@@ -564,18 +566,21 @@ function listingResultText(site, r) {
   return `${site}: added ${r.added} ${listingNoun(site, r.added)} (${r.cards} card${r.cards === 1 ? "" : "s"})`
     + (r.linked ? `, ${r.linked} already in your library` : "")
     + (r.unmatched ? `, ${r.unmatched} need a look` : "")
-    + (r.duplicates ? `, ${r.duplicates} imported before` : "") + ".";
+    + (r.updated ? `, ${r.updated} brought up to date` : "")
+    + (r.duplicates - (r.updated || 0) > 0 ? `, ${r.duplicates - (r.updated || 0)} unchanged` : "") + ".";
 }
 
 async function runListingImport(site, send) {
   try {
     const p = await send(true);
-    if (!p.new && !p.already_in_library) {
+    if (!p.new && !p.already_in_library && !p.will_update) {
       toast(`${site}: ${p.listings} ${listingNoun(site, p.listings)} read, nothing new to import.`);
       return;
     }
     const { ok } = await askConfirm({
-      title: `Import ${p.new} ${listingNoun(site, p.new)} from ${site === "Your card list" ? "your card list" : site}?`,
+      title: !p.new && p.will_update
+        ? `Update ${p.will_update} card${p.will_update === 1 ? "" : "s"} from your card list?`
+        : `Import ${p.new} ${listingNoun(site, p.new)} from ${site === "Your card list" ? "your card list" : site}?`,
       html: listingPreviewHtml(site, p), confirm: "Import",
     });
     if (!ok) return;

@@ -100,6 +100,11 @@ def refresh_cards(card_ids: Optional[list[int]] = None, batch_size: Optional[int
                 except Exception as exc:
                     print(f"[scheduler] pricing {cc.name}: {exc}", file=sys.stderr)
                     continue
+                if patch.get("final_price") is None and cc.final_price is not None:
+                    # Nothing found this time. Keep the price on file (it may
+                    # be the owner's own, from their spreadsheet) instead of
+                    # replacing it with nothing.
+                    continue
                 record_price(s, cc, patch)
                 s.commit()
                 refreshed += 1

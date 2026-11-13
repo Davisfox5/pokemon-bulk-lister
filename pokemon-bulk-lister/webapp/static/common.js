@@ -75,7 +75,10 @@ function provenanceHtml(p) {
     `Priced ${new Date(p.priced_at).toLocaleString()}`,
     p.notes || "",
   ].filter(Boolean).join("\n");
-  const line = [short.length ? short.join(" · ") : "no source prices", `conf ${conf}`, ago(p.priced_at)].join(" · ");
+  // A price the owner's own spreadsheet gave, until a live one is found.
+  const own = /^From your spreadsheet/.test(p.notes || "");
+  const line = [short.length ? short.join(" · ") : own ? "from your spreadsheet" : "no source prices",
+    `conf ${conf}`, ago(p.priced_at)].join(" · ");
   const why = p.flagged
     ? `<span class="flag-note">needs review${p.outlier ? ": sources disagree" : ""}${p.notes ? " · " + esc(p.notes) : ""}</span>`
     : "";

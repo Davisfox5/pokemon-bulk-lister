@@ -290,24 +290,89 @@ Pikachu,Base Set,58,1,PSA 9,,Common,,gift,,7
 """
 
 
-def test_a_card_list_says_what_it_read_what_it_ignored_and_what_it_filled_in(site):
+def test_a_card_list_says_what_it_read_keeps_the_rest_as_a_note_and_says_what_it_filled_in(site):
     me = _user(site, "a@example.com")
     p = _upload(me, "cards", CARD_SHEET, dry_run=True).get_json()
     assert [(c["column"], c["as"]) for c in p["columns_read"]][:4] == [
         ("Card", "card name"), ("Expansion", "set"), ("Card No", "card number"), ("Copies", "quantity")]
     assert {c["column"] for c in p["columns_read"]} == {
-        "Card", "Expansion", "Card No", "Copies", "Grade", "Variant", "Rarity", "Paid", "Comments"}
-    assert p["columns_ignored"] == ["Market Value", "Binder Page"]       # named, not silently dropped
-    assert (p["assumed_condition"], p["assumed_quantity"]) == (2, 1)     # Dreepy blank, "PSA 9" unknown; Dreepy qty
+        "Card", "Expansion", "Card No", "Copies", "Grade", "Variant", "Rarity", "Paid", "Comments", "Market Value"}
+    assert p["columns_noted"] == ["Binder Page"]                         # no field for it: kept in the note
+    assert (p["assumed_condition"], p["assumed_quantity"], p["with_market_price"]) == (2, 1, 2)
 
     _upload(me, "cards", CARD_SHEET)
     have = {i["name"]: i for i in _have(me)}
     drag = have["Dragapult ex"]
-    assert (drag["quantity"], drag["condition"], drag["is_holo"], drag["rarity"], drag["acquired_price"], drag["notes"]) == (
-        2, "NM", True, "Double Rare", 9.5, "pulled myself")
-    assert (have["Dreepy"]["is_holo"], have["Dreepy"]["notes"]) == (False, "Reverse Holo")
+    assert (drag["quantity"], drag["condition"], drag["is_holo"], drag["rarity"], drag["acquired_price"]) == (
+        2, "NM", True, "Double Rare", 9.5)
+    assert drag["notes"] == "pulled myself; Number as written: 130/167; Binder Page: 3"
+    assert (drag["price"], drag["provenance"]["notes"]) == (14.5, "From your spreadsheet")
+    assert (have["Dreepy"]["is_holo"], have["Dreepy"]["notes"]) == (False, "Printing: Reverse Holo; Binder Page: 3")
     # A grade the app has no field for is kept as written, not thrown away.
-    assert (have["Pikachu"]["condition"], have["Pikachu"]["notes"]) == ("NM", "PSA 9; gift")
+    assert have["Pikachu"]["condition"] == "NM"
+    assert have["Pikachu"]["notes"] == "gift; Condition as written: PSA 9; Binder Page: 7"
+    assert have["Pikachu"]["price"] is None                              # the sheet gave none
+
+
+# The header row and two rows of a real sheet that an earlier version read badly.
+REAL_SHEET = """Source file,Position,Card name,Set,Number,Rarity/variant,Language,Condition (est.),Market price USD,Price source + URL,Suggested list price,ID confidence,Notes
+IMG_5834.HEIC,Single card,Pikachu,Pokémon TCG: 30th Celebration (30C),023/128 (01/30),"Pikachu Rare (sparkle foil, x/30 Pikachu subset)",English,"Near Mint (raw, est. from photo)",$0.87,TCGplayer market via TCGVault (Oct 9),$0.99,High,Number read from card
+IMG_5840.HEIC,Single card,Jirachi ex,Pokémon TCG: 30th Celebration (30C),155/128,Special Illustration Rare,English,"Near Mint (raw, est. from photo)",$41.20,TCGplayer market via TCGVault (Oct 9),$44.99,High,
+"""
+
+
+def test_a_sheet_read_badly_before_is_repaired_by_reading_it_again(site, monkeypatch):
+    from webapp import portfolio, scheduler
+
+    site.register_blueprint(portfolio.portfolio_bp)
+    me = _user(site, "a@example.com")
+    # What the earlier version made of it: name, set and number only, every
+    # card NM and non-holo, and ids that carried the condition and holo flag.
+    _upload(me, "cards", "Card name,Set,Number\nPikachu,Pokémon TCG: 30th Celebration (30C),023/128 (01/30)\n"
+                         "Jirachi ex,Pokémon TCG: 30th Celebration (30C),155/128\n")
+    s = models.get_session()
+    try:
+        for row in s.query(models.ExternalListing).all():
+            row.external_id += "|NM|n"
+        for item in s.query(models.InventoryItem).all():
+            item.notes = None
+        s.commit()
+    finally:
+        s.close()
+    assert [(i["is_holo"], i["rarity"], i["notes"], i["price"]) for i in _have(me)] == [(False, None, None, None)] * 2
+
+    p = _upload(me, "cards", REAL_SHEET, dry_run=True).get_json()
+    assert (p["new"], p["will_update"], p["assumed_condition"], p["with_market_price"]) == (0, 2, 0, 2)
+    read = {c["column"]: c["as"] for c in p["columns_read"]}
+    assert read["Condition (est.)"] == "condition" and read["Rarity/variant"].startswith("rarity")
+    assert read["Market price USD"].startswith("market price") and "Price source + URL" in read
+    assert p["columns_noted"] == ["Source file", "Position", "Language", "Suggested list price", "ID confidence"]
+
+    r = _upload(me, "cards", REAL_SHEET).get_json()
+    assert (r["added"], r["updated"], r["duplicates"]) == (0, 2, 2)
+    have = {i["name"]: i for i in _have(me)}
+    assert len(have) == 2 and sum(i["quantity"] for i in have.values()) == 2      # repaired, not doubled
+    pika = have["Pikachu"]
+    assert (pika["is_holo"], pika["condition"], pika["card_number"]) == (True, "NM", "23")
+    assert pika["rarity"] == "Pikachu Rare (sparkle foil, x/30 Pikachu subset)"
+    assert pika["notes"] == (
+        "Number read from card; Condition as written: Near Mint (raw, est. from photo); "
+        "Number as written: 023/128 (01/30); Source file: IMG_5834.HEIC; Position: Single card; "
+        "Language: English; Suggested list price: $0.99; ID confidence: High")
+    assert pika["price"] == 0.87
+    assert pika["provenance"]["notes"] == "From your spreadsheet (TCGplayer market via TCGVault (Oct 9))"
+    assert (have["Jirachi ex"]["is_holo"], have["Jirachi ex"]["price"]) == (False, 41.2)
+
+    # Reading it a third time changes nothing.
+    assert _upload(me, "cards", REAL_SHEET).get_json()["updated"] == 0
+
+    # A live lookup that finds nothing does not erase the sheet's price; one that finds a price replaces it.
+    monkeypatch.setattr(scheduler, "_price_fn", lambda card: (
+        {"final_price": 1.1, "pricing_confidence": 0.9, "pricing_notes": None} if card["name"] == "Pikachu" else {}))
+    assert me.post("/api/portfolio/price-step", json={"mode": "new"}).get_json()["tried"] == 0   # both have a price
+    me.post("/api/portfolio/price-step", json={"mode": "all"})
+    have = {i["name"]: i for i in _have(me)}
+    assert (have["Pikachu"]["price"], have["Jirachi ex"]["price"]) == (1.1, 41.2)
 
 
 def test_new_cards_are_priced_in_steps_and_the_rest_of_the_library_is_left_alone(site, monkeypatch):
