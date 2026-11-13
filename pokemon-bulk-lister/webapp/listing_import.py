@@ -174,29 +174,51 @@ def parse_tcgplayer_listings(text: str) -> tuple[list[dict], dict]:
 
 
 _CARD_COLUMNS = {
-    "name": ("name", "card", "cardname", "productname"),
-    "set": ("set", "setname", "expansion"),
-    "number": ("number", "cardnumber", "no", "collectornumber"),
-    "quantity": ("quantity", "qty", "count", "owned"),
-    "condition": ("condition", "cond"),
+    "name": ("name", "card", "cardname", "productname", "pokemon", "title"),
+    "set": ("set", "setname", "expansion", "series", "edition"),
+    "set_code": ("setcode", "setid", "setabbreviation"),
+    "number": ("number", "cardnumber", "no", "collectornumber", "cardno", "num"),
+    "quantity": ("quantity", "qty", "count", "owned", "amount", "copies"),
+    "condition": ("condition", "cond", "grade"),
     "holo": ("holo", "foil", "isholo", "holofoil"),
-    "cost": ("pricepaid", "paid", "cost", "purchaseprice", "boughtfor"),
+    "printing": ("printing", "variant", "finish", "version", "type"),
+    "rarity": ("rarity",),
+    "cost": ("pricepaid", "paid", "cost", "purchaseprice", "boughtfor", "costbasis", "acquiredprice"),
+    "note": ("notes", "note", "comment", "comments", "description", "language"),
+}
+# Shown to the user so they can see what each of their columns became.
+_CARD_FIELD_LABELS = {
+    "name": "card name", "set": "set", "set_code": "set code", "number": "card number",
+    "quantity": "quantity", "condition": "condition", "holo": "holo", "printing": "printing (holo or not, kept as a note)",
+    "rarity": "rarity", "cost": "price paid", "note": "note",
 }
 _YES = ("y", "yes", "true", "1", "x", "holo", "foil", "holofoil")
 
 
 def parse_card_list(text: str) -> tuple[list[dict], dict]:
     """A spreadsheet of cards you own, read by header name. Only a name
-    column is required; Set, Number, Quantity, Condition, Holo and Price paid
-    are used when present. Condition is NM when a row does not give one this
-    app knows, the same default as adding a card by hand."""
+    column is required; Set, Set code, Number, Quantity, Condition, Holo,
+    Printing, Rarity, Price paid and Notes are used when present.
+
+    Two values are filled in when a row does not give them, because a library
+    row cannot be without them: quantity 1, and condition NM. `info` counts
+    both and lists every column that was read and every column that was not,
+    and the preview shows that before anything is added."""
     reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
     headers = reader.fieldnames or []
     cols = _columns(headers, _CARD_COLUMNS)
     if not cols["name"]:
         raise ValueError("no Name column found (looked for: Name, Card, Card name). "
                          "Columns in this sheet: " + (", ".join(h for h in headers if h) or "none"))
-    info = {"rows": 0, "skipped": 0, "not_listed": 0}
+    used = {cols[f]: _CARD_FIELD_LABELS[f] for f in _CARD_COLUMNS if cols[f]}
+    info = {
+        "rows": 0, "skipped": 0, "not_listed": 0,
+        # What each column of the sheet was read as, which columns were not
+        # read at all, and how many rows got a value the sheet did not give.
+        "columns_read": [{"column": c, "as": used[c]} for c in headers if c in used],
+        "columns_ignored": [c for c in headers if c and c not in used],
+        "assumed_condition": 0, "assumed_quantity": 0,
+    }
     lines: list[dict] = []
     seen: dict[str, int] = {}
 
@@ -209,7 +231,11 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
         if not name:
             info["skipped"] += 1
             continue
-        quantity = _count(cell(raw, "quantity")) if cols["quantity"] and cell(raw, "quantity") else 1
+        if cols["quantity"] and cell(raw, "quantity"):
+            quantity = _count(cell(raw, "quantity"))
+        else:
+            quantity = 1
+            info["assumed_quantity"] += 1
         if quantity < 1:
             info["not_listed"] += 1
             continue
@@ -218,8 +244,21 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
         set_name, number_raw = cell(raw, "set"), cell(raw, "number")
         number = number_raw.split("/")[0].lstrip("0") or number_raw.split("/")[0]
         given = cell(raw, "condition")
-        condition = given.upper() if given.upper() in CONDITIONS else (_split_condition(given)[0] or "NM")
-        holo = cell(raw, "holo").lower() in _YES
+        condition = given.upper() if given.upper() in CONDITIONS else _split_condition(given)[0]
+        if condition is None:
+            condition = "NM"
+            info["assumed_condition"] += 1
+        printing = cell(raw, "printing")
+        printing_norm = _norm(printing)
+        holo = cell(raw, "holo").lower() in _YES or (
+            ("holo" in printing_norm or "foil" in printing_norm)
+            and "reverse" not in printing_norm and "non" not in printing_norm.split())
+        # Kept word for word, so nothing the sheet said about the card is lost:
+        # a printing this app has no field for, a grade, the owner's own note.
+        extras = [x for x in (
+            printing if printing and printing_norm not in ("holo", "holofoil", "foil", "normal", "non holo", "") else "",
+            given if given and given.upper() != condition and _split_condition(given)[0] is None else "",
+            cell(raw, "note")) if x]
         # The row's own content is its identity, so the same sheet read again
         # adds nothing. Two identical rows are told apart by a counter.
         base = "|".join((_norm(name), _norm(set_name), number, condition, "h" if holo else "n"))
@@ -229,8 +268,10 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
             "sku": None, "quantity": quantity, "price": None, "url": None, "image_url": None,
             "title": " · ".join(p for p in (name, set_name, number_raw, condition) if p),
             "condition": condition, "cost": _amount(cell(raw, "cost")),
-            "card": {"name": name, "set_name": set_name or None, "card_number": number or None,
-                     "rarity": None, "is_holo": holo},
+            "note": "; ".join(extras)[:300] or None,
+            "card": {"name": name, "set_name": set_name or None,
+                     "set_code": cell(raw, "set_code").lower() or None, "card_number": number or None,
+                     "rarity": cell(raw, "rarity") or None, "is_holo": holo},
         })
     return lines, info
 

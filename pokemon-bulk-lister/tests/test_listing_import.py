@@ -281,3 +281,71 @@ def test_the_table_is_new_and_one_listing_is_stored_once_per_account(site):
     finally:
         s.close()
     assert len(_have(a)) == 1 and len(_have(b)) == 1
+
+
+CARD_SHEET = """Card,Expansion,Card No,Copies,Grade,Variant,Rarity,Paid,Comments,Market Value,Binder Page
+Dragapult ex,Twilight Masquerade,130/167,2,Near Mint,Holofoil,Double Rare,$9.50,pulled myself,14.50,3
+Dreepy,Twilight Masquerade,128,,,Reverse Holo,Common,,,0.30,3
+Pikachu,Base Set,58,1,PSA 9,,Common,,gift,,7
+"""
+
+
+def test_a_card_list_says_what_it_read_what_it_ignored_and_what_it_filled_in(site):
+    me = _user(site, "a@example.com")
+    p = _upload(me, "cards", CARD_SHEET, dry_run=True).get_json()
+    assert [(c["column"], c["as"]) for c in p["columns_read"]][:4] == [
+        ("Card", "card name"), ("Expansion", "set"), ("Card No", "card number"), ("Copies", "quantity")]
+    assert {c["column"] for c in p["columns_read"]} == {
+        "Card", "Expansion", "Card No", "Copies", "Grade", "Variant", "Rarity", "Paid", "Comments"}
+    assert p["columns_ignored"] == ["Market Value", "Binder Page"]       # named, not silently dropped
+    assert (p["assumed_condition"], p["assumed_quantity"]) == (2, 1)     # Dreepy blank, "PSA 9" unknown; Dreepy qty
+
+    _upload(me, "cards", CARD_SHEET)
+    have = {i["name"]: i for i in _have(me)}
+    drag = have["Dragapult ex"]
+    assert (drag["quantity"], drag["condition"], drag["is_holo"], drag["rarity"], drag["acquired_price"], drag["notes"]) == (
+        2, "NM", True, "Double Rare", 9.5, "pulled myself")
+    assert (have["Dreepy"]["is_holo"], have["Dreepy"]["notes"]) == (False, "Reverse Holo")
+    # A grade the app has no field for is kept as written, not thrown away.
+    assert (have["Pikachu"]["condition"], have["Pikachu"]["notes"]) == ("NM", "PSA 9; gift")
+
+
+def test_new_cards_are_priced_in_steps_and_the_rest_of_the_library_is_left_alone(site, monkeypatch):
+    from webapp import portfolio, scheduler
+
+    site.register_blueprint(portfolio.portfolio_bp)
+    asked = []
+
+    def price(card):
+        asked.append(card["name"])
+        return {} if card["name"] == "Unknown Card" else {"final_price": 2.5, "pricing_confidence": 0.7}
+
+    monkeypatch.setattr(scheduler, "_price_fn", price)
+    monkeypatch.setattr(portfolio, "PRICE_STEP", 2)
+    me, other = _user(site, "a@example.com"), _user(site, "b@example.com")
+    for name in ("Alpha", "Beta", "Unknown Card", "Delta"):
+        _add(me, name=name, card_number="1")
+    _add(other, name="Someone Elses", card_number="9")
+
+    steps, after = [], 0
+    while True:
+        r = me.post("/api/portfolio/price-step", json={"mode": "new", "after": after}).get_json()
+        steps.append((r["tried"], r["priced"], r["remaining"]))
+        after = r["last_id"]
+        if not r["tried"] or not r["remaining"]:
+            break
+    assert steps == [(2, 2, 2), (2, 1, 0)]
+    assert asked == ["Alpha", "Beta", "Unknown Card", "Delta"]            # nobody else's cards
+    assert {i["name"]: i["price"] for i in _have(me)} == {
+        "Alpha": 2.5, "Beta": 2.5, "Unknown Card": None, "Delta": 2.5}
+
+    # Adding one more card prices that card (and retries the one with no price), not the library.
+    asked.clear()
+    _add(me, name="Epsilon", card_number="5")
+    r = me.post("/api/portfolio/price-step", json={"mode": "new"}).get_json()
+    assert sorted(asked) == ["Epsilon", "Unknown Card"] and r["remaining"] == 0
+    # "all" is the Refresh prices button: every card of this account.
+    asked.clear()
+    r = me.post("/api/portfolio/price-step", json={"mode": "all"}).get_json()
+    assert (r["tried"], r["remaining"]) == (2, 3)
+    assert site.test_client().post("/api/portfolio/price-step", json={}).status_code == 401

@@ -136,7 +136,8 @@ def operator_only_when_public():
         return None
     if wants_json:
         return jsonify({"error": "operator only"}), 403
-    return redirect("/portfolio")
+    # Not a silent bounce: the Library says why Scan did not open.
+    return redirect("/portfolio?scan=operator-only")
 
 
 def _has(*names: str) -> bool:

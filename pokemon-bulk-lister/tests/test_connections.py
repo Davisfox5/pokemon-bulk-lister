@@ -384,6 +384,6 @@ def test_under_a_real_domain_the_bench_needs_a_signed_in_operator(tmp_path, monk
     # A signed-in account that is not the operator is turned away too.
     seller = user("seller@example.com")
     assert seller.get("/api/cards", headers=public).status_code == 403
-    assert seller.get("/", headers=public).headers["Location"] == "/portfolio"
+    assert seller.get("/", headers=public).headers["Location"] == "/portfolio?scan=operator-only"
     # So is the operator's address before it is confirmed.
     assert user("op@example.com", verify=False).get("/api/cards", headers=public).status_code == 403

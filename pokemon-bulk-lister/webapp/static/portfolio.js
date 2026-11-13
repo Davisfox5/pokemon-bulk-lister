@@ -491,6 +491,7 @@ $("#add-form").addEventListener("submit", async (e) => {
       toast(`Added ${done.quantity} × ${done.name} to your library.`);
       loadListingImport().catch(() => {});
       refreshAll();
+      priceCards("new");
     } catch (err) {
       toast(err.message, "err");
     }
@@ -500,9 +501,10 @@ $("#add-form").addEventListener("submit", async (e) => {
     const item = await postJson("/api/inventory/add", f);
     $("#add-dialog").close();
     toast(item.needs_price
-      ? `Added ${item.name}. No price on file yet; “Refresh prices” looks it up.`
+      ? `Added ${item.name}. Looking up its price…`
       : `Added ${item.name} at ${fmtUsd(item.price)} market price.`);
     refreshAll();
+    if (item.needs_price) priceCards("new");
   } catch (err) {
     toast(err.message, "err");
   }
@@ -534,6 +536,19 @@ async function loadListingImport() {
 // A card list has rows of cards you own; the other sources have listings.
 const listingNoun = (site, n) => (site === "Your card list" ? "row" : "listing") + (n === 1 ? "" : "s");
 
+// What a card-list sheet was read as, and what was filled in for it.
+function cardListReadHtml(p) {
+  if (!p.columns_read) return "";
+  const read = p.columns_read.map((c) => `<li><strong>${esc(c.column)}</strong> read as ${esc(c.as)}</li>`).join("");
+  const filled = [];
+  if (p.assumed_condition) filled.push(`${p.assumed_condition} row${p.assumed_condition === 1 ? " has" : "s have"} no condition this app knows and will be recorded as NM`);
+  if (p.assumed_quantity) filled.push(`${p.assumed_quantity} row${p.assumed_quantity === 1 ? " has" : "s have"} no quantity and will be recorded as 1`);
+  return `<p><strong>From your sheet</strong></p><ul>${read}</ul>
+    ${p.columns_ignored.length ? `<p class="flag-note">Not imported (no place for them here): ${p.columns_ignored.map(esc).join(", ")}</p>` : ""}
+    ${filled.length ? `<p class="flag-note">Filled in, not from your sheet: ${filled.join("; ")}.</p>` : ""}
+    <p class="muted small">Market prices are looked up right after the import.</p>`;
+}
+
 function listingPreviewHtml(site, p) {
   return `<p>${esc(site)} has <strong>${p.listings}</strong> ${listingNoun(site, p.listings)}${p.file ? ` (${esc(p.file)})` : ""}.</p>
     <ul>
@@ -541,6 +556,7 @@ function listingPreviewHtml(site, p) {
       <li>${p.already_in_library} already in your library (matched by SKU); nothing added</li>
       <li>${p.already_imported} imported before; skipped</li>
     </ul>
+    ${cardListReadHtml(p)}
     <p class="muted small">Any listing that cannot be tied to exactly one card is kept under “Needs a look”, not added.</p>`;
 }
 
@@ -567,6 +583,7 @@ async function runListingImport(site, send) {
     toast(listingResultText(site, r));
     await loadListingImport();
     refreshAll();
+    priceCards("new");
   } catch (err) {
     toast(err.message, "err");
   }
@@ -688,6 +705,7 @@ $("#btn-li-rematch").addEventListener("click", async () => {
       + (r.waiting ? ` (${r.waiting} not looked up yet; click again)` : "") + ".");
     await loadListingImport();
     refreshAll();
+    if (r.added) priceCards("new");
   } catch (err) {
     toast(err.message, "err");
   } finally {
@@ -731,20 +749,65 @@ $("#btn-promote").addEventListener("click", async () => {
   }
 });
 
+/* Look up market prices a few cards at a time, until none are left.
+   mode "new": only cards with no price yet. Runs after every way of adding
+   cards, so new cards are priced right away and the rest of the library is
+   left alone. mode "all": the Refresh prices button. Each request prices a
+   handful, so it works where nothing can run in the background. */
+let pricingRun = null;
+function priceCards(mode = "new") {
+  if (pricingRun) return pricingRun;
+  pricingRun = (async () => {
+    let after = 0, tried = 0, priced = 0, total = null;
+    try {
+      for (;;) {
+        const r = await postJson("/api/portfolio/price-step", { mode, after });
+        if (total === null) total = r.tried + r.remaining;
+        if (!r.tried) break;
+        tried += r.tried; priced += r.priced; after = r.last_id;
+        toast(`Looking up prices: ${tried} of ${total}…`);
+        if (tried % 18 === 0) loadSummary().then(loadMarket).catch(() => {});
+        if (!r.remaining) break;
+      }
+      if (tried) {
+        const missing = tried - priced;
+        toast(`Prices looked up for ${priced} of ${tried} card${tried === 1 ? "" : "s"}.`
+          + (missing ? ` ${missing} ha${missing === 1 ? "s" : "ve"} no market price on file.` : ""));
+        refreshAll();
+      }
+      return { tried, priced };
+    } catch (err) {
+      toast(`Price lookup stopped: ${err.message}`, "err");
+    } finally {
+      pricingRun = null;
+    }
+  })();
+  return pricingRun;
+}
+
 $("#btn-refresh").addEventListener("click", async () => {
   const btn = $("#btn-refresh");
   btn.disabled = true;
   btn.textContent = "Refreshing…";
   try {
-    const res = await postJson("/api/portfolio/refresh-prices");
-    toast(`Looking up prices for ${res.cards} cards in the background.`);
-    setTimeout(refreshAll, 6000);
-  } catch (err) {
-    toast(err.message, "err");
+    const done = await priceCards("all");
+    if (done && !done.tried) toast("No cards to price yet.");
   } finally {
-    setTimeout(() => { btn.disabled = false; btn.textContent = "Refresh prices"; }, 6000);
+    btn.disabled = false;
+    btn.textContent = "Refresh prices";
   }
 });
+
+// Sent here from the Scan link: say why, do not leave it as a silent bounce.
+if (new URLSearchParams(location.search).get("scan") === "operator-only") {
+  history.replaceState(null, "", location.pathname);
+  loadAccount().catch(() => {}).finally(() => {
+    const confirmed = !$("#verify-banner") || $("#verify-banner").classList.contains("hidden");
+    toast(confirmed
+      ? "Scan is for the operator account only (the address in ADMIN_EMAILS). This account is not it."
+      : "Scan opens once your email address is confirmed. See the banner at the top of this page.", "err");
+  });
+}
 
 /* ---------------- chart ---------------- */
 
