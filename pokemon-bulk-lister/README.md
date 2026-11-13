@@ -77,6 +77,8 @@ page gives the same answer whether or not an account exists.
 
 - With `SMTP_HOST` set (plus `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
   `SMTP_FROM`), the link is emailed.
+- Or set `RESEND_API_KEY` and `MAIL_FROM` to send through Resend's API (free
+  tier). `MAIL_FROM` must be an address on a domain verified at resend.com.
 - With no SMTP settings, the link is printed in the console window the app
   runs in. That suits a local install: whoever can read the console runs it.
 

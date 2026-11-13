@@ -376,7 +376,14 @@ def login():
 # ----------------------------------------------------------------------
 
 def in_background(fn) -> None:
-    """Run `fn` off the request. Tests swap this to run it inline."""
+    """Run `fn` off the request. Tests swap this to run it inline. A
+    serverless host freezes the process once the response is out, so a
+    thread there may never send; the work is done before answering."""
+    from webapp import runtime
+
+    if runtime.SERVERLESS:
+        fn()
+        return
     threading.Thread(target=fn, daemon=True).start()
 
 
