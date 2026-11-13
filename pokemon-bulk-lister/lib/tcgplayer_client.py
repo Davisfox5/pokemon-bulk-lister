@@ -56,6 +56,17 @@ class TCGPlayerClient:
         resp.raise_for_status()
         return {}
 
+    @staticmethod
+    def plain_set_name(set_name: Optional[str]) -> Optional[str]:
+        """A set name as the catalog spells it. Sheets and listings often
+        write "Pokémon TCG: 30th Celebration (30C)"; the catalog calls that
+        set "30th Celebration"."""
+        import re
+
+        text = re.sub(r"^\s*pok[eé]mon(\s+tcg|\s+trading\s+card\s+game)?\s*[:\-–]\s*", "", set_name or "", flags=re.I)
+        text = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
+        return text or (set_name or None)
+
     def find_card(
         self,
         name: str,
@@ -70,7 +81,7 @@ class TCGPlayerClient:
         if set_code:
             clauses.append(f'set.id:{_escape(set_code)}')
         elif set_name:
-            clauses.append(f'set.name:"{_escape(set_name)}"')
+            clauses.append(f'set.name:"{_escape(self.plain_set_name(set_name))}"')
         if card_number:
             clauses.append(f'number:{_escape(card_number)}')
 

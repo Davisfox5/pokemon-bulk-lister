@@ -210,7 +210,16 @@ def _pg_connect(url: str) -> Iterator[_PgConnection]:
         except queue.Empty:
             break
         if kept_url == url and not candidate.closed and not candidate.broken:
-            raw = candidate
+            # A hosted Postgres drops idle connections, and one it dropped
+            # still looks open here until it is used. Ask before trusting it.
+            try:
+                candidate.execute("SELECT 1")
+                raw = candidate
+            except Exception:
+                try:
+                    candidate.close()
+                except Exception:
+                    pass
         else:
             candidate.close()
     if raw is None:

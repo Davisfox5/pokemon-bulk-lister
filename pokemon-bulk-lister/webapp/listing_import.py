@@ -40,6 +40,7 @@ from typing import Optional
 from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 
+from lib.tcgplayer_client import TCGPlayerClient
 from lib.tcgplayer_catalog import _header, _norm, _norm_number, _norm_set
 from webapp.auth import current_user_id, is_operator, login_required
 from webapp.models import (
@@ -310,6 +311,11 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
             extras.append(f"Condition as written: {given}")
         if number_raw and number_raw not in (number, first) and "/" in number_raw:
             extras.append(f"Number as written: {number_raw}")
+        # The catalog's spelling of the set, so the card can be found and
+        # priced. The row's identity below keeps the sheet's own wording.
+        plain_set = TCGPlayerClient.plain_set_name(set_name) or ""
+        if plain_set != set_name:
+            extras.append(f"Set as written: {set_name}")
         extras += [f"{h}: {(raw.get(h) or '').strip()}" for h in leftover if (raw.get(h) or "").strip()]
         note = "; ".join(x for x in extras if x)[:1000] or None
 
@@ -324,7 +330,7 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
             "condition": condition, "condition_assumed": assumed,
             "cost": _amount(cell(raw, "cost")), "note": note,
             "sheet_price": market, "sheet_price_source": cell(raw, "price_source")[:200] or None,
-            "card": {"name": name, "set_name": set_name or None,
+            "card": {"name": name, "set_name": plain_set or None,
                      "set_code": cell(raw, "set_code").lower() or None, "card_number": number or None,
                      "rarity": rarity[:80] or None, "is_holo": holo},
         })

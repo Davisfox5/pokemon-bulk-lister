@@ -357,9 +357,11 @@ def test_a_sheet_read_badly_before_is_repaired_by_reading_it_again(site, monkeyp
     assert pika["rarity"] == "Pikachu Rare (sparkle foil, x/30 Pikachu subset)"
     assert pika["notes"] == (
         "Number read from card; Condition as written: Near Mint (raw, est. from photo); "
-        "Number as written: 023/128 (01/30); Source file: IMG_5834.HEIC; Position: Single card; "
+        "Number as written: 023/128 (01/30); Set as written: Pokémon TCG: 30th Celebration (30C); "
+        "Source file: IMG_5834.HEIC; Position: Single card; "
         "Language: English; Suggested list price: $0.99; ID confidence: High")
     assert pika["price"] == 0.87
+    assert pika["set_name"] == "30th Celebration"       # the catalog's spelling, so a lookup can find it
     assert pika["provenance"]["notes"] == "From your spreadsheet (TCGplayer market via TCGVault (Oct 9))"
     assert (have["Jirachi ex"]["is_holo"], have["Jirachi ex"]["price"]) == (False, 41.2)
 
