@@ -678,6 +678,9 @@ $("#listing-sources").addEventListener("click", (e) => {
   const btn = e.target.closest("[data-li-drive]");
   if (!btn) return;
   const source = btn.dataset.liDrive;
+  // Out of the way first: Google's sign-in and file picker open on top of
+  // the page, and a modal dialog would sit over them.
+  $("#listings-dialog").close();
   openDrivePicker({
     kind: "sheets", multiple: false, title: source === "cards" ? "Choose your card list spreadsheet" : `Choose the ${LISTING_SITES[source]} spreadsheet`,
     onPick: ([file]) => runListingImport(LISTING_SITES[source],

@@ -283,7 +283,7 @@ assert client.get("/api/cron/daily", headers={"Authorization": "Bearer wrong"}).
 r = client.get("/api/cron/daily", headers={"Authorization": f"Bearer {os.environ['CRON_SECRET']}"})
 assert r.status_code == 200 and "prices_refreshed" in r.get_json(), r.get_data(as_text=True)
 
-# ---------------------------------------------------------------- under the public host the bench needs the operator
+# ---------------------------------------------------------------- under the public host the bench needs a login
 os.environ["VERCEL_PROJECT_PRODUCTION_URL"] = "bulk.example.com"
 public = {"Host": "bulk.example.com", "X-Forwarded-Proto": "https"}
 r = client.get("/", headers=public)
@@ -296,6 +296,58 @@ assert client.get("/api/cron/daily", headers=public).status_code == 401
 assert client.get("/api/cron/daily", headers={
     **public, "Authorization": f"Bearer {os.environ['CRON_SECRET']}"}).status_code == 200
 assert client.get("/login", headers={"Host": "evil.example"}).status_code == 403
+
+# ---------------------------------------------------------------- each account has its own bench
+def account(email):
+    c = appmod.app.test_client()
+    r = c.post("/register", json={"email": email, "password": "password123"}, headers=public)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    s = models.get_session()
+    try:
+        return c, s.query(models.User).filter_by(email=email).one().id
+    finally:
+        s.close()
+
+
+def bench_card(uid, stem):
+    db.set_owner(uid)
+    try:
+        with db.connect(appmod.DB_PATH) as conn:
+            grid = db.get_or_create_grid(conn, f"{stem}.jpg", f"input/{stem}.jpg")
+            card = db.insert_card_stub(conn, grid, f"output/crops/{stem}_r0c0.jpg", 0, 0)
+            db.update_card(conn, card, {"name": f"Card of {stem}"})
+            return card
+    finally:
+        db.set_owner(None)
+
+
+ann, ann_id = account("ann@example.com")
+ben, ben_id = account("ben@example.com")
+ann_card, ben_card = bench_card(ann_id, "annpage"), bench_card(ben_id, "benpage")
+assert ann.get("/", headers=public).status_code == 200            # no operator needed to scan
+mine = ann.get("/api/cards", headers=public).get_json()
+assert [c["id"] for c in mine["cards"]] == [ann_card] and mine["stats"]["total"] == 1, mine
+assert [c["id"] for c in ben.get("/api/cards", headers=public).get_json()["cards"]] == [ben_card]
+assert ann.get(f"/api/cards/{ben_card}", headers=public).status_code == 404
+assert ann.patch(f"/api/cards/{ben_card}", json={"name": "mine now"}, headers=public).status_code == 404
+assert ann.post("/api/cards/bulk", headers=public, json=[
+    {"crop_path": "output/crops/benpage_r0c0.jpg", "name": "mine now"}]).get_json() == {"applied": 0}
+assert ben.get(f"/api/cards/{ben_card}", headers=public).get_json()["name"] == "Card of benpage"
+# One account's job is not the other's.
+assert ann.post("/api/pricing/run-all", headers=public).status_code == 200
+assert runtime.state_get(f"{appmod.MAIN_JOB}:u{ann_id}")["queue"] == [ann_card]
+assert ben.get("/api/pricing/status", headers=public).get_json()["running"] is False
+runtime.state_set(f"{appmod.MAIN_JOB}:u{ann_id}", {"running": False})
+# Exports are per account, and the publishing side stays with the operator.
+written = ann.post("/api/export/csvs", headers=public).get_json()["written"]
+assert all(f"/u{ann_id}/" in w["file"] for w in written), written
+assert ann.get("/" + written[0]["file"], headers=public).status_code == 200
+assert ben.get("/" + written[0]["file"], headers=public).status_code == 404
+session = ann.get("/api/session", headers=public).get_json()
+assert session["logged_in"] is True and session["operator"] is False
+assert ann.get("/api/publish/status", headers=public).status_code == 403
+assert ann.get("/api/connections", headers=public).status_code == 403
+assert ann.post("/api/publish/ebay", headers=public).status_code == 403
 
 # ---------------------------------------------------------------- no SECRET_KEY, no start
 del os.environ["SECRET_KEY"]

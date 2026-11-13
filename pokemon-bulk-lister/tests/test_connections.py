@@ -357,7 +357,23 @@ def test_under_a_real_domain_the_bench_needs_a_signed_in_operator(tmp_path, monk
     app.add_url_rule("/api/cards", "cards", lambda: "[]")
     app.add_url_rule("/crops/<path:name>", "crop", lambda name: "img")
     app.add_url_rule("/healthz", "healthz", lambda: "ok")
+    for i, (path, methods) in enumerate((("/api/publish/ebay", ["POST"]), ("/api/terapeak/status", ["GET"]),
+                                         ("/api/tcgplayer/catalog", ["GET", "POST"]),
+                                         ("/api/cards/<int:cid>/upload-image", ["POST"]))):
+        app.add_url_rule(path, f"stub{i}", lambda **kw: "ok", methods=methods)
+
+    from flask import g, jsonify
+    from webapp import db as bench_db
+    app.add_url_rule("/api/session", "session",
+                     lambda: jsonify({"operator": g.bench_operator, "owner": bench_db.owner()}))
     public = {"Host": "cards.example.com"}
+
+    def seller_id():
+        s = models.get_session()
+        try:
+            return s.query(models.User).filter_by(email="seller@example.com").one().id
+        finally:
+            s.close()
 
     def user(email, verify=True):
         c = app.test_client()
@@ -381,9 +397,16 @@ def test_under_a_real_domain_the_bench_needs_a_signed_in_operator(tmp_path, monk
     assert anon.get("/healthz", headers=public).status_code == 200
     assert anon.get("/login", headers=public).status_code == 200
 
-    # A signed-in account that is not the operator is turned away too.
+    # A signed-in account that is not the operator has the bench, on its own
+    # cards, but not the routes that use the install's outside accounts.
     seller = user("seller@example.com")
-    assert seller.get("/api/cards", headers=public).status_code == 403
-    assert seller.get("/", headers=public).headers["Location"] == "/portfolio?scan=operator-only"
+    assert seller.get("/api/cards", headers=public).status_code == 200
+    assert seller.get("/", headers=public).status_code == 200
+    assert seller.get("/api/session", headers=public).get_json() == {"operator": False, "owner": seller_id()}
+    for method, path in (("get", "/api/connections"), ("post", "/api/publish/ebay"),
+                         ("get", "/api/terapeak/status"), ("post", "/api/tcgplayer/catalog"),
+                         ("post", "/api/cards/3/upload-image")):
+        assert getattr(seller, method)(path, headers=public).status_code == 403, path
+    assert seller.get("/api/tcgplayer/catalog", headers=public).status_code == 200
     # So is the operator's address before it is confirmed.
-    assert user("op@example.com", verify=False).get("/api/cards", headers=public).status_code == 403
+    assert user("op@example.com", verify=False).get("/api/connections", headers=public).status_code == 403

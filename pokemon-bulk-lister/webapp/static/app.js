@@ -759,7 +759,8 @@ function setupToolbar() {
     }
   });
 
-  // One-shot probe of Terapeak login state on page load.
+  // One-shot probe of Terapeak login state on page load (operator only;
+  // refused quietly for other accounts, whose checkbox is hidden).
   api("/api/terapeak/status").then(s => {
     const el = $("#terapeak-status");
     if (s.logged_in) {
@@ -1315,8 +1316,18 @@ setupTable();
 setupModal();
 setupBundleModal();
 setupToolbar();
-setupPublish();
-setupConnections();
-setupSales();
 setupKeyboard();
 loadCards();
+// Publishing, Connections, sales sync and Terapeak use the install's own
+// outside accounts, so only the operator gets them. The server enforces it;
+// this keeps the page from showing controls that would be refused.
+api("/api/session").catch(() => ({ operator: true })).then((me) => {
+  if (me.operator === false) {
+    document.querySelectorAll(".publish-panel, .sales-panel, #terapeak-label")
+      .forEach(el => el.classList.add("hidden"));
+    return;
+  }
+  setupPublish();
+  setupConnections();
+  setupSales();
+});

@@ -201,3 +201,19 @@ td.actions { display: table-cell; margin-top: 0; }
 #sales-unmatched table { margin-top: 6px; }
 #sales-unmatched td, #sales-unmatched th { padding: 4px 8px; }
 .sold-tag { margin-left: 6px; font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; color: var(--muted); }
+
+/* ---------- phones ---------- */
+@media (max-width: 700px) {
+  .panel { padding: 12px; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar-right button, .publish-row button { flex: 1 1 auto; }
+  .publish-row strong { flex-basis: 100%; }
+  .table-wrap { -webkit-overflow-scrolling: touch; }
+  .table-wrap table { min-width: 720px; }
+  .modal { padding: 8px; align-items: flex-start; overflow-y: auto; }
+  .modal-card { width: 100%; max-width: 100%; max-height: none; }
+  .modal-body { flex-direction: column; padding: 12px; }
+  .modal-body img { max-width: 100%; max-height: 240px; align-self: center; }
+  .actions { flex-wrap: wrap; }
+  input, select, textarea { font-size: 16px; }
+}

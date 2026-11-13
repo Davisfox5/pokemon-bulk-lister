@@ -125,7 +125,7 @@ def _set_bench_status(card_id: Optional[int], status: Optional[str]) -> None:
         return
     try:
         with bench_db.connect(BENCH_DB_PATH) as conn:
-            bench_db.update_card(conn, card_id, {"ebay_listing_status": status})
+            bench_db.update_card(conn, card_id, {"ebay_listing_status": status}, any_owner=True)
     except Exception as exc:
         print(f"[sales] bench update for card {card_id}: {exc}", file=sys.stderr)
 

@@ -29,6 +29,7 @@ from typing import Any, Optional
 import cv2
 from dotenv import load_dotenv
 from flask import (
+    g,
     Flask,
     abort,
     jsonify,
@@ -203,8 +204,49 @@ def get_csv_gen():
 # Page
 # ----------------------------------------------------------------------
 
+_adopted: set[int] = set()
+
+
+def _is_operator() -> bool:
+    return bool(getattr(g, "bench_operator", True))
+
+
+def _as_owner(fn):
+    """fn, to be run on another thread, working on this request's bench.
+    A new thread does not inherit the request's owner."""
+    uid = db.owner()
+
+    def run(*args, **kwargs):
+        db.set_owner(uid)
+        return fn(*args, **kwargs)
+
+    return run
+
+
+def _jk(base: str) -> str:
+    """The stored job slot for this request's bench."""
+    uid = db.owner()
+    return base if uid is None else f"{base}:u{uid}"
+
+
+def _mine_job(state) -> dict:
+    """The in-process job state as this request's account should see it."""
+    return dict(state) if state.get("owner") == db.owner() else dict(_IDLE)
+
+
+def _csv_dir() -> Path:
+    uid = db.owner()
+    return CSVS_DIR if uid is None else CSVS_DIR / f"u{uid}"
+
+
 @app.route("/")
 def index():
+    uid = db.owner()
+    if uid is not None and _is_operator() and uid not in _adopted:
+        # Cards scanned before accounts had their own bench go to the operator.
+        with db.connect(DB_PATH) as conn:
+            db.adopt_unowned(conn, uid)
+        _adopted.add(uid)
     return render_template("index.html")
 
 
@@ -267,11 +309,11 @@ def api_bulk_update_cards():
             crop_path = entry.get("crop_path")
             if not crop_path:
                 continue
-            row = conn.execute("SELECT id FROM cards WHERE crop_path = ?", (crop_path,)).fetchone()
-            if not row:
+            found = db.card_id_by_crop(conn, crop_path)
+            if found is None:
                 continue
             patch = {k: v for k, v in entry.items() if k != "crop_path"}
-            db.update_card(conn, int(row["id"]), patch)
+            db.update_card(conn, found, patch)
             applied += 1
     return jsonify({"applied": applied})
 
@@ -446,7 +488,7 @@ def api_run_pricing_all():
     """?terapeak=1 adds the 365-day comps pass. ?only_unpriced=1 skips cards
     that already have a final price."""
     body = request.get_json(silent=True) or {}
-    use_terapeak = request.args.get("terapeak") == "1" or body.get("terapeak")
+    use_terapeak = (request.args.get("terapeak") == "1" or body.get("terapeak")) and _is_operator()
     only_unpriced = request.args.get("only_unpriced") == "1" or bool(body.get("only_unpriced"))
     if SERVERLESS:
         return _start_sliced_job("pricing", only_unpriced=only_unpriced)
@@ -455,7 +497,7 @@ def api_run_pricing_all():
             return jsonify({"error": "another job is running"}), 409
         _job_state.update(
             running=True, progress=0, total=0,
-            message="starting…", terapeak=bool(use_terapeak),
+            message="starting…", terapeak=bool(use_terapeak), owner=db.owner(),
         )
 
     def worker():
@@ -464,7 +506,7 @@ def api_run_pricing_all():
         finally:
             _job_state["running"] = False
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=_as_owner(worker), daemon=True).start()
     return jsonify({"started": True})
 
 
@@ -549,7 +591,7 @@ def _pricing_job(use_terapeak, only_unpriced: bool = False) -> None:
 
         # Spin Pass 1 across n_tcg_workers threads.
         pass1_executor = ThreadPoolExecutor(max_workers=n_tcg_workers)
-        pass1_futures = [pass1_executor.submit(price_one_pass1, c) for c in targets]
+        pass1_futures = [pass1_executor.submit(_as_owner(price_one_pass1), c) for c in targets]
 
         # ---- Pass 2: Terapeak in parallel via TerapeakPool. ----
         if terapeak_on:
@@ -640,7 +682,7 @@ def _pricing_job(use_terapeak, only_unpriced: bool = False) -> None:
                             res = exc
                         on_terapeak(cid, res)
 
-                terapeak_thread = threading.Thread(target=drain_terapeak, daemon=True)
+                terapeak_thread = threading.Thread(target=_as_owner(drain_terapeak), daemon=True)
                 terapeak_thread.start()
 
         # Wait for Pass 1 to complete
@@ -673,8 +715,8 @@ def api_terapeak_status():
 @app.route("/api/pricing/status")
 def api_pricing_status():
     if SERVERLESS:
-        return jsonify(_pump(MAIN_JOB, _main_slice))
-    return jsonify(_job_state)
+        return jsonify(_pump(_jk(MAIN_JOB), _main_slice))
+    return jsonify(_mine_job(_job_state))
 
 
 def _price_card_pass1(card: dict) -> tuple[dict, Optional[dict]]:
@@ -971,7 +1013,8 @@ def api_identify_all():
     with _job_lock:
         if _job_state["running"]:
             return jsonify({"error": "another job is running"}), 409
-        _job_state.update(running=True, progress=0, total=0, message="identifying…", terapeak=False)
+        _job_state.update(running=True, progress=0, total=0, message="identifying…", terapeak=False,
+                          owner=db.owner())
 
     def worker():
         try:
@@ -979,7 +1022,7 @@ def api_identify_all():
         finally:
             _job_state["running"] = False
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=_as_owner(worker), daemon=True).start()
     return jsonify({"started": True})
 
 
@@ -993,7 +1036,8 @@ def api_scan_process():
     with _job_lock:
         if _job_state["running"]:
             return jsonify({"error": "another job is running"}), 409
-        _job_state.update(running=True, progress=0, total=0, message="identifying…", terapeak=False)
+        _job_state.update(running=True, progress=0, total=0, message="identifying…", terapeak=False,
+                          owner=db.owner())
 
     def worker():
         try:
@@ -1007,7 +1051,7 @@ def api_scan_process():
         finally:
             _job_state["running"] = False
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=_as_owner(worker), daemon=True).start()
     return jsonify({"started": True})
 
 
@@ -1097,7 +1141,7 @@ def _identify_job() -> Optional[int]:
     try:
         with db.connect(DB_PATH) as conn:
             cards = db.list_cards(conn, sort="oldest", unidentified_only=True)
-            grids = {int(r["id"]): dict(r) for r in conn.execute("SELECT * FROM grids").fetchall()}
+            grids = {int(r["id"]): r for r in db.list_grids(conn)}
         _job_state["total"] = len(cards)
         if not cards:
             _job_state["message"] = "nothing to identify"
@@ -1193,7 +1237,7 @@ def _pricing_queue(only_unpriced: bool) -> list[int]:
 
 
 def _start_sliced_job(kind: str, only_unpriced: bool = False):
-    if _job_busy(MAIN_JOB):
+    if _job_busy(_jk(MAIN_JOB)):
         return jsonify({"error": "another job is running"}), 409
     state = {"running": True, "kind": kind, "progress": 0, "terapeak": False, "lease": 0,
              "tally": {"done": 0, "by_image": 0, "by_ai": 0, "last_error": ""}}
@@ -1207,7 +1251,7 @@ def _start_sliced_job(kind: str, only_unpriced: bool = False):
     else:
         queue = _pricing_queue(only_unpriced)
         state.update(phase="pricing", queue=queue, total=len(queue), message="pricing…")
-    runtime.state_set(MAIN_JOB, state)
+    runtime.state_set(_jk(MAIN_JOB), state)
     return jsonify({"started": True})
 
 
@@ -1223,8 +1267,7 @@ def _main_slice(state: dict) -> None:
                          if c and not (c.get("name") or "").strip()]
                 grid = None
                 if grid_id is not None:
-                    row = conn.execute("SELECT * FROM grids WHERE id = ?", (grid_id,)).fetchone()
-                    grid = dict(row) if row else None
+                    grid = db.get_grid(conn, grid_id)
             tally["done"] += len(ids) - len(group)       # removed or named by hand meanwhile
             if group:
                 _identify_group(group, grid, tally)
@@ -1265,7 +1308,7 @@ def _main_slice(state: dict) -> None:
             print(f"[pricing] id={card_id}: {exc}", file=sys.stderr)
 
     with ThreadPoolExecutor(max_workers=int(os.getenv("TCG_WORKERS", "6"))) as pool:
-        list(pool.map(price, batch))
+        list(pool.map(_as_owner(price), batch))
     state["progress"] += len(batch)
     state["message"] = f"TCG/CM {state['progress']}/{state['total']}"
 
@@ -1456,7 +1499,7 @@ def api_export_csvs():
         cards = _unsold(db.list_cards(conn, sort="newest"))
     payload = _cards_payload(cards)
 
-    CSVS_DIR.mkdir(parents=True, exist_ok=True)
+    _csv_dir().mkdir(parents=True, exist_ok=True)
     written = []
     for filename, rows_fn in (
         ("tcgplayer_bulk.csv", _tcg_rows),
@@ -1465,7 +1508,7 @@ def api_export_csvs():
     ):
         rows = rows_fn(payload)
         # Use pandas only when present; otherwise write naively.
-        path = CSVS_DIR / filename
+        path = _csv_dir() / filename
         _write_csv(path, rows)
         written.append({"file": rel_path(path), "rows": len(rows)})
     return jsonify({"written": written})
@@ -1553,7 +1596,7 @@ def api_export_lot():
             "final_price": c.get("final_price"),
         })
 
-    out_dir = CSVS_DIR / "lots" / slug
+    out_dir = _csv_dir() / "lots" / slug
     out_dir.mkdir(parents=True, exist_ok=True)
 
     targets = (
@@ -1667,7 +1710,7 @@ def api_publish_status():
 @app.route("/api/publish/job-status")
 def api_publish_job_status():
     if SERVERLESS:
-        return jsonify(_pump(PUBLISH_JOB, _ebay_publish_slice))
+        return jsonify(_pump(_jk(PUBLISH_JOB), _ebay_publish_slice))
     return jsonify(_publish_state)
 
 
@@ -1751,7 +1794,7 @@ def api_publish_ebay():
         finally:
             _publish_state["running"] = False
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=_as_owner(worker), daemon=True).start()
     return jsonify({"started": True})
 
 
@@ -1810,7 +1853,7 @@ def _ebay_publish_set(skip_flagged: bool) -> list[dict]:
 
 
 def _start_sliced_ebay_publish(expected: int, skip_flagged: bool):
-    if _job_busy(PUBLISH_JOB):
+    if _job_busy(_jk(PUBLISH_JOB)):
         return jsonify({"error": "a publish job is already running"}), 409
     state = {"running": False, "progress": 0, "total": 0, "site": "ebay", "lease": 0,
              "listed": 0, "failures": [], "queue": []}
@@ -1825,7 +1868,7 @@ def _start_sliced_ebay_publish(expected: int, skip_flagged: bool):
         else:
             state.update(running=True, queue=[int(c["id"]) for c in eligible], total=len(eligible),
                          message="starting…")
-    runtime.state_set(PUBLISH_JOB, state)
+    runtime.state_set(_jk(PUBLISH_JOB), state)
     return jsonify({"started": True})
 
 
@@ -1894,14 +1937,14 @@ def api_publish_portal():
             gc = get_csv_gen()
             with db.connect(DB_PATH) as conn:
                 payload = _cards_payload(_unsold(db.list_cards(conn, sort="newest")))
-            CSVS_DIR.mkdir(parents=True, exist_ok=True)
+            _csv_dir().mkdir(parents=True, exist_ok=True)
             if site == "tcgplayer":
                 filename, rows_fn = "tcgplayer_bulk.csv", _tcg_rows
                 from lib.tcgplayer_lister import TCGPlayerLister as Lister
             else:
                 filename, rows_fn = "whatnot_seller_hub.csv", gc.whatnot_rows
                 from lib.whatnot_lister import WhatnotLister as Lister
-            path = CSVS_DIR / filename
+            path = _csv_dir() / filename
             rows = rows_fn(payload)
             if not rows:
                 _publish_state["message"] = (
@@ -1925,7 +1968,7 @@ def api_publish_portal():
         finally:
             _publish_state["running"] = False
 
-    threading.Thread(target=worker, daemon=True).start()
+    threading.Thread(target=_as_owner(worker), daemon=True).start()
     return jsonify({"started": True})
 
 
@@ -1951,6 +1994,9 @@ def serve_crop(filename: str):
 def download_csv(filename: str):
     if ".." in filename.split("/"):
         abort(404)
+    uid = db.owner()
+    if uid is not None and filename.split("/")[0] != f"u{uid}":
+        abort(404)     # another account's export
     path = CSVS_DIR / filename
     if not path.exists():
         saved = runtime.state_get(f"csv:{rel_path(path)}") if SERVERLESS else None
@@ -2072,6 +2118,8 @@ def api_session():
     from webapp.auth import current_user_id
     return jsonify({
         "logged_in": bool(current_user_id()),
+        # Publishing, Connections and sales sync are the operator's.
+        "operator": _is_operator(),
         # A serverless host refuses request bodies over 4.5 MB. The page
         # shrinks photos and splits CSVs to stay under this.
         "max_upload_bytes": 4_000_000 if SERVERLESS else None,

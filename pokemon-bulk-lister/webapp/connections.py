@@ -95,25 +95,51 @@ def same_origin_only():
 _PUBLIC_BENCH_PREFIXES = ("/crops/", "/output/crops/", "/static/")
 _PUBLIC_BENCH_PATHS = ("/healthz", "/api/session", "/api/cron/daily")
 
+# Bench routes that act with the install's own outside accounts (publishing,
+# the seller portals, Terapeak, Cloudinary). Under a public host these stay
+# with the operator. Everything else on the bench is each account's own.
+_OPERATOR_BENCH_PREFIXES = ("/api/publish/", "/api/terapeak/")
+
+
+def _operator_route() -> bool:
+    path = request.path
+    if request.blueprint == "connections" or path.startswith(_OPERATOR_BENCH_PREFIXES):
+        return True
+    if path == "/api/tcgplayer/catalog" and request.method != "GET":
+        return True
+    return path.startswith("/api/cards/") and path.endswith("/upload-image")
+
 
 def operator_only_when_public():
     """before_request hook, after same_origin_only.
 
     On localhost the Scan page and Connections have no login, which is fine
-    for a tool on your own machine. Served under a real domain they are on
-    the internet, and they can publish listings, spend API credit and read
-    connection status. So under any host that is not local, every bench
-    route (the routes on the app itself, and Connections) needs a signed-in
-    operator. The library, decks, marketplace and login pages keep their own
-    rules.
+    for a tool on your own machine: one bench, everything allowed.
+
+    Served under a real domain they are on the internet. There, the bench
+    needs a signed-in account and each account works on its own cards
+    (`db.set_owner`). Routes that publish or use the install's outside
+    accounts need the operator, who can also do everything any account can.
+    The library, decks, marketplace and login pages keep their own rules.
+
+    Sets `g.bench_operator` for the routes and the page to read.
     """
     from urllib.parse import urlsplit
 
+    from flask import g
+
+    from webapp import db as bench_db
+
     host = (urlsplit(f"//{request.host}").hostname or "").lower()
-    if host in LOCAL_HOSTS or request.blueprint not in (None, "connections"):
+    if host in LOCAL_HOSTS:
+        bench_db.set_owner(None)
+        g.bench_operator = True
         return None
     path = request.path
-    if path in _PUBLIC_BENCH_PATHS or path.startswith(_PUBLIC_BENCH_PREFIXES):
+    g.bench_operator = False
+    # -1 owns nothing: a request with no account sees no bench rows at all.
+    bench_db.set_owner(-1)
+    if path.startswith(_PUBLIC_BENCH_PREFIXES):
         return None
 
     from flask import redirect
@@ -121,22 +147,26 @@ def operator_only_when_public():
     from webapp.auth import current_user_id, is_operator
     from webapp.models import get_session
 
-    wants_json = path.startswith("/api/") or request.method != "GET"
     uid = current_user_id()
+    if uid:
+        bench_db.set_owner(uid)
+        s = get_session()
+        try:
+            g.bench_operator = is_operator(s, uid)
+        finally:
+            s.close()
+    if request.blueprint not in (None, "connections") or path in _PUBLIC_BENCH_PATHS:
+        return None
+
+    wants_json = path.startswith("/api/") or request.method != "GET"
     if not uid:
         if wants_json:
             return jsonify({"error": "login required"}), 401
         return redirect(f"/login?next={path}")
-    s = get_session()
-    try:
-        allowed = is_operator(s, uid)
-    finally:
-        s.close()
-    if allowed:
+    if not _operator_route() or g.bench_operator:
         return None
     if wants_json:
         return jsonify({"error": "operator only"}), 403
-    # Not a silent bounce: the Library says why Scan did not open.
     return redirect("/portfolio?scan=operator-only")
 
 

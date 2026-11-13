@@ -340,3 +340,30 @@ dialog textarea { width: 100%; min-height: 220px; font-family: ui-monospace, "SF
 .notice { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
   border-left: 3px solid var(--accent); }
 .totals-strip .btn { padding: 2px 10px; font-size: 12px; }
+
+/* ---------- phones ---------- */
+@media (max-width: 700px) {
+  .topbar { padding-left: 12px; padding-right: 12px; gap: 8px; }
+  .topbar-left { flex-wrap: wrap; gap: 6px 14px; }
+  .topbar-right { flex-wrap: wrap; }
+  .panel { padding: 12px; }
+  .panel-head { flex-wrap: wrap; }
+  .tabs { max-width: 100%; overflow-x: auto; }
+  .tab { white-space: nowrap; }
+  .head-actions { width: 100%; }
+  .head-actions .btn { flex: 1 1 auto; }
+  /* Tables keep their columns readable and scroll sideways inside the panel. */
+  .table-scroll { max-width: 100%; -webkit-overflow-scrolling: touch; }
+  .inv-table { min-width: 620px; }
+  .deck-table { min-width: 520px; }
+  .dialog-row { flex-wrap: wrap; }
+  .dialog-row .btn { flex: 1 1 auto; }
+  dialog { padding: 16px; max-height: 92vh; overflow-y: auto; }
+  dialog textarea { min-height: 140px; }
+  .totals-strip { flex-wrap: wrap; }
+  /* Import sources: the description on its own line, buttons under it. */
+  #listing-sources li { flex-wrap: wrap; }
+  #listing-sources li > :first-child { flex: 1 1 100%; }
+  /* 16px stops iOS zooming the page when a field takes focus. */
+  input, select, textarea { font-size: 16px !important; }
+}

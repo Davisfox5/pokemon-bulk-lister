@@ -11,6 +11,13 @@ Two backends behind the same functions:
 
 Callers use `with connect(path) as conn:` and `conn.execute(sql, params)`
 with `?` placeholders either way; rows read like dicts.
+
+Whose bench. On your own machine there is one bench and nobody signs in:
+rows have no owner. Served to several accounts, each account has its own
+bench: every row carries `owner_id`, and every function here reads and
+writes only the rows of the owner set for the current request with
+`set_owner` (a context variable, so it follows the request into the helpers
+without being passed around). `owner_id IS NULL` is the single local bench.
 """
 from __future__ import annotations
 
@@ -19,12 +26,30 @@ import os
 import queue
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 
 DEFAULT_DB_PATH = "output/db.sqlite"
+
+_owner: ContextVar[Optional[int]] = ContextVar("bench_owner", default=None)
+
+
+def set_owner(user_id: Optional[int]) -> None:
+    """Whose bench the current request works on. None is the local bench."""
+    _owner.set(int(user_id) if user_id else None)
+
+
+def owner() -> Optional[int]:
+    return _owner.get()
+
+
+def _mine(prefix: str = "") -> tuple[str, list]:
+    """SQL condition and parameters selecting the current owner's rows."""
+    uid = _owner.get()
+    return (f"{prefix}owner_id IS NULL", []) if uid is None else (f"{prefix}owner_id = ?", [uid])
 
 
 SCHEMA = """
@@ -33,7 +58,8 @@ CREATE TABLE IF NOT EXISTS grids (
     filename      TEXT UNIQUE NOT NULL,
     original_path TEXT NOT NULL,
     uploaded_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    crop_count    INTEGER NOT NULL DEFAULT 0
+    crop_count    INTEGER NOT NULL DEFAULT 0,
+    owner_id      INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS cards (
@@ -81,6 +107,9 @@ CREATE TABLE IF NOT EXISTS cards (
     ebay_listing_status     TEXT,
     listed_at               TEXT,
 
+    -- whose bench this row is on (NULL: the single local bench)
+    owner_id                INTEGER,
+
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -113,7 +142,13 @@ _MIGRATIONS = (
     ("ebay_listing_url", "TEXT"),
     ("ebay_listing_status", "TEXT"),
     ("listed_at", "TEXT"),
+    ("owner_id", "INTEGER"),
 )
+_GRID_MIGRATIONS = (
+    ("owner_id", "INTEGER"),
+)
+# After the columns exist (an older database gets them from the migrations).
+_OWNER_INDEX = "CREATE INDEX IF NOT EXISTS idx_cards_owner ON cards(owner_id)"
 
 EDITABLE_ID_FIELDS = (
     "name", "set_name", "set_code", "card_number", "rarity",
@@ -234,6 +269,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 conn.execute("SELECT pg_advisory_xact_lock(?)", (_PG_SCHEMA_LOCK,))
                 for statement in _pg_schema():
                     conn.execute(statement)
+                # A database made before benches had owners.
+                conn.execute("ALTER TABLE grids ADD COLUMN IF NOT EXISTS owner_id BIGINT")
+                conn.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS owner_id BIGINT")
+                conn.execute(_OWNER_INDEX)
             return
         conn.executescript(SCHEMA)
         _apply_migrations(conn)
@@ -244,22 +283,29 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     for column, coltype in _MIGRATIONS:
         if column not in existing:
             conn.execute(f"ALTER TABLE cards ADD COLUMN {column} {coltype}")
+    grid_columns = {row["name"] for row in conn.execute("PRAGMA table_info(grids)").fetchall()}
+    for column, coltype in _GRID_MIGRATIONS:
+        if column not in grid_columns:
+            conn.execute(f"ALTER TABLE grids ADD COLUMN {column} {coltype}")
+    conn.execute(_OWNER_INDEX)
 
 
 def get_or_create_grid(conn: sqlite3.Connection, filename: str, original_path: str) -> int:
-    row = conn.execute("SELECT id FROM grids WHERE filename = ?", (filename,)).fetchone()
+    mine, args = _mine()
+    row = conn.execute(f"SELECT id FROM grids WHERE filename = ? AND {mine}", [filename] + args).fetchone()
     if row:
         return int(row["id"])
+    # File names are unique across every bench (the caller picks an unused
+    # one), so a new row never collides with another owner's.
     if isinstance(conn, _PgConnection):
         made = conn.execute(
-            "INSERT INTO grids (filename, original_path) VALUES (?, ?) "
-            "ON CONFLICT (filename) DO UPDATE SET filename = EXCLUDED.filename RETURNING id",
-            (filename, original_path),
+            "INSERT INTO grids (filename, original_path, owner_id) VALUES (?, ?, ?) RETURNING id",
+            (filename, original_path, owner()),
         ).fetchone()
         return int(made["id"])
     cur = conn.execute(
-        "INSERT INTO grids (filename, original_path) VALUES (?, ?)",
-        (filename, original_path),
+        "INSERT INTO grids (filename, original_path, owner_id) VALUES (?, ?, ?)",
+        (filename, original_path, owner()),
     )
     return int(cur.lastrowid)
 
@@ -273,9 +319,9 @@ def insert_card_stub(
 ) -> int:
     if isinstance(conn, _PgConnection):
         made = conn.execute(
-            "INSERT INTO cards (grid_id, crop_path, row, col) VALUES (?, ?, ?, ?) "
+            "INSERT INTO cards (grid_id, crop_path, row, col, owner_id) VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT (crop_path) DO NOTHING RETURNING id",
-            (grid_id, crop_path, row, col),
+            (grid_id, crop_path, row, col, owner()),
         ).fetchone()
         if made:
             return int(made["id"])
@@ -283,10 +329,10 @@ def insert_card_stub(
         return int(existing["id"])
     cur = conn.execute(
         """
-        INSERT OR IGNORE INTO cards (grid_id, crop_path, row, col)
-        VALUES (?, ?, ?, ?)
+        INSERT OR IGNORE INTO cards (grid_id, crop_path, row, col, owner_id)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (grid_id, crop_path, row, col),
+        (grid_id, crop_path, row, col, owner()),
     )
     if cur.lastrowid:
         return int(cur.lastrowid)
@@ -309,7 +355,8 @@ def list_cards(
     needs_review_only: bool = False,
     unidentified_only: bool = False,
 ) -> list[dict]:
-    where = []
+    mine, args = _mine()
+    where = [mine]
     if needs_review_only:
         where.append("needs_review = 1")
     if unidentified_only:
@@ -325,19 +372,56 @@ def list_cards(
         "oldest": "created_at ASC, id ASC",
     }.get(sort, "pricing_confidence ASC, id ASC")
 
-    rows = conn.execute(f"SELECT * FROM cards {where_sql} ORDER BY {order}").fetchall()
+    rows = conn.execute(f"SELECT * FROM cards {where_sql} ORDER BY {order}", args).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_card(conn: sqlite3.Connection, card_id: int) -> Optional[dict]:
-    row = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
+def list_grids(conn: sqlite3.Connection) -> list[dict]:
+    mine, args = _mine()
+    return [dict(r) for r in conn.execute(f"SELECT * FROM grids WHERE {mine}", args).fetchall()]
+
+
+def get_grid(conn: sqlite3.Connection, grid_id: int) -> Optional[dict]:
+    mine, args = _mine()
+    row = conn.execute(f"SELECT * FROM grids WHERE id = ? AND {mine}", [grid_id] + args).fetchone()
     return dict(row) if row else None
 
 
-def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any]) -> Optional[dict]:
-    safe = {k: v for k, v in patch.items() if k in CARD_FIELDS and k not in ("id", "crop_path", "created_at")}
+def card_id_by_crop(conn: sqlite3.Connection, crop_path: str) -> Optional[int]:
+    mine, args = _mine()
+    row = conn.execute(f"SELECT id FROM cards WHERE crop_path = ? AND {mine}", [crop_path] + args).fetchone()
+    return int(row["id"]) if row else None
+
+
+def adopt_unowned(conn: sqlite3.Connection, user_id: int) -> None:
+    """Give the rows of the old single bench (no owner) to one account. Used
+    once, for the operator, when an install moves under a public host."""
+    for table in ("grids", "cards"):
+        conn.execute(f"UPDATE {table} SET owner_id = ? WHERE owner_id IS NULL", (int(user_id),))
+    conn.commit()
+
+
+def get_card(conn: sqlite3.Connection, card_id: int, any_owner: bool = False) -> Optional[dict]:
+    """One card of the current owner's bench. any_owner is for the few jobs
+    that act for the whole install by a card's globally unique id (marking a
+    card sold after a sale is read back), never for a request's own data."""
+    if any_owner:
+        row = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
+    else:
+        mine, args = _mine()
+        row = conn.execute(f"SELECT * FROM cards WHERE id = ? AND {mine}", [card_id] + args).fetchone()
+    return dict(row) if row else None
+
+
+def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any],
+                any_owner: bool = False) -> Optional[dict]:
+    # A card on someone else's bench does not exist as far as this one goes.
+    if get_card(conn, card_id, any_owner) is None:
+        return None
+    safe = {k: v for k, v in patch.items()
+            if k in CARD_FIELDS and k not in ("id", "crop_path", "created_at", "owner_id")}
     if not safe:
-        return get_card(conn, card_id)
+        return get_card(conn, card_id, any_owner)
     # Coerce booleans.
     for bool_field in ("is_holo", "outlier_flag", "needs_review"):
         if bool_field in safe:
@@ -348,12 +432,13 @@ def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any]) -
         f"UPDATE cards SET {cols}, updated_at = ? WHERE id = ?",
         values,
     )
-    return get_card(conn, card_id)
+    return get_card(conn, card_id, any_owner)
 
 
 def card_stats(conn: sqlite3.Connection) -> dict:
+    mine, args = _mine()
     rows = conn.execute(
-        """
+        f"""
         SELECT
             COUNT(*) AS total,
             SUM(CASE WHEN name IS NOT NULL AND name <> '' THEN 1 ELSE 0 END) AS identified,
@@ -363,7 +448,9 @@ def card_stats(conn: sqlite3.Connection) -> dict:
             SUM(CASE WHEN ebay_listing_id IS NOT NULL AND ebay_listing_id <> '' THEN 1 ELSE 0 END) AS ebay_listed,
             COALESCE(SUM(final_price), 0) AS total_value
         FROM cards
-        """
+        WHERE {mine}
+        """,
+        args,
     ).fetchone()
     return dict(rows or {})
 
@@ -374,7 +461,7 @@ def maybe_import_legacy_json(
     cards_priced_json: str = "output/cards_priced.json",
 ) -> int:
     """If the DB is empty and legacy JSON files exist, import them."""
-    count = conn.execute("SELECT COUNT(*) AS n FROM cards").fetchone()
+    count = conn.execute("SELECT COUNT(*) AS n FROM cards WHERE owner_id IS NULL").fetchone()
     if count and int(count["n"]) > 0:
         return 0
 
@@ -424,7 +511,7 @@ def maybe_import_legacy_json(
         update_card(conn, card_id, patch)
         imported += 1
 
-    for grid_id_row in conn.execute("SELECT id FROM grids").fetchall():
+    for grid_id_row in conn.execute("SELECT id FROM grids WHERE owner_id IS NULL").fetchall():
         update_grid_count(conn, int(grid_id_row["id"]))
 
     return imported
