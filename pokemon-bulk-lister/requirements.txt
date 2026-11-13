@@ -7,6 +7,8 @@ pandas>=2.2.0
 python-dotenv>=1.0.0
 cloudinary>=1.39.0
 Pillow>=10.2.0
+# iPhone photos (HEIC), converted to JPEG on the way in.
+pillow-heif>=0.16
 Flask>=3.0.0
 anthropic>=0.70.0
 SQLAlchemy>=2.0.0

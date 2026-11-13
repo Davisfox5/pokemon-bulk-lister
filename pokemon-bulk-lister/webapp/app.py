@@ -93,7 +93,7 @@ CARDMARKET_FALLBACK = os.getenv("CARDMARKET_FALLBACK", "1") == "1"
 # nothing to a $0.15 bulk common. 0 disables the gate.
 TERAPEAK_MIN_VALUE = float(os.getenv("TERAPEAK_MIN_VALUE", "3.0"))
 
-ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".heic", ".heif"}
 
 app = Flask(
     __name__,
@@ -345,10 +345,11 @@ def api_upload_grid():
         dest = INPUT_DIR / safe_name
         INPUT_DIR.mkdir(parents=True, exist_ok=True)
         file.save(dest)
+        dest = _as_readable_photo(dest)
 
         n = _record_single(sg, dest) if single else _split_and_record(sg, dest)
         total_crops += n
-        grids_added.append({"filename": safe_name, "crops": n})
+        grids_added.append({"filename": dest.name, "crops": n})
 
     return jsonify({"grids": grids_added, "total_crops": total_crops, "skipped": skipped})
 
@@ -379,9 +380,32 @@ def api_drive_import_photo():
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     dest = INPUT_DIR / _unique_upload_name(name)
     dest.write_bytes(content)
+    dest = _as_readable_photo(dest)
     sg = get_split_grids()
     n = _record_single(sg, dest) if body.get("mode") == "single" else _split_and_record(sg, dest)
     return jsonify({"grids": [{"filename": dest.name, "crops": n}], "total_crops": n, "skipped": []})
+
+
+def _as_readable_photo(path: Path) -> Path:
+    """iPhones save HEIC, which OpenCV cannot read. Such a photo is rewritten
+    as a JPEG beside it (turned the way the phone held it) and the original
+    removed. Any other photo is returned as it is. A HEIC that cannot be
+    decoded is left alone and is then reported as having no cards."""
+    if path.suffix.lower() not in (".heic", ".heif"):
+        return path
+    try:
+        import pillow_heif
+        from PIL import Image, ImageOps
+
+        pillow_heif.register_heif_opener()
+        out = path.with_suffix(".jpg")
+        with Image.open(path) as img:
+            ImageOps.exif_transpose(img).convert("RGB").save(out, "JPEG", quality=92)
+        path.unlink()
+        return out
+    except Exception as exc:
+        print(f"[upload] could not read {path.name}: {exc}", file=sys.stderr)
+        return path
 
 
 def _unique_upload_name(name: str) -> str:

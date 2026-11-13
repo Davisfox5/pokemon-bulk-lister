@@ -349,6 +349,18 @@ assert ann.get("/api/publish/status", headers=public).status_code == 403
 assert ann.get("/api/connections", headers=public).status_code == 403
 assert ann.post("/api/publish/ebay", headers=public).status_code == 403
 
+# ---------------------------------------------------------------- an iPhone photo (HEIC) is read like any other
+import pillow_heif  # noqa: E402
+from PIL import Image  # noqa: E402
+
+pillow_heif.register_heif_opener()
+heic = io.BytesIO()
+Image.fromarray(page[:, :, ::-1]).save(heic, format="HEIF")
+r = ann.post("/api/grids/upload", headers=public, content_type="multipart/form-data",
+             data={"file": (io.BytesIO(heic.getvalue()), "IMG_5834.HEIC"), "mode": "single"})
+assert r.status_code == 200 and r.get_json()["skipped"] == [], r.get_data(as_text=True)
+assert r.get_json()["grids"] == [{"filename": "IMG_5834.jpg", "crops": 1}], r.get_json()
+
 # ---------------------------------------------------------------- no SECRET_KEY, no start
 del os.environ["SECRET_KEY"]
 try:

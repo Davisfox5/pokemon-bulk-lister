@@ -206,7 +206,7 @@
 
   const FOLDER = "application/vnd.google-apps.folder";
   const MIME = {
-    photos: "image/jpeg,image/png,image/webp,image/tiff",
+    photos: "image/jpeg,image/png,image/webp,image/tiff,image/heic,image/heif",
     sheets: "application/vnd.google-apps.spreadsheet,text/csv",
   };
 
