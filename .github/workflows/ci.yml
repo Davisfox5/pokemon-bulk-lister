@@ -42,7 +42,7 @@ jobs:
         run: >-
           pip install requests "Flask>=3.0" python-dotenv "pandas>=2.2"
           "SQLAlchemy>=2.0" "stripe>=8.0" opencv-python-headless
-          "cryptography>=42" "psycopg[binary]>=3.2" pytest
+          "cryptography>=42" "psycopg[binary]>=3.2" "Pillow>=10.2" "pillow-heif>=0.16" pytest
 
       - name: Byte-compile all sources
         run: python -m compileall -q lib webapp scripts app.py
