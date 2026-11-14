@@ -13,3 +13,8 @@ output/*.sqlite*
 output/cache/
 input/grids/*
 !**/.gitkeep
+output/.secret_key
+output/pages/
+_demo/
+.vercel
+.env*

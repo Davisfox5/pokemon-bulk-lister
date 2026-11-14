@@ -52,8 +52,14 @@ def summary():
     uid = current_user_id()
     s = get_session()
     try:
-        items = s.query(InventoryItem).filter_by(user_id=uid).join(CatalogCard).all()
+        items = (s.query(InventoryItem)
+                 .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0)
+                 .join(CatalogCard).all())
         rows = [_item_dict(s, i) for i in items]
+        from webapp.listing_import import listed_on
+        elsewhere = listed_on(s, [i.id for i in items])
+        for row in rows:
+            row["listed_on"] = elsewhere.get(row["id"], [])
         total_value = round(sum(r["value"] or 0 for r in rows), 2)
         total_cost = round(
             sum((i.acquired_price or 0) * i.quantity for i in items if i.acquired_price), 2
@@ -135,7 +141,8 @@ def refresh_prices():
     s = get_session()
     try:
         ccids = [row[0] for row in s.query(InventoryItem.catalog_card_id)
-                 .filter_by(user_id=uid).distinct().all()]
+                 .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0)
+                 .distinct().all()]
     finally:
         s.close()
     if not ccids:
@@ -145,6 +152,50 @@ def refresh_prices():
         daemon=True,
     ).start()
     return jsonify({"started": True, "cards": len(ccids)})
+
+
+PRICE_STEP = 6
+
+
+@portfolio_bp.route("/api/portfolio/price-step", methods=["POST"])
+@login_required
+def price_step():
+    """Body: {mode: "new"|"all", after: <catalog card id>}. Looks up prices
+    for the next few of this account's cards and says how many are left.
+
+    "new" is cards with no price yet (just added, imported); "all" is every
+    card. The page calls this in a loop, passing back `last_id`, so pricing
+    happens inside requests: it works on a host with no background process,
+    and a card that has no market price is tried once per run, not forever.
+    """
+    body = request.get_json(silent=True) or {}
+    mode = "all" if body.get("mode") == "all" else "new"
+    try:
+        after = int(body.get("after") or 0)
+    except (TypeError, ValueError):
+        after = 0
+    uid = current_user_id()
+    s = get_session()
+    try:
+        q = (s.query(CatalogCard.id)
+             .join(InventoryItem, InventoryItem.catalog_card_id == CatalogCard.id)
+             .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0, CatalogCard.id > after))
+        if mode == "new":
+            q = q.filter(CatalogCard.final_price.is_(None))
+        ids = sorted({row[0] for row in q.all()})
+    finally:
+        s.close()
+    batch = ids[:PRICE_STEP]
+    if batch:
+        scheduler.refresh_cards(batch, batch_size=len(batch))
+    s = get_session()
+    try:
+        priced = (s.query(CatalogCard).filter(CatalogCard.id.in_(batch), CatalogCard.final_price.isnot(None)).count()
+                  if batch else 0)
+    finally:
+        s.close()
+    return jsonify({"mode": mode, "tried": len(batch), "priced": priced,
+                    "remaining": len(ids) - len(batch), "last_id": batch[-1] if batch else after})
 
 
 # ----------------------------------------------------------------------

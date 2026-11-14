@@ -52,7 +52,7 @@ def _evaluate_rule(s: Session, rule: AlertRule, now) -> list[Alert]:
         ccids = [
             row[0]
             for row in s.query(InventoryItem.catalog_card_id)
-            .filter_by(user_id=rule.user_id)
+            .filter(InventoryItem.user_id == rule.user_id, InventoryItem.quantity > 0)
             .distinct()
             .all()
         ]

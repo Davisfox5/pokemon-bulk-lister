@@ -151,3 +151,69 @@ td.actions button { padding: 3px 8px; font-size: 12px; }
 }
 td.select { width: 28px; text-align: center; }
 th:first-child { width: 28px; text-align: center; }
+
+/* Scan bench additions */
+header { gap: 16px; flex-wrap: wrap; }
+.topnav { display: flex; gap: 14px; margin-right: auto; }
+.topnav a { color: var(--muted); text-decoration: none; }
+.topnav a:hover { color: var(--accent); }
+.topnav a.active { color: var(--fg); font-weight: 600; }
+.upload-options { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 10px 0 6px; font-size: 13px; }
+thead th { position: sticky; top: 0; z-index: 1; }
+.src { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+tr.flag .src.why { color: var(--row-flag-text); font-weight: 600; }
+.confirm-card { width: min(480px, 96vw); }
+.confirm-body { flex-direction: column; gap: 10px; }
+.confirm-body p { margin: 0 0 6px; }
+.confirm-body .actions { justify-content: flex-end; }
+.flag-text { color: var(--row-flag-text); font-weight: 600; }
+button:disabled { opacity: 0.55; cursor: default; }
+td.actions { display: table-cell; margin-top: 0; }
+@media (max-width: 900px) {
+  body { padding: 0 12px 32px; }
+  .table-wrap { overflow-x: auto; }
+}
+
+/* Connections panel */
+.linkish { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; text-decoration: underline; }
+.linkish:hover { background: none; color: var(--accent-hover); }
+.conn-card { width: min(760px, 96vw); }
+.conn-body { flex-direction: column; gap: 10px; }
+.conn-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.conn-item + .conn-item { margin-top: 8px; }
+.conn-head { display: flex; align-items: baseline; gap: 10px; }
+.conn-head strong { font-size: 14px; }
+.conn-state { font-size: 12px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--border); color: var(--muted); }
+.conn-state.ok { color: #15803d; border-color: #15803d; }
+.conn-state.todo { color: #b45309; border-color: #b45309; }
+.conn-next { margin: 6px 0; font-size: 13px; }
+.conn-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.conn-actions input { flex: 1 1 260px; min-width: 180px; }
+.conn-result { margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.conn-result li { padding: 2px 0; }
+.conn-result .ok::before { content: "OK  "; color: #15803d; font-weight: 600; }
+.conn-result .bad::before { content: "Fix  "; color: var(--row-flag-text); font-weight: 600; }
+.conn-note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+
+/* Sales read back */
+.sales-panel { display: flex; flex-direction: column; gap: 8px; }
+.sales-panel label.inline { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+#sales-unmatched table { margin-top: 6px; }
+#sales-unmatched td, #sales-unmatched th { padding: 4px 8px; }
+.sold-tag { margin-left: 6px; font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; color: var(--muted); }
+
+/* ---------- phones ---------- */
+@media (max-width: 700px) {
+  .panel { padding: 12px; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar-right button, .publish-row button { flex: 1 1 auto; }
+  .publish-row strong { flex-basis: 100%; }
+  .table-wrap { -webkit-overflow-scrolling: touch; }
+  .table-wrap table { min-width: 720px; }
+  .modal { padding: 8px; align-items: flex-start; overflow-y: auto; }
+  .modal-card { width: 100%; max-width: 100%; max-height: none; }
+  .modal-body { flex-direction: column; padding: 12px; }
+  .modal-body img { max-width: 100%; max-height: 240px; align-self: center; }
+  .actions { flex-wrap: wrap; }
+  input, select, textarea { font-size: 16px; }
+}

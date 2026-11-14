@@ -21,7 +21,11 @@ async function api(path, opts = {}) {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    let message = `${res.status}: ${body}`;
+    try { message = JSON.parse(body).error || message; } catch { /* not JSON */ }
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
   }
   const ct = res.headers.get("content-type") || "";
   return ct.includes("json") ? res.json() : res.text();
@@ -58,6 +62,19 @@ function bestEbay(card) {
   return { value: null, window: null, count: 0 };
 }
 
+// What the final price rests on, and why a flagged row was flagged. A price
+// with no visible basis is a bug.
+function priceBasis(card) {
+  if (card.final_price == null) return "";
+  const n = [card.tcgplayer_market, card.cardmarket_trend_usd, card.ebay_median_30d, card.terapeak_median_usd]
+    .filter(v => v != null && v > 0).length;
+  const basis = `<span class="src">${n} source${n === 1 ? "" : "s"}</span>`;
+  const why = card.needs_review && card.pricing_notes
+    ? `<span class="src why" title="${escapeHtml(card.pricing_notes)}">${escapeHtml(card.pricing_notes.slice(0, 70))}</span>`
+    : "";
+  return basis + why;
+}
+
 function renderRow(card) {
   const flagClass = card.needs_review ? "flag" : "";
   const setBits = [card.set_name, card.card_number ? `#${card.card_number}` : "", card.rarity]
@@ -75,13 +92,14 @@ function renderRow(card) {
       <td>
         <strong>${escapeHtml(card.name) || "<span class='muted'>(unidentified)</span>"}</strong>
         ${card.is_holo ? "<span class='muted'> · holo</span>" : ""}
+        ${card.sold ? "<span class='sold-tag' title='Sold. It is left out of publishing and exports.'>sold</span>" : ""}
         <div class="muted small">${escapeHtml(card.condition_guess || "")}</div>
       </td>
       <td class="muted small">${escapeHtml(setBits)}</td>
       <td class="price">${fmt(card.tcgplayer_market)}</td>
       <td class="price">${fmt(card.cardmarket_trend_usd)}</td>
       <td class="price">${ebayCell}</td>
-      <td class="price"><strong>${fmt(card.final_price)}</strong></td>
+      <td class="price"><strong>${fmt(card.final_price)}</strong>${priceBasis(card)}</td>
       <td class="conf">${(card.pricing_confidence ?? 0).toFixed(2)}</td>
       <td class="actions">
         <button data-act="edit">Edit</button>
@@ -158,23 +176,241 @@ function setupDropzone() {
   dz.addEventListener("drop", ev => uploadFiles(ev.dataTransfer.files));
   input.addEventListener("change", () => uploadFiles(input.files));
 
+  async function sendPhotos(list, mode) {
+    const fd = new FormData();
+    for (const f of list) fd.append("file", f, f.name);
+    if (mode) fd.append("mode", mode);
+    const res = await fetch("/api/grids/upload", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
   async function uploadFiles(files) {
     if (!files || !files.length) return;
-    status.textContent = `Uploading ${files.length} file(s)…`;
-    const fd = new FormData();
-    for (const f of files) fd.append("file", f);
+    const mode = scanMode();
+    status.textContent = `Uploading ${files.length} photo(s)…`;
     try {
-      const res = await fetch("/api/grids/upload", { method: "POST", body: fd });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      status.textContent = `Added ${data.total_crops} crop(s) from ${data.grids.length} grid(s).`;
+      let data;
+      const limit = await uploadLimit();
+      if (!limit) {
+        data = await sendPhotos(Array.from(files), mode);
+      } else {
+        // A hosted install caps each request, so photos go one at a time,
+        // shrunk first when they are too big.
+        data = { grids: [], total_crops: 0, skipped: [] };
+        let n = 0;
+        for (const original of files) {
+          status.textContent = `Uploading photo ${++n} of ${files.length}…`;
+          const photo = await fitPhoto(original, limit);
+          if (!photo) { data.skipped.push(original.name); continue; }
+          const one = await sendPhotos([photo], mode);
+          data.grids.push(...one.grids);
+          data.total_crops += one.total_crops;
+          data.skipped.push(...(one.skipped || []));
+        }
+      }
+      const skipped = (data.skipped || []).length
+        ? ` Skipped ${data.skipped.length} file(s) that are not JPG, PNG, WEBP or TIFF.` : "";
+      status.textContent = data.total_crops
+        ? `Added ${data.total_crops} card(s) from ${data.grids.length} photo(s).${skipped}`
+        : `No cards found in ${data.grids.length} photo(s).${skipped}`;
       await loadCards();
+      if (data.total_crops && $("#auto-process").checked) startProcess();
     } catch (err) {
       status.textContent = `Upload failed: ${err.message}`;
     } finally {
       input.value = "";
+      camera.value = "";
     }
   }
+
+  const camera = $("#camera-input");
+  camera.addEventListener("change", () => uploadFiles(camera.files));
+  $("#camera-btn").addEventListener("click", () => camera.click());
+  dz.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); input.click(); }
+  });
+
+  // Remember the two scan settings between visits.
+  const saved = JSON.parse(localStorage.getItem("scan-settings") || "{}");
+  if (saved.auto === false) $("#auto-process").checked = false;
+  const remember = () => {
+    localStorage.setItem("scan-settings", JSON.stringify({ auto: $("#auto-process").checked }));
+  };
+  $("#auto-process").addEventListener("change", remember);
+  remember();
+}
+
+// Photos picked from Google Drive: the server fetches each one itself.
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = $("#drive-photos-btn");
+  if (!btn) return;
+  const status = $("#upload-status");
+  btn.addEventListener("click", () => openDrivePicker({
+    kind: "photos", multiple: true, title: "Choose card photos from Google Drive",
+    onPick: async (files) => {
+      const mode = scanMode();
+      let crops = 0, done = 0;
+      const skipped = [];
+      for (const file of files) {
+        status.textContent = `Importing photo ${++done} of ${files.length} from Google Drive…`;
+        try {
+          const one = await api("/api/drive/import/photo", {
+            method: "POST", body: JSON.stringify({ file_id: file.id, mode }) });
+          crops += one.total_crops;
+          skipped.push(...(one.skipped || []));
+        } catch (err) {
+          skipped.push(`${file.name} (${err.message})`);
+        }
+      }
+      status.textContent = `Added ${crops} card(s) from ${files.length - skipped.length} Drive photo(s).`
+        + (skipped.length ? ` Skipped: ${skipped.join(", ")}.` : "");
+      await loadCards();
+      if (crops && $("#auto-process").checked) startProcess();
+    },
+  }));
+  const back = new URLSearchParams(location.search).get("drive");
+  if (back) {
+    history.replaceState(null, "", location.pathname);
+    status.textContent = {
+      connected: "Google Drive connected. Tap Google Drive to pick photos.",
+      declined: "Google Drive was not connected: access was declined.",
+      failed: "Google Drive could not be connected. Try again.",
+      "not-set-up": "Google Drive is not set up on this install (GOOGLE_CLIENT_ID is missing).",
+    }[back] || "";
+  }
+});
+
+// What the server will accept in one request, or null for no cap.
+let uploadLimitCache;
+async function uploadLimit() {
+  if (uploadLimitCache === undefined) {
+    uploadLimitCache = (await api("/api/session").catch(() => ({}))).max_upload_bytes || null;
+  }
+  return uploadLimitCache;
+}
+
+// A photo small enough to send: the file itself, or a re-encoded JPEG scaled
+// down until it fits. Returns null for a file the browser cannot read (TIFF).
+async function fitPhoto(file, limit) {
+  if (file.size <= limit) return file;
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); } catch { return null; }
+  const name = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+  for (const [side, quality] of [[4000, 0.9], [3400, 0.88], [2800, 0.85], [2200, 0.82]]) {
+    const scale = Math.min(1, side / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((done) => canvas.toBlob(done, "image/jpeg", quality));
+    if (blob && blob.size <= limit) return new File([blob], name, { type: "image/jpeg" });
+  }
+  return null;
+}
+
+// A CSV as pieces small enough to send, each starting with the header line.
+function csvParts(text, maxChars = 3000000) {
+  if (text.length <= maxChars) return [text];
+  const headerEnd = text.indexOf("\n") + 1;
+  const header = text.slice(0, headerEnd);
+  const parts = [];
+  let start = headerEnd;
+  while (start < text.length) {
+    let end = Math.min(text.length, start + maxChars);
+    if (end < text.length) {
+      const cut = text.lastIndexOf("\n", end);
+      if (cut > start) end = cut + 1;
+    }
+    parts.push(header + text.slice(start, end));
+    start = end;
+  }
+  return parts;
+}
+
+// The server works out what is in each photo (one card, several, a binder
+// page), so no mode is sent.
+function scanMode() {
+  return null;
+}
+
+const JOB_BUTTONS = ["#process-btn", "#identify-btn", "#run-pricing-btn"];
+
+async function startProcess() {
+  JOB_BUTTONS.forEach(s => { $(s).disabled = true; });
+  try {
+    await api("/api/scan/process", { method: "POST" });
+    pollJob();
+  } catch (err) {
+    JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
+    $("#upload-status").textContent = `Could not start: ${err.message}`;
+  }
+}
+
+// ---------------------------------------------------------------- confirm
+// Resolves {ok, checked}. Used before publishing or moving cards off the bench.
+function askConfirm({ title, html, confirm = "Confirm", checkbox = null }) {
+  $("#confirm-title").textContent = title;
+  $("#confirm-text").innerHTML = html;
+  $("#confirm-ok").textContent = confirm;
+  $("#confirm-check").checked = false;
+  $("#confirm-check-row").classList.toggle("hidden", !checkbox);
+  $("#confirm-check-label").textContent = checkbox || "";
+  const modal = $("#confirm-modal");
+  modal.classList.remove("hidden");
+  $("#confirm-ok").focus();
+  return new Promise(resolve => {
+    const done = ok => {
+      modal.classList.add("hidden");
+      modal.removeEventListener("keydown", onKey);
+      resolve({ ok, checked: $("#confirm-check").checked });
+    };
+    const onKey = ev => { if (ev.key === "Escape") { ev.stopPropagation(); done(false); } };
+    modal.addEventListener("keydown", onKey);
+    $("#confirm-ok").onclick = () => done(true);
+    $("#confirm-cancel").onclick = () => done(false);
+    $("#confirm-x").onclick = () => done(false);
+  });
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// ---------------------------------------------------------------- library
+async function addToLibrary() {
+  const session = await api("/api/session");
+  if (!session.logged_in) {
+    window.location = "/login?next=/";
+    return;
+  }
+  const picked = selectedCards();
+  const pool = picked.length ? picked : state.cards;
+  const ready = pool.filter(c => c.name && c.final_price != null);
+  const flagged = ready.filter(c => c.needs_review).length;
+  const left = pool.length - ready.length;
+  if (!ready.length) {
+    $("#upload-status").textContent = picked.length
+      ? "None of the selected cards are identified and priced yet."
+      : "No cards are identified and priced yet. Run “Identify + price new cards” first.";
+    return;
+  }
+  const value = ready.reduce((sum, c) => sum + c.final_price, 0);
+  const { ok } = await askConfirm({
+    title: `Add ${plural(ready.length, "card")} to your library?`,
+    html: `<p>${plural(ready.length, "priced card")}${picked.length ? " from your selection" : ""}, worth
+      $${value.toFixed(2)} at current prices, will be added to your library. Cards already added are skipped.</p>
+      ${left ? `<p class="muted">${plural(left, "card")} without a name or price stay on the bench.</p>` : ""}
+      ${flagged ? `<p class="flag-text">${plural(flagged, "card")} ${flagged === 1 ? "has a price" : "have prices"} flagged for review. They are added too and stay flagged in the library.</p>` : ""}`,
+    confirm: "Add to library",
+  });
+  if (!ok) return;
+  // Send exactly the cards the dialog counted, never "everything priced":
+  // with a filter on, the table shows only part of the bench.
+  const body = { card_ids: ready.map(c => c.id) };
+  const res = await api("/api/inventory/promote", { method: "POST", body: JSON.stringify(body) });
+  $("#upload-status").innerHTML =
+    `Added ${plural(res.promoted, "card")} to your library` +
+    (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already there)` : "") +
+    `. <a href="/portfolio">Open library</a> to sell them or check them against decks.`;
 }
 
 // ---------------------------------------------------------------- table interactions
@@ -472,32 +708,55 @@ function setupToolbar() {
   $("#filter-review").addEventListener("change", e => { state.needsReview = e.target.checked; loadCards(); });
   $("#filter-unid").addEventListener("change", e => { state.unidentified = e.target.checked; loadCards(); });
 
-  $("#identify-btn").addEventListener("click", async () => {
-    const btn = $("#identify-btn");
+  $("#process-btn").addEventListener("click", startProcess);
+
+  $("#library-btn").addEventListener("click", async () => {
+    const btn = $("#library-btn");
     btn.disabled = true;
+    try {
+      await addToLibrary();
+    } catch (err) {
+      if (err.status === 401) window.location = "/login?next=/";
+      else $("#upload-status").textContent = `Could not add to library: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#identify-btn").addEventListener("click", async () => {
+    JOB_BUTTONS.forEach(s => { $(s).disabled = true; });
     try {
       await api("/api/identify/run-all", { method: "POST" });
       pollJob();
     } catch (err) {
       alert(err.message);
-      btn.disabled = false;
+      JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
     }
   });
 
   $("#run-pricing-btn").addEventListener("click", async () => {
-    const btn = $("#run-pricing-btn");
-    btn.disabled = true;
     const useTerapeak = $("#use-terapeak").checked ? "1" : "0";
+    const n = state.stats.identified ?? 0;  // whole bench, not the filtered view
+    const { ok } = await askConfirm({
+      title: `Re-price ${plural(n, "card")}?`,
+      html: `<p>This looks up every identified card again, including the ones already priced, and
+        replaces their prices.${useTerapeak === "1" ? " Terapeak adds about 5 seconds per card." : ""}</p>
+        <p class="muted">To price only new cards, use “Identify + price new cards”.</p>`,
+      confirm: "Re-price all",
+    });
+    if (!ok) return;
+    JOB_BUTTONS.forEach(s => { $(s).disabled = true; });
     try {
       await api(`/api/pricing/run-all?terapeak=${useTerapeak}`, { method: "POST" });
       pollJob();
     } catch (err) {
       alert(err.message);
-      btn.disabled = false;
+      JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
     }
   });
 
-  // One-shot probe of Terapeak login state on page load.
+  // One-shot probe of Terapeak login state on page load (operator only;
+  // refused quietly for other accounts, whose checkbox is hidden).
   api("/api/terapeak/status").then(s => {
     const el = $("#terapeak-status");
     if (s.logged_in) {
@@ -539,9 +798,10 @@ async function pollJob() {
       if (status.running) setTimeout(tick, 1500);
       else {
         await loadCards();
-        $("#run-pricing-btn").disabled = false;
-        const identifyBtn = $("#identify-btn");
-        if (identifyBtn) identifyBtn.disabled = false;
+        JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
+        // The finished message says how many were identified and priced;
+        // keep it on screen after the bar goes away.
+        if (status.message) $("#upload-status").textContent = `Last run: ${status.message}.`;
         setTimeout(() => bar.classList.add("hidden"), 1500);
       }
     } catch {
@@ -572,17 +832,85 @@ function setupPublish() {
       if (el) {
         el.textContent = ready ? "(ready)" : "(setup needed)";
         el.style.color = ready ? "#15803d" : "#b45309";
-        if (!ready && s[site] && s[site].reason) buttons[site].title = s[site].reason;
+        buttons[site].title = ready ? "" : (s[site] && s[site].reason) || "";
       }
     }
   }
 
+  const SITE_NAMES = { ebay: "eBay", tcgplayer: "TCGplayer", whatnot: "Whatnot" };
+
   async function publish(site) {
     const btn = buttons[site];
+    let status;
+    try {
+      status = await api("/api/publish/status");
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+    const c = status.counts[site];
+    if (!status[site].ready) {
+      $("#publish-msg").textContent = `${SITE_NAMES[site]} is not connected yet.`;
+      openConnections(site);
+      return;
+    }
+    const WHY_LEFT_OUT = {
+      ebay: "without a hosted photo (Cloudinary is not set up; see Connections)",
+      tcgplayer: c.catalog === false
+        ? "cannot be matched until you upload your TCGplayer pricing export (Connections)"
+        : "with no single matching row in your TCGplayer pricing export",
+    };
+    const leftOut = c.left_out
+      ? `<p class="muted">${plural(c.left_out, "priced card")} ${WHY_LEFT_OUT[site]} will be left out.</p>` : "";
+    if (!c.count) {
+      $("#publish-msg").textContent = status.counts.priced
+        ? `Nothing to send to ${SITE_NAMES[site]}: ${plural(c.left_out, "priced card")} ${WHY_LEFT_OUT[site]}.`
+        : "Nothing to publish: no cards are priced yet.";
+      return;
+    }
+    const money = v => `$${v.toFixed(2)}`;
+    let skipFlagged = false, expected = null;
+    if (site === "ebay") {
+      // Flagged prices stay off eBay unless the user opts them in, the same
+      // default the library's bulk list uses.
+      const clean = c.count - c.flagged;
+      const answer = await askConfirm({
+        title: c.flagged
+          ? `Publish live eBay listings for ${plural(clean, "card")}?`
+          : `Publish ${plural(c.count, "live eBay listing")}?`,
+        html: `<p>${plural(clean, "card")} will be listed live on your eBay account at their final
+          prices, ${money(c.total - c.flagged_total)} in total. Buyers can purchase them as soon as this
+          finishes. Cards already on eBay are updated, not duplicated.</p>
+          ${c.to_upload ? `<p class="muted">Card photos that are not hosted yet (${c.flagged ? `${c.to_upload_unflagged}, or ${c.to_upload} with the flagged cards` : c.to_upload}) are uploaded to Cloudinary first.</p>` : ""}
+          ${leftOut}
+          ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "more card")} (${money(c.flagged_total)})
+            ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review and will not be listed
+            unless you tick the box.</p>` : ""}`,
+        confirm: "Publish to eBay",
+        checkbox: c.flagged ? `Also list the ${c.flagged} flagged` : null,
+      });
+      if (!answer.ok) return;
+      skipFlagged = !answer.checked;
+      expected = answer.checked ? c.count : clean;
+      if (!expected) {
+        $("#publish-msg").textContent = "Nothing listed: every eligible card has a flagged price.";
+        return;
+      }
+    } else {
+      const answer = await askConfirm({
+        title: `Upload ${plural(c.count, "card")} to ${SITE_NAMES[site]}?`,
+        html: `<p>A CSV with ${plural(c.count, "priced card")}, ${money(c.total)} in total, will be
+          generated and submitted through your ${SITE_NAMES[site]} seller portal session.</p>
+          ${leftOut}
+          ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "of these card")} ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review. Fix or re-price them first if they should not go out as is.</p>` : ""}`,
+        confirm: `Upload to ${SITE_NAMES[site]}`,
+      });
+      if (!answer.ok) return;
+    }
     btn.disabled = true;
     const endpoint = site === "ebay" ? "/api/publish/ebay" : "/api/publish/portal";
     const opts = site === "ebay"
-      ? { method: "POST" }
+      ? { method: "POST", body: JSON.stringify({ skip_flagged: skipFlagged, expected }) }
       : { method: "POST", body: JSON.stringify({ site }) };
     try {
       await api(endpoint, opts);
@@ -597,6 +925,350 @@ function setupPublish() {
     if (btn) btn.addEventListener("click", () => publish(site));
   });
   refreshStatus();
+  refreshPublishStatus = refreshStatus;
+}
+
+let refreshPublishStatus = () => {};
+
+// ---------------------------------------------------------------- sales read back
+// eBay orders come over its API; Whatnot and TCGplayer sales come in as the
+// CSV those sites export. Either way a sale finds its card by SKU.
+async function loadSales() {
+  let s;
+  try {
+    s = await api("/api/sales/status");
+  } catch (err) {
+    // Sales change libraries, so this part of the Scan page needs the operator.
+    $("#sync-ebay-btn").disabled = true;
+    $("#sales-import-btn").disabled = true;
+    $("#sales-unmatched").classList.add("hidden");
+    $("#sales-meta").innerHTML = err.status === 401
+      ? '<a href="/login?next=/">Log in as the operator</a> to read sales back'
+      : escapeHtml(err.message);
+    return;
+  }
+  $("#sales-import-btn").disabled = false;
+  const e = s.ebay;
+  $("#sales-meta").textContent = !e.connected ? "eBay not connected"
+    : !e.can_read_sales ? "reconnect eBay under Connections to read its sales"
+    : !s.sync_minutes ? "automatic eBay checks are off"
+    : s.last_sync_at ? `eBay last checked ${new Date(s.last_sync_at).toLocaleTimeString()}; checked automatically every ${s.sync_minutes} minutes`
+    : `eBay is checked automatically every ${s.sync_minutes} minutes`;
+  $("#sync-ebay-btn").disabled = !e.connected;
+  const box = $("#sales-unmatched");
+  box.classList.toggle("hidden", !s.unmatched.length);
+  $("#sales-unmatched-body").innerHTML = s.unmatched.map(u => `<tr class="flag" data-id="${u.id}">
+      <td>${u.sold_at ? new Date(u.sold_at).toLocaleDateString() : "—"}</td>
+      <td>${escapeHtml(u.source)}</td>
+      <td>${escapeHtml(u.sku || "—")}</td>
+      <td>${escapeHtml(u.title || "")}</td>
+      <td class="price">${u.quantity}</td>
+      <td class="price">${fmt(u.unit_price)}</td>
+      <td class="small">${escapeHtml(u.detail || "")}</td>
+      <td class="actions"><button data-act="dismiss-sale">Dismiss</button></td>
+    </tr>`).join("");
+}
+
+function salesSummary(r, where) {
+  const bits = [`${plural(r.recorded, "sale")} recorded from ${where} ($${(r.total || 0).toFixed(2)})`];
+  if (r.unmatched) bits.push(`${r.unmatched} could not be matched to a library card (listed below)`);
+  if (r.duplicates) bits.push(`${r.duplicates} already recorded`);
+  if (r.void) bits.push(`${r.void} cancelled or refunded`);
+  if (r.adjusted) bits.push(`${r.adjusted} sale(s) were partly refunded since, and their price was lowered to match`);
+  if (r.reversed) bits.push(`${r.reversed} earlier sale(s) were refunded since, and the card was put back`);
+  if (r.not_paid_yet) bits.push(`${r.not_paid_yet} not paid yet`);
+  if (r.skipped) bits.push(`${r.skipped} rows skipped (no SKU or price)`);
+  return bits.join("; ") + ".";
+}
+
+function setupSales() {
+  const msg = $("#sales-msg");
+  $("#sync-ebay-btn").addEventListener("click", async () => {
+    const btn = $("#sync-ebay-btn");
+    btn.disabled = true; msg.textContent = "Reading eBay orders from the last 30 days…";
+    try {
+      const r = await api("/api/sales/sync/ebay", { method: "POST", body: "{}" });
+      msg.textContent = salesSummary(r, "eBay") + (r.problems.length ? ` Problems: ${r.problems.join("; ")}` : "");
+      await loadCards();
+    } catch (err) {
+      msg.textContent = `eBay sync did not run: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+      loadSales().catch(() => {});
+    }
+  });
+
+  const file = $("#sales-file");
+  $("#sales-import-btn").addEventListener("click", () => file.click());
+  file.addEventListener("change", async () => {
+    if (!file.files.length) return;
+    const source = "whatnot", name = "Whatnot";
+    const send = async dryRun => {
+      const fd = new FormData();
+      fd.append("file", file.files[0]);
+      fd.append("source", source);
+      if (dryRun) fd.append("dry_run", "1");
+      const res = await fetch("/api/sales/import", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `import failed (${res.status})`);
+      return data;
+    };
+    try {
+      const p = await send(true);
+      const fresh = p.sales - p.already_imported;
+      if (!fresh) {
+        msg.textContent = p.sales
+          ? `Nothing new: all ${p.sales} sales in that file were imported before.`
+          : `No sales found in that file (${p.rows} rows, ${p.skipped} without a SKU or price).`;
+        return;
+      }
+      const { ok } = await askConfirm({
+        title: `Record ${plural(fresh, "sale")} from ${name}?`,
+        html: `<p>${plural(fresh, "sale")} worth $${p.total.toFixed(2)} will be recorded against your library. Each sold card leaves it,
+          comes off the marketplace, and shows under Sold.</p>
+          <p class="muted">Read from columns: SKU “${escapeHtml(p.columns.sku)}”, price “${escapeHtml(p.columns.price)}”${p.columns.quantity ? `, quantity “${escapeHtml(p.columns.quantity)}”` : ""}${p.columns.date ? `, date “${escapeHtml(p.columns.date)}”` : ""}.
+          ${p.already_imported ? `${p.already_imported} were imported before and are skipped.` : ""}
+          ${p.skipped ? `${p.skipped} rows have no SKU or price and are skipped.` : ""}</p>`,
+        confirm: "Record sales",
+      });
+      if (!ok) return;
+      msg.textContent = salesSummary(await send(false), name);
+      await loadCards();   // sold cards get their tag and leave the publish counts
+    } catch (err) {
+      msg.textContent = `Could not import: ${err.message}`;
+    } finally {
+      file.value = "";
+      loadSales().catch(() => {});
+    }
+  });
+
+  $("#sales-unmatched-body").addEventListener("click", async ev => {
+    const btn = ev.target.closest('[data-act="dismiss-sale"]');
+    if (!btn) return;
+    await api(`/api/sales/external/${btn.closest("tr").dataset.id}/dismiss`, { method: "POST", body: "{}" });
+    loadSales().catch(() => {});
+  });
+  loadSales().catch(() => {});
+}
+
+// ---------------------------------------------------------------- connections
+// One panel that says, for each outside service, whether it is connected and
+// what the next step is, and runs that step where it can.
+const conn = { data: null, results: {}, focus: null, timer: null };
+
+async function loadConnections() {
+  conn.data = await api("/api/connections");
+  conn.tcg = await api("/api/tcgplayer/catalog").catch(() => null);
+  renderConnections();
+  refreshPublishStatus();
+  // Keep polling while a sign-in window is open.
+  clearTimeout(conn.timer);
+  const busy = ["tcgplayer", "whatnot"].some(s =>
+    ["opening", "waiting"].includes(conn.data[s].login.state));
+  if (busy && !$("#conn-modal").classList.contains("hidden")) {
+    conn.timer = setTimeout(() => loadConnections().catch(() => {}), 1500);
+  }
+}
+
+function openConnections(focus = null) {
+  conn.focus = focus;
+  $("#conn-modal").classList.remove("hidden");
+  $("#conn-list").textContent = "Loading…";
+  loadConnections().catch(err => { $("#conn-list").textContent = `Could not load: ${err.message}`; });
+}
+
+function closeConnections() {
+  $("#conn-modal").classList.add("hidden");
+  clearTimeout(conn.timer);
+}
+
+function connItem(key, name, state, cls, next, actions = "", note = "") {
+  const res = conn.results[key];
+  const steps = res && res.steps
+    ? res.steps.map(s => `<li class="${s.ok ? "ok" : "bad"}"><strong>${escapeHtml(s.name)}:</strong> ${escapeHtml(s.detail)}</li>`).join("")
+    : res ? `<li class="${res.ok ? "ok" : "bad"}">${escapeHtml(res.detail || res.error || "")}</li>` : "";
+  return `<section class="conn-item" data-conn="${key}">
+    <div class="conn-head"><strong>${name}</strong><span class="conn-state ${cls}">${state}</span></div>
+    <p class="conn-next">${escapeHtml(next || "")}</p>
+    ${actions ? `<div class="conn-actions">${actions}</div>` : ""}
+    ${steps ? `<ul class="conn-result">${steps}</ul>` : ""}
+    ${note ? `<p class="conn-note">${note}</p>` : ""}
+  </section>`;
+}
+
+// TCGplayer's upload needs its own id for each card. Those come from the
+// pricing export the seller downloads from TCGplayer.
+function tcgCatalogHtml() {
+  const t = conn.tcg;
+  if (!t) return "";
+  const status = t.loaded
+    ? `Pricing export loaded: ${t.rows} products. ${t.matched} of your ${t.priced} priced cards match a TCGplayer Id.`
+    : "Upload your TCGplayer pricing export (seller portal, Pricing, Export) so uploads carry real TCGplayer Ids. Without it the TCGplayer CSV is empty.";
+  return `<div class="conn-actions" style="margin-top:8px">
+      <span class="small">${escapeHtml(status)}</span>
+      <button data-act="tcg-catalog">${t.loaded ? "Replace export" : "Upload export"}</button>
+      <input id="tcg-catalog-file" type="file" accept=".csv,text/csv" hidden />
+    </div>`;
+}
+
+function portalItem(key, name) {
+  const d = conn.data[key];
+  const login = d.login.state;
+  let actions;
+  if (!d.playwright) actions = "";
+  else if (login === "opening") actions = `<span class="muted">Opening a browser window…</span>`;
+  else if (login === "waiting") {
+    actions = `<button class="primary" data-act="portal-finish">I'm signed in, save it</button>
+               <button data-act="portal-cancel">Cancel</button>`;
+  } else if (d.session) {
+    actions = `<button data-act="portal-check">Check session</button>
+               <button data-act="portal-login">Sign in again</button>
+               <button data-act="portal-disconnect">Forget session</button>`;
+  } else {
+    actions = `<button class="primary" data-act="portal-login">Sign in to ${name}</button>`;
+  }
+  const problem = ["error", "cancelled"].includes(login) && d.login.detail
+    ? ` Last attempt: ${d.login.detail}.` : "";
+  return connItem(key, name,
+    d.session ? "session saved" : "not connected", d.session ? "ok" : "todo",
+    d.next + problem, actions + (key === "tcgplayer" ? tcgCatalogHtml() : ""),
+    `${name} has no listing API for regular sellers, so this drives your seller portal in a browser.
+     That is against ${name}'s terms and can break when they change the page. Uploading the exported CSV by hand always works.`);
+}
+
+function renderConnections() {
+  const d = conn.data;
+  const e = d.ebay;
+  let ebayActions = "";
+  if (e.configured && !e.authorized) {
+    ebayActions = `<button class="primary" data-act="ebay-consent">1. Open eBay consent page</button>
+      <input id="ebay-redirect-input" placeholder="2. Paste the URL eBay sent you to" aria-label="Redirect URL from eBay" />
+      <button data-act="ebay-authorize">3. Connect</button>`;
+  } else if (e.authorized) {
+    ebayActions = `<button data-act="ebay-check">Check account</button>
+                   <button data-act="ebay-disconnect">Disconnect</button>`;
+  }
+  const s = d.stripe;
+  $("#conn-list").innerHTML = [
+    connItem("identify", "Card identification (Anthropic)", d.identify.ready ? "ready" : "needs setup",
+      d.identify.ready ? "ok" : "todo", d.identify.next),
+    connItem("ebay", `eBay${e.env === "sandbox" ? " (sandbox)" : ""}`,
+      e.ready ? "connected" : "needs setup", e.ready ? "ok" : "todo", e.next + (e.error ? ` (${e.error})` : ""),
+      ebayActions,
+      e.authorized ? "" : "After you approve, eBay sends the browser to your RuName's accepted URL. That page can be anything; copy its full address from the address bar."),
+    connItem("cloudinary", "Photo hosting (Cloudinary)", d.cloudinary.ready ? "ready" : "needs setup",
+      d.cloudinary.ready ? "ok" : "todo", d.cloudinary.next),
+    portalItem("tcgplayer", "TCGplayer"),
+    portalItem("whatnot", "Whatnot"),
+    connItem("stripe", "Card payments (Stripe)",
+      !s.configured ? "off" : s.mode === "test" ? "test mode" : "live", s.ready ? "ok" : "todo", s.next,
+      s.ready ? `<button data-act="stripe-check">Check key</button>` : "",
+      s.mode === "test" ? "Test card: 4242 4242 4242 4242, any future expiry, any CVC." : ""),
+  ].join("");
+  if (conn.focus) {
+    const el = $(`[data-conn="${conn.focus}"]`);
+    if (el) el.scrollIntoView({ block: "center" });
+    conn.focus = null;
+  }
+}
+
+function setupConnections() {
+  ["#connections-btn", "#connections-btn-2"].forEach(sel => $(sel).addEventListener("click", () => openConnections()));
+  $("#conn-close").addEventListener("click", closeConnections);
+  $("#conn-modal").addEventListener("click", ev => { if (ev.target.id === "conn-modal") closeConnections(); });
+
+  $("#conn-list").addEventListener("click", async ev => {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const key = btn.closest("[data-conn]").dataset.conn;
+    if (btn.dataset.act === "tcg-catalog") {
+      // Handled apart from the other buttons: the panel must not redraw
+      // (and replace the file input) while the file dialog is open.
+      const input = $("#tcg-catalog-file");
+      input.onchange = async () => {
+        if (!input.files.length) return;
+        // The whole-catalog export is tens of megabytes, so it goes in parts.
+        const parts = csvParts(await input.files[0].text());
+        let res, data = {};
+        for (let i = 0; i < parts.length; i++) {
+          const fd = new FormData();
+          fd.append("file", new Blob([parts[i]], { type: "text/csv" }), "export.csv");
+          fd.append("part", i + 1);
+          fd.append("parts", parts.length);
+          res = await fetch("/api/tcgplayer/catalog", { method: "POST", body: fd });
+          data = await res.json().catch(() => ({}));
+          if (!res.ok) break;
+        }
+        conn.results.tcgplayer = res.ok
+          ? { ok: true, detail: `Loaded ${data.rows} products; ${data.matched} of ${data.priced} priced cards matched.` }
+          : { ok: false, detail: data.error || "upload failed" };
+        loadConnections().catch(() => {});
+      };
+      input.click();
+      return;
+    }
+    const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+    const label = btn.textContent;
+    btn.disabled = true;
+    delete conn.results[key];
+    try {
+      switch (btn.dataset.act) {
+        case "ebay-consent": {
+          const { url } = await post("/api/connections/ebay/consent-url");
+          window.open(url, "_blank", "noopener");
+          break;
+        }
+        case "ebay-authorize": {
+          const redirect = $("#ebay-redirect-input").value.trim();
+          if (!redirect) { conn.results.ebay = { ok: false, detail: "Paste the URL from the browser's address bar first." }; break; }
+          await post("/api/connections/ebay/authorize", { redirect });
+          conn.results.ebay = { ok: true, detail: "eBay account connected." };
+          break;
+        }
+        case "ebay-check":
+          btn.textContent = "Checking…";
+          conn.results.ebay = await post("/api/connections/ebay/check");
+          break;
+        case "ebay-disconnect": {
+          const { ok } = await askConfirm({
+            title: "Disconnect eBay?",
+            html: "<p>The saved authorization is deleted. Listings already live on eBay stay up; you can reconnect at any time.</p>",
+            confirm: "Disconnect",
+          });
+          if (ok) await post("/api/connections/ebay/disconnect");
+          break;
+        }
+        case "stripe-check":
+          btn.textContent = "Checking…";
+          conn.results.stripe = await post("/api/connections/stripe/check");
+          break;
+        case "portal-login":
+          await post(`/api/connections/portal/${key}/login`);
+          break;
+        case "portal-finish":
+          btn.textContent = "Saving…";
+          await post(`/api/connections/portal/${key}/login/finish`);
+          conn.results[key] = { ok: true, detail: "Session saved. Run “Check session” to confirm it works." };
+          break;
+        case "portal-cancel":
+          await post(`/api/connections/portal/${key}/login/cancel`);
+          break;
+        case "portal-check":
+          btn.textContent = "Checking… (opens the import page in the background)";
+          conn.results[key] = await post(`/api/connections/portal/${key}/check`);
+          break;
+        case "portal-disconnect":
+          await post(`/api/connections/portal/${key}/disconnect`);
+          break;
+      }
+    } catch (err) {
+      conn.results[key] = { ok: false, detail: err.message };
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+      loadConnections().catch(() => {});
+    }
+  });
 }
 
 async function pollPublishJob() {
@@ -630,6 +1302,7 @@ function setupKeyboard() {
     if (ev.key === "Escape") {
       closeEdit();
       closeBundle();
+      if ($("#confirm-modal").classList.contains("hidden")) closeConnections();
     }
   });
 }
@@ -639,6 +1312,18 @@ setupTable();
 setupModal();
 setupBundleModal();
 setupToolbar();
-setupPublish();
 setupKeyboard();
 loadCards();
+// Publishing, Connections, sales sync and Terapeak use the install's own
+// outside accounts, so only the operator gets them. The server enforces it;
+// this keeps the page from showing controls that would be refused.
+api("/api/session").catch(() => ({ operator: true })).then((me) => {
+  if (me.operator === false) {
+    document.querySelectorAll(".publish-panel, .sales-panel, #terapeak-label")
+      .forEach(el => el.classList.add("hidden"));
+    return;
+  }
+  setupPublish();
+  setupConnections();
+  setupSales();
+});

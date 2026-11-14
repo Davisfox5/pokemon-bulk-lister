@@ -26,6 +26,23 @@ import pandas as pd
 # condition or rarity claim here is a factual claim about the item.
 
 
+def _load_tcg_catalog():
+    """The seller's TCGplayer export, if one was saved (web UI: Connections,
+    or drop it at output/cache/tcgplayer_catalog.csv)."""
+    import os
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from lib.tcgplayer_catalog import TcgCatalog
+
+    path = Path(os.getenv("OUTPUT_DIR", "output")) / "cache" / "tcgplayer_catalog.csv"
+    catalog = TcgCatalog.load(path)
+    if catalog is None:
+        print(f"[tcgplayer] no TCGplayer export at {path}; tcgplayer_bulk.csv will be empty. "
+              "Export your pricing CSV from the TCGplayer seller portal and save it there.",
+              file=sys.stderr)
+    return catalog
+
+
 def _condition_full(short: str) -> str:
     return {
         "NM": "Near Mint",
@@ -50,14 +67,24 @@ def _title(card: dict) -> str:
     return " ".join(p for p in parts if p)
 
 
-def tcgplayer_rows(cards: list[dict]) -> list[dict]:
+def tcgplayer_rows(cards: list[dict], catalog=None) -> list[dict]:
+    """Rows for TCGplayer's bulk upload. `catalog` is a
+    lib.tcgplayer_catalog.TcgCatalog built from the seller's own TCGplayer
+    export; it supplies the real TCGplayer Id for each card. A card with no
+    unambiguous match is left out, and with no catalog there are no rows at
+    all: an upload with made-up Ids would list the wrong products."""
     rows: list[dict] = []
+    if catalog is None:
+        return rows
     for c in cards:
-        if not c.get("price") or not c.get("tcgplayer_product_id"):
+        if not c.get("price"):
+            continue
+        tcg_id = catalog.match(c)
+        if not tcg_id:
             continue
         rows.append(
             {
-                "TCGplayer Id": c["tcgplayer_product_id"],
+                "TCGplayer Id": tcg_id,
                 "Product Line": "Pokemon",
                 "Set Name": c.get("set_name", ""),
                 "Product Name": c.get("name", ""),
@@ -344,7 +371,7 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     targets = [
-        ("tcgplayer_bulk.csv", tcgplayer_rows(cards)),
+        ("tcgplayer_bulk.csv", tcgplayer_rows(cards, _load_tcg_catalog())),
         ("whatnot_seller_hub.csv", whatnot_rows(cards)),
         ("ebay_bulk.csv", ebay_rows(cards)),
     ]

@@ -100,6 +100,11 @@ def refresh_cards(card_ids: Optional[list[int]] = None, batch_size: Optional[int
                 except Exception as exc:
                     print(f"[scheduler] pricing {cc.name}: {exc}", file=sys.stderr)
                     continue
+                if patch.get("final_price") is None and cc.final_price is not None:
+                    # Nothing found this time. Keep the price on file (it may
+                    # be the owner's own, from their spreadsheet) instead of
+                    # replacing it with nothing.
+                    continue
                 record_price(s, cc, patch)
                 s.commit()
                 refreshed += 1
@@ -126,10 +131,16 @@ def refresh_cards(card_ids: Optional[list[int]] = None, batch_size: Optional[int
         return refreshed
 
 
-def start(price_fn: Callable[[dict], dict]) -> None:
-    """Install the pricing callback and launch the refresh loop (daemon)."""
+def install(price_fn: Callable[[dict], dict]) -> None:
+    """Install the pricing callback without a timer. For hosts where a
+    scheduled request calls refresh_cards instead."""
     global _price_fn
     _price_fn = price_fn
+
+
+def start(price_fn: Callable[[dict], dict]) -> None:
+    """Install the pricing callback and launch the refresh loop (daemon)."""
+    install(price_fn)
 
     if os.getenv("PRICE_REFRESH_ENABLED", "1") == "0":
         _state["enabled"] = False

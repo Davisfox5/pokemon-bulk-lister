@@ -11,6 +11,16 @@ jobs:
     defaults:
       run:
         working-directory: pokemon-bulk-lister
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -21,13 +31,27 @@ jobs:
 
       - name: Install test dependencies
         # Lightweight slice of requirements.txt — enough to import the modules
-        # under test. cv2/cloudinary/playwright are deliberately omitted: the
+        # under test. cloudinary/playwright are deliberately omitted: the
         # publish logic imports them lazily (or we stub Playwright in conftest),
-        # so CI stays fast and doesn't pull a browser.
-        run: pip install requests "Flask>=3.0" python-dotenv "pandas>=2.2" pytest
+        # so CI stays fast and doesn't pull a browser. OpenCV (headless build)
+        # is needed by the art-match tests; SQLAlchemy backs the
+        # library/marketplace/deck tests; the Stripe SDK is used for real in
+        # the payment tests (its objects and webhook signature check).
+        # cryptography seals the eBay token in the serverless test; psycopg
+        # is the Postgres driver for the second run below.
+        run: >-
+          pip install requests "Flask>=3.0" python-dotenv "pandas>=2.2"
+          "SQLAlchemy>=2.0" "stripe>=8.0" opencv-python-headless
+          "cryptography>=42" "psycopg[binary]>=3.2" "Pillow>=10.2" "pillow-heif>=0.16" pytest
 
       - name: Byte-compile all sources
-        run: python -m compileall -q lib webapp scripts
+        run: python -m compileall -q lib webapp scripts app.py
 
       - name: Run tests
+        run: pytest -q
+
+      # The hosted install keeps everything in Postgres. Same suite, there.
+      - name: Run tests on Postgres
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest -q

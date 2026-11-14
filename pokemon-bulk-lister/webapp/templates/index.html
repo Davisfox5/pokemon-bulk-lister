@@ -3,23 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pokémon bulk lister</title>
+  <title>Scan · Pokémon bulk lister</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
   <header>
     <h1>Pokémon bulk lister</h1>
+    <nav class="topnav">
+      <a href="/" class="active">Scan</a>
+      <a href="/portfolio">Library</a>
+      <a href="/decks">Decks</a>
+      <a href="/market">Marketplace</a>
+    </nav>
     <div id="stats" class="stats"></div>
-    <a href="/portfolio" style="margin-left:auto">My portfolio →</a>
   </header>
 
   <section class="panel" id="upload-panel">
-    <div id="dropzone" class="dropzone">
-      <p><strong>Drop binder-page photos here</strong> or click to choose files.</p>
-      <p class="muted">Each grid is auto-split into 9 crops. Empty pockets are skipped.</p>
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload card photos">
+      <p><strong>Add card photos</strong></p>
+      <p class="muted" id="dropzone-hint">Drop, or tap to choose</p>
       <input id="file-input" type="file" multiple accept="image/*" hidden />
+      <input id="camera-input" type="file" accept="image/*" capture="environment" hidden />
     </div>
-    <div id="upload-status" class="muted"></div>
+    <div class="upload-options">
+      <button id="camera-btn" type="button" title="Opens the camera on a phone or tablet">Camera</button>
+      <button id="drive-photos-btn" type="button" title="Pick photos or a folder from your Google Drive">Google Drive</button>
+      <label title="After each upload: identify the new cards, then price them">
+        <input type="checkbox" id="auto-process" checked /> Auto identify + price
+      </label>
+    </div>
+    <div id="upload-status" class="muted" role="status"></div>
   </section>
 
   <section class="panel toolbar">
@@ -38,12 +51,14 @@
       <label><input type="checkbox" id="filter-unid" /> Unidentified only</label>
     </div>
     <div class="toolbar-right">
-      <label title="Adds the 365-day eBay sold median (~5s per card)">
+      <label id="terapeak-label" title="Adds the 365-day eBay sold median (~5s per card)">
         <input type="checkbox" id="use-terapeak" />
         Use Terapeak <span class="muted small" id="terapeak-status">(checking…)</span>
       </label>
-      <button id="identify-btn" title="AI-identify all unidentified cards (one Claude vision call per binder page)">Identify all (AI)</button>
-      <button id="run-pricing-btn">Run pricing (all)</button>
+      <button id="process-btn" class="primary" title="Identify every unidentified card, then price every card that has no price yet">Identify + price new cards</button>
+      <button id="identify-btn" title="Identify all unidentified cards (free image match first, then one Claude vision call per binder page)">Identify only</button>
+      <button id="run-pricing-btn" title="Re-price every identified card, including ones already priced">Re-price all</button>
+      <button id="library-btn" title="Add priced cards to your library">Add to library</button>
       <button id="export-csv-btn">Export CSVs</button>
       <button id="bundle-btn" disabled title="Select 2+ cards to bundle as a single lot listing">Bundle selected (0)</button>
     </div>
@@ -60,14 +75,28 @@
       <button id="publish-ebay-btn" data-site="ebay">List on eBay <span class="muted small pub-status" id="pub-ebay">…</span></button>
       <button id="publish-tcg-btn" data-site="tcgplayer">Upload to TCGplayer <span class="muted small pub-status" id="pub-tcgplayer">…</span></button>
       <button id="publish-whatnot-btn" data-site="whatnot">Upload to Whatnot <span class="muted small pub-status" id="pub-whatnot">…</span></button>
+      <button id="connections-btn-2" type="button">Connections</button>
     </div>
-    <div class="muted small">
-      eBay lists each priced card live via the official Sell API (needs
-      <code>python -m webapp.setup_ebay</code> once). TCGplayer &amp; Whatnot upload the
-      generated CSV through the seller portal via a headless browser (needs
-      <code>python -m webapp.setup_portal --site &lt;name&gt;</code> once).
-    </div>
+    <button id="connections-btn" type="button" class="linkish hidden">Set up and check connections</button>
     <div id="publish-msg" class="muted"></div>
+  </section>
+
+  <section class="panel sales-panel">
+    <div class="publish-row">
+      <strong>Sales</strong>
+      <button id="sync-ebay-btn" title="Read recent orders from eBay and record what sold">Sync eBay sales</button>
+      <button id="sales-import-btn" type="button" title="Import the sales CSV you exported from Whatnot">Import Whatnot sales CSV…</button>
+      <input id="sales-file" type="file" accept=".csv,text/csv" hidden />
+      <span id="sales-meta" class="muted small"></span>
+    </div>
+    <div id="sales-msg" class="muted" role="status"></div>
+    <div id="sales-unmatched" class="hidden">
+      <div class="muted small">Sales that could not be tied to a card in a library. Use “Mark sold” in the Library, then dismiss.</div>
+      <table>
+        <thead><tr><th>Sold</th><th>Where</th><th>SKU</th><th>Title</th><th>Qty</th><th>Each</th><th>Why</th><th></th></tr></thead>
+        <tbody id="sales-unmatched-body"></tbody>
+      </table>
+    </div>
   </section>
 
   <section id="publish-bar" class="panel job-bar hidden">
@@ -75,7 +104,7 @@
     <div class="progress"><div id="publish-progress-fill" class="progress-fill"></div></div>
   </section>
 
-  <section class="panel">
+  <section class="panel table-wrap">
     <table id="cards-table">
       <thead>
         <tr>
@@ -136,6 +165,39 @@
   </div>
 
 
+  <!-- Connections: set up and check eBay, TCGplayer, Whatnot, Stripe -->
+  <div id="conn-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="conn-title">
+    <div class="modal-card conn-card">
+      <header>
+        <h2 id="conn-title">Connections</h2>
+        <button id="conn-close" aria-label="Close">×</button>
+      </header>
+      <div class="modal-body conn-body">
+        <p class="muted small">Keys live in the <code>.env</code> file next to the app, never in this page.
+          After editing <code>.env</code>, restart the app.</p>
+        <div id="conn-list">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm modal: shown before anything goes live or leaves the bench -->
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-card confirm-card">
+      <header>
+        <h2 id="confirm-title">Confirm</h2>
+        <button id="confirm-x" aria-label="Close">×</button>
+      </header>
+      <div class="modal-body confirm-body">
+        <div id="confirm-text"></div>
+        <label id="confirm-check-row" class="hidden"><input type="checkbox" id="confirm-check" /> <span id="confirm-check-label"></span></label>
+        <div class="actions">
+          <button id="confirm-cancel" type="button">Cancel</button>
+          <button id="confirm-ok" type="button" class="primary">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Bundle-as-lot modal -->
   <div id="bundle-modal" class="modal hidden">
     <div class="modal-card">
@@ -189,5 +251,6 @@
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='drive.js') }}"></script>
 </body>
 </html>

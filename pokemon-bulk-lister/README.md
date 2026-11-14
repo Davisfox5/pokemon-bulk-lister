@@ -43,28 +43,152 @@ cp .env.example .env
 
 ## Web UI (recommended)
 
-A single-page Flask app on top of a local SQLite DB. Upload grids, edit
-identifications, run pricing, and export CSVs from one browser tab.
+A Flask app on top of a local SQLite DB, with four screens.
 
 ```bash
 python -m webapp.app
 # http://localhost:5050
 ```
 
-Data lives at `output/db.sqlite` (auto-created; auto-imports any existing
-`output/cards.json` / `output/cards_priced.json` on first launch). Drop binder
-photos into the drop-zone — they're split into crops automatically and inserted
-as empty card rows. **"Identify all (AI)"** identifies every unidentified card
-with Claude vision (one call per binder page + per-crop retries for
-low-confidence cells; needs `ANTHROPIC_API_KEY`, model set by `VISION_MODEL`,
-default Haiku — roughly a cent per page). You can still edit fields inline, use
-the per-card "AI identify" button in the edit modal, or paste a JSON list of
-identifications in bulk. Per-card "Price" runs the eBay + TCGplayer +
-Cardmarket pipeline; the "Run pricing (all)" button kicks it off as a
-background job with a progress bar.
+| Screen | URL | What it is for |
+|---|---|---|
+| Scan | `/` | Photos in, identified and priced cards out. Publish to eBay, TCGplayer, Whatnot. |
+| Library | `/portfolio` | Every card you have, have sold and have purchased. Sell from here. |
+| Decks | `/decks` | Popular decks ranked by how much of each you already own, with what is missing and where to buy it. |
+| Marketplace | `/market` | Cards other users on this install have listed. |
 
-The CLI scripts below still work — they read/write the same `output/` files —
-so you can mix and match.
+Scan works without an account. Library, Decks and Marketplace need a login
+(`/register`).
+
+### Accounts, email confirmation and the operator
+
+Registering sends a link to confirm the email address. Until it is opened the
+account can keep a library and build decks, but cannot list, buy, settle a
+sale, connect eBay, or set up payouts. The link works once, lasts 24 hours,
+and only works in a browser that is logged in to that account (a logged-out
+visitor is sent to log in first). **Send the link again** on the Library page
+issues a new one. Accounts created before this change have to confirm too.
+
+**Forgot your password?** on the login page mails a link to choose a new one
+(printed in the console when SMTP is not set). It works once and lasts an
+hour. Changing a password signs every other browser out of that account.
+Because the link proves the mailbox, using it also confirms the address. The
+page gives the same answer whether or not an account exists.
+
+- With `SMTP_HOST` set (plus `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`,
+  `SMTP_FROM`), the link is emailed.
+- Or set `RESEND_API_KEY` and `MAIL_FROM` to send through Resend's API (free
+  tier). `MAIL_FROM` must be an address on a domain verified at resend.com.
+- With no SMTP settings, the link is printed in the console window the app
+  runs in. That suits a local install: whoever can read the console runs it.
+
+The **operator** sees every seller's balance, triggers payouts, reads sales
+back from other sites and sees refunds that need doing by hand. An account is the operator when its address
+is listed in `ADMIN_EMAILS` (default `davisfox5@gmail.com`) **and** that
+address has been confirmed. Registering first, or registering a listed
+address without access to its mailbox, grants nothing.
+
+### Scan
+
+1. Drop photos on the drop zone, or use **Take a photo** on a phone. Pick
+   **Binder pages** (each photo is split into up to 9 cards) or **Single
+   cards** (one card per photo).
+2. With **Identify and price automatically** ticked, each upload starts one
+   background job: identify the new cards, then price them. The **Identify +
+   price new cards** button runs the same job by hand. It never re-identifies
+   or re-prices a card that is already done, so running it again is free.
+3. Rows that need a human look (low confidence, sources that disagree, a
+   name-only match) are tinted and sorted to the top, with the reason under
+   the price. Fix them with **Edit**.
+4. **Add to library** moves priced cards (the selection, or all of them) into
+   your library. From there you can sell them or check them against decks.
+
+Identification needs `ANTHROPIC_API_KEY` for anything the free image match
+cannot place (model set by `VISION_MODEL`, default Haiku, roughly a cent per
+binder page). **Identify only** and **Re-price all** are still there for
+running one half on its own, and **Use Terapeak** adds the 365-day eBay comps
+to a re-price.
+
+Every publish button says what it is about to do, with counts and a total,
+and waits for a yes. The eBay one leaves out cards whose price is flagged
+for review unless you tick the box. Set the sites up under **Connections**
+(see below).
+
+Data lives at `output/db.sqlite` (auto-created; auto-imports any existing
+`output/cards.json` / `output/cards_priced.json` on first launch). The CLI
+scripts below still work. They read and write the same `output/` files, so
+you can mix and match.
+
+### Library
+
+Three tabs over one ledger:
+
+- **Have**: current holdings with market price, 7-day change and value. Each
+  price shows its sources (TCGplayer, Cardmarket, eBay sold), its confidence
+  and its age. Search with `/`, filter to prices that need review, tick rows
+  and **List selected** to put many cards on the marketplace at once.
+- **Sold**: every sale, on this marketplace or anywhere else, with fees, net
+  and realized gain. Realized gain only counts cards with a price paid on
+  file, and says how many that is.
+- **Purchased**: everything bought, with what you paid and what it is worth
+  now.
+
+Cards get into the library three ways: **Import scanned cards** (from Scan),
+buying on the marketplace, or **Add a card** for anything bought elsewhere or
+already owned. An unpaid marketplace order can be cancelled by either side
+under **Listings & open orders**.
+
+A fourth tab, **Activity**, lists every event in order. The ✕ button and
+quantity edits are recorded there as removed or added, so cards in minus
+cards out always equals what you hold. They leave it by selling on the marketplace or by **Sold
+elsewhere**, which records an off-site sale (eBay, a card show) with its
+price, fees and date. The ✕ button takes a card out with no sale (it shows
+as removed under Activity).
+
+The ledger is the `library_events` table. A sale on the marketplace writes a
+row for both the seller and the buyer, so history survives the card changing
+hands.
+
+### Decks
+
+**Popular right now** lists the most played archetypes from the largest
+recent [Limitless TCG](https://play.limitlesstcg.com) tournaments. Each one
+shows how many of its 60 cards your library already covers, and the list is
+sorted so the deck you are closest to finishing comes first. The list shown
+for an archetype is the best-placing player's actual 60 cards, and the page
+names the player, placing, tournament and date.
+
+Open a deck to see it card by card:
+
+- **Have / Missing** per card. Any printing of a Trainer or Energy counts. A
+  Pokémon counts only when the set and number match. A same-named Pokémon in
+  another printing is shown as "check the printing" and is not counted,
+  because same name does not always mean same card (sets often print two
+  different Basics of one Pokémon).
+- **Price each** from the catalog, with the same provenance line as the
+  library. **Price the unpriced missing cards** looks up the rest in the
+  background.
+- **Estimated cost to finish**, which states how many of the missing cards it
+  covers. Basic energy is left out.
+- **Where to get it**: the cheapest listing on this marketplace with a Buy
+  button, plus search links to TCGplayer and eBay. **Copy missing list**
+  copies the shopping list as a decklist.
+
+**Import a decklist** takes any list in Pokémon TCG Live export format (one
+card per line: `4 Dragapult ex TWM 130`). **Save deck** keeps a popular list
+as it is today.
+
+Popular decks ship as a snapshot in `data/popular_decks.json`, so the page
+works offline. **Refresh** pulls current lists from the Limitless API (4
+requests, cached at `output/cache/decks/popular.json`). `data/set_codes.json`
+maps Pokémon TCG Live set codes (TWM) to pokemontcg.io set ids (sv6).
+
+### Marketplace
+
+Search, filter by set and condition, sort by price or by distance from market
+price. Every listing shows the market price it is being compared to and where
+that number came from. Listings whose market price needs review are tinted
+and say why. **Buy** confirms first and says how payment works.
 
 ### Free image identification (cuts AI cost ~50%+)
 
@@ -96,9 +220,10 @@ the collector number).
 `/portfolio` → **⚙ Advanced** lets a signed-in user store their *own* eBay
 developer keyset (Client ID / Cert ID / RuName from
 [developer.ebay.com](https://developer.ebay.com/)) and run the one-time
-consent flow. Once connected, an **eBay** button appears on each card in "My
-cards" that publishes a live listing via the official Sell API under *their*
-account. Users without keys never see any of it.
+consent flow. Once connected, an **eBay** button appears on each card in the
+library's Have tab. It confirms the card and price, then publishes a live
+listing via the official Sell API under *their* account. Users without keys
+never see any of it.
 
 ## Credentials
 
@@ -163,53 +288,424 @@ python scripts/07_publish_listings.py --site tcgplayer --site whatnot
 python scripts/07_publish_listings.py --all --dry-run
 ```
 
-## Publishing listings
+## Connections: eBay, TCGplayer, Whatnot, Stripe
 
-The three sites are not equal — only eBay exposes a usable listing API for a
-typical seller, so the publish step uses two mechanisms:
+Everything outside the app is set up and checked in one place: **Scan →
+Connections**. Each service shows whether it is connected and what the next
+step is. Keys go in `.env` (restart the app after editing it); the panel never
+shows or stores a key.
 
-### eBay — official Sell API (recommended)
-Each priced + image-uploaded card becomes a live fixed-price listing via the
-Inventory API (`inventory_item` → `offer` → `publishOffer`). No scraping.
+The Scan page has no login, so the app only answers requests addressed to
+`localhost` / `127.0.0.1` and refuses POSTs that come from another website.
+If you serve it under a real hostname (needed for the Stripe webhook), list
+that hostname in `ALLOWED_HOSTS`.
 
-One-time setup:
-1. Create a **RuName** under developer.ebay.com → *User Tokens → Get a Token
-   from eBay via Your Application*; set its accepted redirect URL. Put the
-   RuName in `EBAY_REDIRECT_URI`.
-2. Authorize once:
-   ```bash
-   python -m webapp.setup_ebay
-   ```
-   Sign in, approve the `sell.inventory` / `sell.account` scopes, and paste the
-   redirected URL back. The refresh token is cached at `EBAY_USER_TOKEN_PATH`
-   and listing then runs headlessly until it expires (~18 months).
-3. Publishing needs payment/return/fulfillment **business policies** and an
-   inventory location. We auto-pick the account's first of each; pin specific
-   IDs with `EBAY_*_POLICY_ID` / `EBAY_MERCHANT_LOCATION_KEY` if you have
-   several. Opt into Business Policies in eBay account settings if you haven't.
+### eBay (official Sell API)
 
-Listing IDs are written back to `cards_priced.json` (CLI) and the SQLite DB
-(web UI), so re-runs update existing offers rather than duplicating them.
+Each priced card becomes a live fixed-price listing through the Inventory API
+(`inventory_item` → `offer` → `publishOffer`). No scraping.
 
-### TCGPlayer & Whatnot — headless CSV upload (⚠️ TOS-grey)
-Neither offers a public listing API to typical sellers. The supported path is
-the bulk-inventory CSV this app already generates; this step just drives the
-seller portal in a headless browser to submit it for you — the same Playwright
-pattern as the Terapeak scraper. **This is against their Terms, is fragile (DOM
-changes break it), and use is at your own risk** — keep it to a
-personal/secondary account, or just upload the CSVs by hand.
+1. At developer.ebay.com create a keyset, and under *User Tokens → Get a Token
+   from eBay via Your Application* create a **RuName** with an accepted URL.
+   Put `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` and `EBAY_REDIRECT_URI` (the
+   RuName, not a URL) in `.env`. Set `EBAY_ENV=sandbox` to rehearse against
+   eBay's sandbox first.
+2. In Connections, click **Open eBay consent page**, approve, copy the address
+   of the page eBay sends you to, paste it, click **Connect**. The refresh
+   token is saved at `EBAY_USER_TOKEN_PATH` and lasts about 18 months.
+3. Click **Check account**. It reads (and changes nothing): that a token can
+   be minted, that the account has payment, return and shipping **business
+   policies**, the inventory location, and photo hosting. Opt into Business
+   Policies in eBay account settings if the check says none exist. Pin
+   specific ones with `EBAY_*_POLICY_ID` / `EBAY_MERCHANT_LOCATION_KEY` if you
+   have several.
+4. Add the three `CLOUDINARY_` values so card photos are hosted. With those
+   set, **List on eBay** uploads any photo that is not hosted yet as part of
+   the publish; there is no per-card step.
 
-```bash
-pip install playwright && playwright install chromium
-python -m webapp.setup_portal --site tcgplayer   # sign in once; session saved
-python -m webapp.setup_portal --site whatnot
-```
+**List on eBay** then says how many cards and how much, leaves out flagged
+prices unless you tick the box, and reports how many listed and the first
+error if any failed. Listing ids are written back to the database, so a
+second run updates offers instead of duplicating them.
 
-On parse failure the uploader dumps a screenshot + HTML to
-`output/cache/<site>_debug/` and the upload URL/selectors can be overridden via
-`TCGPLAYER_UPLOAD_URL` / `WHATNOT_UPLOAD_URL` in `.env`.
+`python -m webapp.setup_ebay` still does step 2 from a terminal.
 
-All of this is also wired into the web UI's **Publish** panel.
+### TCGplayer and Whatnot (CSV upload through your seller portal)
+
+Neither site has a listing API for regular sellers. The supported route is
+the bulk CSV this app generates (**Export CSVs**), uploaded by hand. The
+automated route drives the seller portal in a browser to submit that CSV for
+you. **That is against their terms and breaks when they change the page; use
+it at your own risk, or upload by hand.**
+
+1. `pip install playwright && playwright install chromium` (once).
+2. In Connections, click **Sign in to Whatnot** (or TCGplayer). A Chromium
+   window opens on the computer running the app. Sign in there yourself,
+   including any 2FA.
+3. Back in the app, click **I'm signed in, save it**. The session is saved to
+   `output/cache/<site>_state.json`. Closing the window or clicking Cancel
+   saves nothing.
+4. Click **Check session**. It opens the import page in the background with
+   the saved session and confirms you are still signed in and the upload field
+   is there. It uploads nothing.
+
+**TCGplayer Ids.** TCGplayer's upload identifies each row by a TCGplayer Id,
+a number it assigns to one card in one condition and printing. Only
+TCGplayer has those. In the seller portal, export your pricing CSV (Pricing,
+Export), then in Connections, under TCGplayer, click **Upload export**. The
+app looks each scanned card up in that file by name, number, set, condition
+and printing, and writes the real Id. All five must agree exactly (a card scanned as
+non-holo never takes a Holofoil row, and a card with no set name matches
+nothing). A card with no match, or more than one possible match, is left out
+and counted. Without an export the TCGplayer CSV
+is empty. (Earlier versions wrote the pokemontcg.io card id into that column,
+which TCGplayer does not recognise.) From the command line, save the export
+as `output/cache/tcgplayer_catalog.csv`.
+
+**Upload to Whatnot / TCGplayer** then confirms the row count and total first,
+and for TCGplayer says how many priced cards are left out. If an upload fails, a screenshot and the
+page HTML are written to `output/cache/<site>_debug/`; the import URL can be
+changed with `WHATNOT_UPLOAD_URL` / `TCGPLAYER_UPLOAD_URL`.
+
+The sign-in, session check and upload were tested end to end against a
+stand-in portal page, not against the real sites, which need an account. The
+real import URLs and form fields are the part most likely to need adjusting
+on first use.
+
+`python -m webapp.setup_portal --site whatnot` still does steps 2 and 3 from a
+terminal.
+
+### Sales read back (eBay, Whatnot)
+
+When a card sells on another site, the app records it so the library, the
+marketplace and the Scan page all agree the card is gone. The **Sales** panel
+on the Scan page does this. It changes libraries, so unlike the rest of the
+Scan page it needs the operator to be logged in.
+
+Every listing this app creates carries a SKU: the card photo's file name
+without its extension (`page01_r0c2`). That SKU is how a sale finds its card.
+
+- **eBay**: read over eBay's Fulfillment API (`getOrders`), every 30 minutes
+  (`EBAY_SALES_SYNC_MINUTES`, 0 turns it off) and on **Sync eBay sales**. It
+  covers your account and any user who connected their own. It needs the
+  read-only orders permission, which the consent page now asks for. **A
+  connection made before this change does not have it: disconnect and connect
+  eBay again under Connections.** Until then publishing keeps working and the
+  panel says sales cannot be read.
+- **Whatnot**: no orders API for regular sellers. Export your sales there as
+  a CSV and use **Import Whatnot sales CSV…**. The file needs a SKU column
+  and a price column; order id, quantity, fees and date are used when
+  present. The app shows what it found and which columns it read before
+  recording anything.
+- **TCGplayer**: not read back. Its listings carry TCGplayer's own ids, not
+  this app's SKU, so a sale there cannot be tied to one scanned card. Use
+  **Sold elsewhere** in the library.
+
+A sale only ever touches the library of the account it came from. Your eBay
+account and your CSV imports match your own cards; a user's connected eBay
+account matches that user's. If a SKU could mean cards in two accounts,
+nothing is recorded and a person decides.
+
+For each sale: the sold copies leave the library, the card comes off this
+marketplace (an unpaid order for it is cancelled), a row with price and fees
+goes in the ledger under **Sold**, and the Scan page tags the card **sold**
+and stops including it in publishing and exports. Reading the same order or
+file again records nothing twice. Unpaid orders are picked up once paid. If
+eBay later reports a recorded sale as cancelled or fully refunded, the card
+is put back and can be listed again.
+
+A sale whose SKU matches no card is listed under the Sales panel with the
+reason. Nothing is guessed from the title. Record it by hand with **Sold
+elsewhere**, then **Dismiss** it.
+
+A partial refund at eBay lowers the recorded sale to what you kept.
+
+Limit: Whatnot's real export column names have not been seen, only inferred,
+so the first import may report a missing column.
+
+### Import listings you already have (eBay, TCGplayer, Whatnot)
+
+**Library, Import listings** adds the cards you already list on other sites
+to your library. Nothing changes on the other site, and nothing is put up for
+sale on this app's marketplace. Each import shows a count first and waits for
+a yes. Reading the same listings again adds nothing.
+
+- **eBay**: read straight from the connected account (Trading API,
+  `GetMyeBaySelling`), including listings made on eBay's own site.
+- **TCGplayer**: upload the pricing export from the seller portal (Pricing,
+  Export). It is the same file that supplies TCGplayer Ids. Rows with a
+  quantity above zero are your listings; the rest of the file is ignored.
+  TCGplayer has no API for sellers, so the file is the only way in.
+- **Whatnot**: upload a CSV of your listings with Title, Quantity, Price and
+  SKU columns (the layout of Whatnot's bulk upload template). Whatnot has no
+  public seller API.
+
+How a listing becomes a card:
+
+- A listing whose SKU is a card this app scanned and listed is already in the
+  library. It is linked, not added again.
+- A TCGplayer row states its set, name, number, condition and printing, so it
+  is added as that card.
+- An eBay or Whatnot listing only has a title. The title must contain a
+  collector number written as number/total (`130/167`). The card is the one
+  with that number, in a set of that size, whose name appears in the title
+  (looked up on pokemontcg.io). Condition is read from the title and is NM
+  when the title does not say.
+- Anything else (no number, a lot, several possible cards, a sealed product,
+  a listing with variations) goes under **Needs a look**, where you pick the
+  card or dismiss it. Lookups are rationed per import; **Try matching again**
+  continues.
+
+Imported cards carry a tag in the Have tab showing the site and asking price.
+A card you had already added by hand is not recognised and will show twice.
+Later changes on the other site (sold out, new quantity) do not update the
+library; sales come back through the sales read-back above.
+
+Not checked against the real sites: that eBay accepts this app's OAuth token
+for the Trading call, and the column names of a real Whatnot listings file.
+
+### Google Drive (photos and spreadsheets)
+
+Each account can connect its own Google Drive, read-only, and import from it:
+
+- **Scan, From Google Drive**: pick binder-page or single-card photos. The
+  server fetches each one from Drive and files it exactly as an upload, so a
+  host's upload size cap does not apply (photos up to 40 MB).
+- **Library, Import listings, From Drive**: pick a Google Sheet (its first
+  sheet is read) or a CSV file as a TCGplayer export, a Whatnot listings
+  file, or **your own card list**.
+
+**Your own card list** is a spreadsheet of cards you own, from Drive or
+uploaded as CSV. It needs a `Name` column. `Set`, `Number`, `Quantity`,
+`Condition`, `Holo` and `Price paid` are used when present; condition is NM
+when a row does not give one. Each row is added as the card it states, with
+a count first and a confirmation. Reading the same sheet again adds nothing.
+Excel files are not read; save as Google Sheets or CSV.
+
+**Choosing files and folders.** After you connect, **From Google Drive**
+opens Google's own picker (the Google Picker API), the same Drive dialog
+other Google-connected apps show. Pick photos, or pick a whole folder: every
+photo directly inside it is imported, after a confirmation that says how
+many. For a spreadsheet import you pick the one file. Nothing has to change
+in Drive.
+
+The app's own plain list is only a fallback: it is what offers **Connect
+Google Drive** before you have signed in, what a service-account install
+uses (Google's picker needs a person's sign-in), and what opens if Google's
+script cannot be loaded.
+
+**With a service account** (`GOOGLE_SA_EMAIL`, `GOOGLE_SA_PRIVATE_KEY`) there
+is no sign-in. In Google Drive, share a folder with the service account's
+address (Viewer is enough) and it appears in the picker under "Shared with
+this app". The **Google Drive API** must be enabled in the service account's
+Google Cloud project. Only the operator gets this; what is shared with the
+install is not shown to other accounts.
+
+**With per-account sign-in**, once, in Google Cloud Console:
+
+1. Create a project, enable the **Google Drive API** and the **Google
+   Picker API**.
+2. **OAuth consent screen**: External, add the scope
+   `.../auth/drive.readonly`, and add yourself as a test user.
+3. **Credentials, Create OAuth client ID**, type **Web application**, with
+   authorized redirect URIs `https://your.domain/api/drive/callback` and, for
+   local use, `http://localhost:5050/api/drive/callback`.
+4. **Credentials, Create credentials, API key** for the picker. Restrict it
+   to websites `https://your.domain/*` and `https://docs.google.com/*` (the
+   picker runs in a frame on docs.google.com), and to the Google Picker API
+   and Google Drive API.
+5. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_API_KEY`.
+
+The Google sign-in is stored encrypted in the database and no route returns
+it. **Disconnect Google Drive** in the import dialog forgets it and asks
+Google to withdraw access. While the consent screen is in Testing, Google
+ends each sign-in after 7 days and only test users can connect; publishing
+the consent screen lifts both, and `drive.readonly` then needs Google's
+verification for use by the public.
+
+The service account path was run against Google (token and Drive calls).
+The per-account sign-in was not (no client id was available).
+
+### Stripe (card payments on the marketplace)
+
+Without Stripe, a buyer and seller settle directly and the seller clicks
+**Mark paid**. With it, **Buy** sends the buyer to Stripe Checkout and the
+card moves when the payment clears.
+
+1. `pip install -r requirements.txt` (includes `stripe`).
+2. Put `STRIPE_SECRET_KEY` in `.env`. Start with a test key (`sk_test_...`):
+   buyers can then pay with the test card `4242 4242 4242 4242`, any future
+   expiry, any CVC, and no money moves.
+3. In Connections, click **Check key**.
+
+How an order gets settled, whichever comes first (settling twice is harmless):
+
+- The buyer's browser returns from Checkout and the app asks Stripe whether
+  that session was paid. This needs no public URL, so it works on a local
+  install.
+- A signed webhook, if the app is reachable from the internet: point Stripe at
+  `/api/market/stripe-webhook` for the `checkout.session.*` events and put the
+  signing secret in `STRIPE_WEBHOOK_SECRET`. Without the secret the endpoint
+  is off; unsigned events are never accepted.
+- A sweep when the listing or the seller's orders are next looked at, for a
+  buyer who paid and closed the tab.
+
+An unfinished Checkout expires after `STRIPE_CHECKOUT_MINUTES` (31, Stripe's
+minimum is 30) and the card goes back on sale. Backing out of Checkout frees
+it at once. Either side can cancel an unpaid order.
+
+A buyer is never left charged with nothing to show for it. A payment is
+refunded automatically when it lands on an order that was cancelled, when the
+card is no longer there, or when the amount or currency Stripe charged is not
+what the order asked for (for example if tax or a promotion code is switched
+on in the Stripe dashboard). If Stripe refuses a refund, the order is marked
+"refund pending" and the operator sees it at the top of **Seller balances**
+with the session id to refund by hand.
+
+**Where the money goes.** Payments land in the Stripe account whose key is in
+`.env`. The platform fee (`PLATFORM_FEE_PCT`, default 10) stays there and the
+rest belongs to the seller.
+
+**Automatic payouts (Stripe Connect).** A seller clicks **Set up payouts**
+under **Listings & open orders** and is sent to Stripe to enter their details
+and bank account; this app never sees them. From then on, when one of their
+card sales settles, their share is sent to their Stripe account by transfer,
+and Stripe pays it out to their bank on its schedule. Anything already owed
+is sent the moment setup finishes. Each order is paid at most once, and money
+the operator already paid by hand is not sent again. The app records its
+intent to pay before asking Stripe, so a crash mid-payout cannot lead to a
+second transfer: next time it asks Stripe what happened and carries on.
+
+**Refunds and chargebacks after a sale.** If you refund a charge in the Stripe
+dashboard, or a buyer disputes one with their bank, the app brings its books
+in line:
+
+- A full refund marks the order refunded, takes the seller's transfer back,
+  and stops counting the sale in anyone's totals. The operator sees the order
+  under **Seller balances** with **Return card to seller**, which moves the
+  card back once the buyer has returned it.
+- A partial refund recomputes the fee and the seller's share on what the
+  buyer ended up paying and takes back the difference.
+- A dispute puts the order on hold and takes the transfer back while the bank
+  decides. If you win, the seller is paid again. If you lose, it ends as a
+  refund.
+- If Stripe cannot take the money back (the seller already withdrew it), the
+  seller's balance goes negative and the panel says how much they owe you.
+  Every later check tries the reversal again until it goes through.
+
+The app learns of these through the signed webhook (add `charge.refunded`,
+`charge.dispute.created` and `charge.dispute.closed` to the events Stripe
+sends) or, on a local install, the operator's **Check Stripe for refunds**
+button, which asks Stripe about each card order from the last 130 days.
+
+This needs **Connect switched on for your Stripe account** (Stripe dashboard,
+Connect). Without it, "Set up payouts" reports Stripe's error.
+
+A seller who has not set up payouts keeps a balance. The operator sees it in
+**Seller balances**, can pay it some other way and note it with **Record
+payout**, and can retry failed transfers with **Pay out now**.
+
+Checkout takes cards only. Payment methods that can fail days later would let
+a seller be paid for a charge that then bounces.
+
+Card payments and payouts were tested with the real Stripe library's objects
+and signature check against an in-memory stand-in for Stripe's API, not
+against Stripe itself. The calls follow Stripe's published docs. In test
+mode, do one purchase and one payout setup before going live.
+
+## Hosting on Vercel
+
+Vercel runs the app as short-lived functions: no disk that lasts and no
+process between requests. The app detects that (Vercel sets `VERCEL=1`) and
+switches where it keeps things. Nothing changes for a local install.
+
+| Locally | On Vercel |
+|---|---|
+| SQLite file | Postgres (`DATABASE_URL`), both the scan bench and the accounts side |
+| Card and page photos on disk | Vercel Blob (public store); the app redirects to them |
+| eBay tokens in files | Rows in the database, encrypted with a key made from `SECRET_KEY` |
+| Jobs on background threads | Jobs stored in the database and advanced a few seconds at a time by the open page's status checks |
+| Timers for price refresh and eBay sales | One daily scheduled request, `/api/cron/daily` |
+| TCGplayer export kept as a file | Rows in the database |
+
+Setup, once:
+
+1. In Vercel, **Add New, Project**, import this repository, and set **Root
+   Directory** to `pokemon-bulk-lister`. Vercel finds `app.py` and
+   `requirements.txt` there.
+2. **Storage, Create Database**: a Postgres database (Neon) connected to the
+   project. It adds `DATABASE_URL`.
+3. **Storage, Create**: a **Blob** store with **public** access, connected to
+   the project. It adds `BLOB_STORE_ID`.
+4. **Settings, Environment Variables**: `SECRET_KEY` and `CRON_SECRET` (two
+   long random strings of letters and numbers), `ALLOWED_HOSTS` (your
+   domain, for example `bulk.example.com`), `ADMIN_EMAILS`, and the keys
+   for what you use: `ANTHROPIC_API_KEY` (card identification),
+   `POKEMONTCG_API_KEY`, `SMTP_*`, `CLOUDINARY_*`, `EBAY_*`, `STRIPE_*`.
+5. **Settings, Domains**: add your domain. Vercel shows the DNS record to
+   create; when the domain's DNS is already at Vercel it is one click.
+6. Deploy. Register with an `ADMIN_EMAILS` address and confirm it; that
+   account is the operator.
+
+What is different there:
+
+- **Scan and Connections need the operator**, as under any real domain (see
+  the next section).
+- **Keep the Scan page open while a job runs.** Identifying, pricing and
+  publishing to eBay advance each time the page checks progress. Closing the
+  page pauses the job; opening it again carries on where it stopped.
+- **Uploads are capped at 4.5 MB per request.** The page shrinks larger
+  photos before sending them (TIFFs over the cap are skipped) and sends big
+  CSV exports in parts.
+- **No browser automation.** TCGplayer and Whatnot sign-in and upload, and
+  Terapeak, drive a browser on the machine the app runs on. Download the CSV
+  and upload it in the seller portal yourself.
+- **Free image matching is off** unless you set `ART_MATCH=1`; its index is a
+  set of files built locally.
+- **Prices refresh and eBay sales sync once a day** (Vercel's Hobby plan
+  allows one scheduled run a day). On Pro, add more entries to `crons` in
+  `vercel.json`. The buttons still work at any time.
+- Card and page photos in Blob are readable by anyone who has the address.
+- Vercel's Hobby plan is for personal, non-commercial use.
+
+The same suite runs against Postgres with
+`TEST_DATABASE_URL=postgresql://... pytest -q`, and
+`tests/test_serverless.py` runs the scan flow the way Vercel does.
+
+## Hosting it under a real domain
+
+For a host that runs containers with a disk (not Vercel; see above). The
+`Dockerfile` in this directory runs the app with gunicorn.
+
+What the host needs:
+
+- **A container host with a persistent disk mounted at `/data`.** Everything
+  the app writes lives there (the SQLite file, card photos, the eBay token,
+  the session key). Without the disk every deploy starts empty.
+- **One instance.** The app keeps job state and locks in memory and uses
+  SQLite, so it cannot be scaled to several copies.
+- **HTTPS in front**, which every hosting platform provides. The image sets
+  `TRUST_PROXY=1` so links and cookies use https.
+- **Environment variables**: `ALLOWED_HOSTS=your.domain` (requests for any
+  other host are refused), `SECRET_KEY` (optional; one is generated on the
+  disk), `ADMIN_EMAILS`, `SMTP_*` so confirmation and reset links are mailed
+  (without SMTP they are only printed in the server log), plus whichever of
+  `ANTHROPIC_API_KEY`, `POKEMONTCG_API_KEY`, `CLOUDINARY_*`, `EBAY_*` and
+  `STRIPE_*` you use.
+- **DNS**: point the domain at the host as the host's instructions say.
+- Health check path: `/healthz`.
+
+What changes under a domain:
+
+- **Scan and Connections need the operator.** On localhost they have no
+  login. Under any other host they answer only to a signed-in, confirmed
+  `ADMIN_EMAILS` account. Everyone else can use the Library, Decks and
+  Marketplace, add cards by hand and import listings, but cannot scan:
+  the scan bench is a single shared workspace.
+- **TCGplayer and Whatnot sign-in does not work on a server.** It opens a
+  Chromium window on the machine the app runs on. Uploading the TCGplayer
+  export and downloading the CSVs still works.
+- Set the Stripe webhook and the eBay redirect to the domain.
 
 ## Pricing aggregation
 
@@ -275,7 +771,34 @@ pokemon-bulk-lister/
 │  ├─ portal_uploader.py       # headless-browser CSV upload base
 │  ├─ tcgplayer_lister.py      # TCGPlayer seller-portal CSV upload
 │  ├─ whatnot_lister.py        # Whatnot Seller Hub CSV upload
+│  ├─ decks.py                 # decklist parser, library matching, Limitless popular decks
+│  ├─ ebay_orders.py           # eBay Fulfillment API: read sold orders
+│  ├─ ebay_listings.py         # eBay Trading API: read active listings
+│  ├─ google_drive.py          # Google OAuth + Drive v3, read-only
+│  ├─ tcgplayer_catalog.py     # real TCGplayer Ids from the seller's export
+│  ├─ mailer.py                # SMTP, or the console when SMTP is not set
 │  └─ cloudinary_client.py
+├─ webapp/
+│  ├─ app.py                   # Scan bench: upload, identify, price, publish
+│  ├─ db.py                    # bench SQLite schema + migrations
+│  ├─ models.py                # users, catalog, inventory, ledger, decks, marketplace
+│  ├─ catalog.py               # inventory CRUD + import from the bench
+│  ├─ library.py               # sold / purchased ledger, record a sale, add a card
+│  ├─ decks.py                 # deck endpoints
+│  ├─ marketplace.py           # list, buy, orders, Stripe checkout, payouts
+│  ├─ connections.py           # setup + checks for eBay, portals, Stripe
+│  ├─ sales_sync.py            # sales read back: eBay orders, CSV exports
+│  ├─ listing_import.py        # listings on other sites read into the library
+│  ├─ drive.py                 # Google Drive: connect, browse, import spreadsheets
+│  ├─ payouts.py               # Stripe Connect onboarding + automatic transfers
+│  ├─ refunds.py               # refunds and disputes after a sale settled
+│  ├─ runtime.py               # local vs serverless: files, tokens, job state
+│  ├─ portfolio.py             # valuation, price history, alerts
+│  └─ templates/, static/      # index, portfolio, decks, market, login, register
+├─ data/
+│  ├─ popular_decks.json       # bundled Limitless snapshot (offline fallback)
+│  └─ set_codes.json           # Pokémon TCG Live code -> pokemontcg.io set id
+├─ tests/
 ├─ input/grids/
 ├─ output/
 │  ├─ crops/
