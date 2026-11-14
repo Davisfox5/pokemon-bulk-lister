@@ -321,6 +321,209 @@ def _reading_order(quads: list[np.ndarray]) -> list[tuple[np.ndarray, int, int]]
             for c, i in enumerate(sorted(row, key=lambda i: centres[i][0]))]
 
 
+def _line_quads(small: np.ndarray, frame: float) -> list[tuple[float, np.ndarray]]:
+    """Card-shaped rectangles put together from straight edges, best first,
+    each with the share of its outline that is edge.
+
+    A card held in a hand has no closed outline: fingers cover parts of its
+    sides, and what is behind it is a room, not a table. Its sides are still
+    straight lines. Every pair of parallel lines is taken as two opposite
+    sides of a card; lines square to them close the other two, one of which
+    may be missing (covered by the palm) and is then placed by the card's
+    proportions. A rectangle is kept when most of its outline really is
+    edge."""
+    gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+    edges = cv2.Canny(gray, 40, 120)
+    h, w = edges.shape
+    m = min(h, w)
+    found = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=max(20, int(0.05 * m)),
+                            minLineLength=int(0.09 * m), maxLineGap=max(4, int(0.02 * m)))
+    if found is None:
+        return []
+    segs = found.reshape(-1, 4).astype(np.float32)
+    lengths = np.hypot(segs[:, 2] - segs[:, 0], segs[:, 3] - segs[:, 1])
+    segs = segs[np.argsort(-lengths)][:60]
+    p1, p2 = segs[:, :2], segs[:, 2:]
+    along = (p2 - p1) / np.linalg.norm(p2 - p1, axis=1, keepdims=True)
+    mid = (p1 + p2) / 2
+    angle = np.degrees(np.arctan2(along[:, 1], along[:, 0])) % 180
+    near = cv2.dilate(edges, np.ones((5, 5), np.uint8)) > 0
+
+    def apart(a: float, b: float) -> float:
+        d = abs(a - b) % 180
+        return min(d, 180 - d)
+
+    def support(quad: np.ndarray) -> Optional[list[float]]:
+        """For each side, the share of it that lies on an edge."""
+        out = []
+        steps = np.linspace(0.1, 0.9, 36, dtype=np.float32)[:, None]
+        for k in range(4):
+            pts = quad[k] + (quad[(k + 1) % 4] - quad[k]) * steps
+            x, y = np.round(pts[:, 0]).astype(int), np.round(pts[:, 1]).astype(int)
+            ok = (x >= 0) & (x < w) & (y >= 0) & (y < h)
+            if ok.mean() < 0.85:
+                return None                    # runs off the photo
+            out.append(float(near[y[ok], x[ok]].mean()) * float(ok.mean()))
+        return out
+
+    scored: list[tuple[float, np.ndarray]] = []
+    for i in range(len(segs)):
+        u = along[i]
+        n = np.array([-u[1], u[0]], dtype=np.float32)
+        c_i = float(n @ mid[i])
+        for j in range(i + 1, len(segs)):
+            if apart(angle[i], angle[j]) > 5:
+                continue
+            c_j = float(n @ mid[j])
+            gap = abs(c_j - c_i)
+            if gap < 0.12 * m:
+                continue
+            lo, hi = min(c_i, c_j), max(c_i, c_j)
+            # Lines square to these two, lying in the strip between them.
+            across = [k for k in range(len(segs)) if abs(apart(angle[k], angle[i]) - 90) < 6
+                      and lo - 0.1 * gap < float(n @ mid[k]) < hi + 0.1 * gap]
+            ts = sorted(float(u @ mid[k]) for k in across)
+            for other in (gap / CARD_ASPECT, gap * CARD_ASPECT):     # these two are the long sides, or the short
+                spans = set()
+                for a in range(len(ts)):
+                    for b in range(a + 1, len(ts)):
+                        if abs((ts[b] - ts[a]) - other) < 0.12 * other:
+                            spans.add((round(ts[a]), round(ts[b])))
+                    spans.add((round(ts[a]), round(ts[a] + other)))      # the far side is hidden
+                    spans.add((round(ts[a] - other), round(ts[a])))
+                for t0, t1 in spans:
+                    quad = np.array([u * t0 + n * lo, u * t0 + n * hi, u * t1 + n * hi, u * t1 + n * lo],
+                                    dtype=np.float32)
+                    if not _is_card(quad, frame):
+                        continue
+                    sides = support(quad)
+                    if sides is None:
+                        continue
+                    ranked = sorted(sides)
+                    if ranked[2] >= 0.5 and ranked[1] >= 0.25 and float(np.mean(sides)) >= 0.45:
+                        scored.append((float(np.mean(sides)), quad))
+    scored.sort(key=lambda s: -s[0])
+    kept: list[tuple[float, np.ndarray]] = []
+    for share, quad in scored:
+        if any(np.linalg.norm(_centre(quad) - _centre(k)) < 0.08 * _short(k)
+               and 0.85 < _area(quad) / _area(k) < 1.18 for _, k in kept):
+            continue
+        kept.append((share, quad))
+        if len(kept) >= 60:
+            break
+    return kept
+
+
+def _detail_quad(small: np.ndarray) -> Optional[np.ndarray]:
+    """Roughly where the card is in a photo of one held up to the camera:
+    the patch of the photo that is sharp and full of fine detail. A card is
+    print and text; the hand holding it is smooth and the room behind it is
+    out of focus. Returns the tightest rectangle around that patch."""
+    gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (3, 3), 0)
+    m = min(gray.shape)
+    k = max(9, int(m * 0.04)) | 1
+    energy = cv2.blur(np.abs(cv2.Laplacian(gray, cv2.CV_32F, ksize=3)), (k, k))
+    scaled = cv2.normalize(energy, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    _, mask = cv2.threshold(scaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((k // 2 | 1, k // 2 | 1), np.uint8))
+    # Plain parts of a card (a flat text box) leave holes; join the pieces.
+    wide = max(15, int(m * 0.12)) | 1
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((wide, wide), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    biggest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(biggest) < _MIN_AREA * gray.shape[0] * gray.shape[1]:
+        return None
+    return cv2.boxPoints(cv2.minAreaRect(biggest)).astype(np.float32)
+
+
+def _shared(a: np.ndarray, b: np.ndarray) -> float:
+    """Area two quads have in common."""
+    area, _ = cv2.intersectConvexConvex(_order(a), _order(b))
+    return float(area)
+
+
+def _card_around(patch: np.ndarray) -> np.ndarray:
+    """The smallest card-proportioned rectangle, at the patch's own angle and
+    centre, that holds the patch."""
+    q = _portrait(patch)
+    c = _centre(q)
+    across, down = q[1] - q[0], q[3] - q[0]
+    w, h = float(np.linalg.norm(across)), float(np.linalg.norm(down))
+    if w / h < CARD_ASPECT:
+        w2, h2 = h * CARD_ASPECT, h
+    else:
+        w2, h2 = w, w / CARD_ASPECT
+    ux, uy = across / max(w, 1e-6) * w2 / 2, down / max(h, 1e-6) * h2 / 2
+    return np.array([c - ux - uy, c + ux - uy, c + ux + uy, c - ux + uy], dtype=np.float32)
+
+
+def _tighten(small: np.ndarray, quad: np.ndarray) -> np.ndarray:
+    """A loose rectangle around a card, pulled in to the card's edge. Each
+    side moves inward to the first straight edge it meets that runs most of
+    its length. Fingers and folds of a hand do not make such an edge; the
+    side of a card does."""
+    q = _portrait(quad)
+    w, h = 300, int(round(300 / CARD_ASPECT))
+    dst = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+    to_flat = cv2.getPerspectiveTransform(q, dst)
+    flat = cv2.GaussianBlur(cv2.warpPerspective(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), to_flat, (w, h),
+                                                borderMode=cv2.BORDER_REPLICATE), (3, 3), 0)
+    gx = np.abs(cv2.Sobel(flat, cv2.CV_32F, 1, 0, ksize=3))
+    gy = np.abs(cv2.Sobel(flat, cv2.CV_32F, 0, 1, ksize=3))
+    reach_x, reach_y = int(w * 0.24), int(h * 0.2)
+
+    def first(strength: np.ndarray, covered: np.ndarray) -> int:
+        """How far in the first real edge is. strength[i]: mean step i
+        pixels in; covered[i]: share of the side with a step there."""
+        floor = float(np.median(strength))
+        for i in range(2, len(strength) - 1):
+            if strength[i] > max(16.0, 2.5 * floor) and covered[i] >= 0.55 and strength[i] >= strength[i - 1:i + 2].max():
+                return i
+        return 0
+
+    rows, cols = slice(h // 5, h - h // 5), slice(w // 5, w - w // 5)
+
+    def side(grad: np.ndarray) -> int:
+        return first(grad.mean(axis=0), (grad > 40).mean(axis=0))
+
+    left = side(gx[rows, :reach_x])
+    right = side(gx[rows, w - reach_x:][:, ::-1])
+    top = side(gy[:reach_y, cols].T)
+    bottom = side(gy[h - reach_y:, cols][::-1].T)
+    if not (left or right or top or bottom):
+        return quad
+    inner = np.array([[left, top], [w - 1 - right, top], [w - 1 - right, h - 1 - bottom], [left, h - 1 - bottom]],
+                     dtype=np.float32)
+    out = cv2.perspectiveTransform(inner.reshape(-1, 1, 2), np.linalg.inv(to_flat)).reshape(4, 2)
+    return out.astype(np.float32) if _ASPECT_LO <= _aspect(out) <= _ASPECT_HI else quad
+
+
+def _held_card(small: np.ndarray, frame: float, patch: Optional[np.ndarray]) -> list[np.ndarray]:
+    """The card in a photo with no clean background and no closed outline:
+    one held in a hand. The detailed patch says roughly where it is, and
+    lies on or just inside the card (a card's border carries little
+    detail). So of the rectangles built from straight edges, the card is the
+    one that holds the patch: the largest whose outline is solidly edge (the
+    card's own rim, not a box printed on it), or failing that the smallest.
+    When none holds it, the answer is a card-shaped rectangle drawn around
+    the patch."""
+    lines = _line_quads(small, frame)
+    if patch is None:
+        return _cards_among([q for _, q in lines[:12]], [])
+    size = _area(patch)
+    holding = [(share, q) for share, q in lines if _shared(q, patch) >= 0.88 * size]
+    solid = [q for share, q in holding if share >= 0.62 and _area(q) <= 3.5 * size]
+    if solid:
+        return [max(solid, key=_area)]
+    snug = [q for _, q in holding if _area(q) <= 1.6 * size]
+    if snug:
+        return [min(snug, key=_area)]
+    around = _tighten(small, _card_around(patch))
+    return [around] if _MIN_AREA * frame <= _area(around) else []
+
+
 def _cards_among(outlines: list[np.ndarray], separate: list[np.ndarray]) -> list[np.ndarray]:
     """The outlines that are cards, by what contains what. `separate` are the
     outlines known to be separate objects lying on the background."""
@@ -473,6 +676,14 @@ def find_cards(img: np.ndarray) -> list[dict]:
         cells = _split(small, blob)
         if cells and all(_is_card(c, frame) for c in cells):
             cards.extend(cells if len(cells) == 1 else [c for c in cells if not _blank(small, c)])
+    # Where the sharp, detailed part of the photo is. Whatever was found
+    # should be there; an outline somewhere else is furniture.
+    patch = _detail_quad(small)
+    if patch is not None and cards and not any(_shared(c, patch) >= 0.2 * min(_area(c), _area(patch)) for c in cards):
+        cards = []
+    if not cards:
+        # Nothing with a closed outline: a card held up in a hand, say.
+        cards = _held_card(small, frame, patch)
     if not cards:
         return []
 

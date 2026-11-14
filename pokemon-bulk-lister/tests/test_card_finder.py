@@ -85,3 +85,34 @@ def test_contact_sheet_puts_card_i_at_row_i_over_3():
     assert sheet.shape[0] == 2 * (card_finder.OUT_H + 16) + 16 and sheet.shape[1] == 3 * (card_finder.OUT_W + 16) + 16
     y, x = 16 + (card_finder.OUT_H + 16) + 50, 16 + (card_finder.OUT_W + 16) + 50      # row 1, col 1: card 4
     assert int(sheet[y, x, 0]) == 40
+
+
+def test_a_card_held_in_a_hand_over_a_busy_room():
+    """No clean background and no closed outline: fingers cover parts of the
+    card's sides and the room behind is out of focus."""
+    rng = np.random.default_rng(11)
+    room = cv2.resize(rng.integers(40, 220, (9, 7, 3)).astype(np.uint8), (700, 900), interpolation=cv2.INTER_CUBIC)
+    room = cv2.GaussianBlur(room, (0, 0), 9)
+    cv2.rectangle(room, (520, 380), (700, 900), (150, 150, 155), -1)      # a blurred laptop
+    room = cv2.GaussianBlur(room, (0, 0), 5)
+    skin = (150, 170, 215)
+    cv2.ellipse(room, (330, 640), (290, 330), 0, 0, 360, skin, -1)        # the palm
+    x, y = 230, 250
+    card = _card(rng)
+    # Printed art is fine detail, in focus; so is the rules text under it.
+    card[40:176, 22:CW - 22] = cv2.resize(rng.integers(0, 255, (68, 104, 3)).astype(np.uint8), (CW - 44, 136))
+    cv2.putText(card, "Cardname  HP 70", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2)
+    for line in range(196, 330, 12):                                     # rules text, as a real card has
+        for word in range(26, CW - 40, 34):
+            cv2.putText(card, "text", (word, line), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (25, 25, 25), 1)
+    room[y:y + CH, x:x + CW] = card
+    for cy in (330, 420, 510):                                           # fingertips over the right side
+        cv2.ellipse(room, (x + CW + 10, cy), (38, 30), 0, 0, 360, skin, -1)
+    cv2.ellipse(room, (x - 8, 470), (34, 70), 0, 0, 360, skin, -1)        # the thumb over the left side
+    truth = np.array([[x, y], [x + CW, y], [x + CW, y + CH], [x, y + CH]], np.float32)
+
+    found = card_finder.find_cards(room)
+    assert len(found) == 1
+    assert _overlap(truth, found[0]["quad"], room.shape) > 0.6
+    # Most of the crop is the card, not the room.
+    assert cv2.contourArea(found[0]["quad"].astype(np.float32)) < 2.2 * CW * CH
