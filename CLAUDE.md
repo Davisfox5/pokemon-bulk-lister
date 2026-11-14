@@ -92,6 +92,7 @@ This is a working tool for one operator, not a product surface.
 The `.claude/agents/` tiering above is **build-time** and out of scope for a
 runtime routing audit. This section covers what the tool calls when it runs.
 
+- Sign-in to the Claude API is `lib/anthropic_auth.py`: `ANTHROPIC_API_KEY` when set, otherwise keyless (Workload Identity Federation) with the host's identity token, which on Vercel arrives in the `x-vercel-oidc-token` request header.
 - One runtime LLM touchpoint: `lib/vision_identify.py`. It calls Claude vision to
   identify cards, defaults to `claude-haiku-4-5`, and is overridable with
   `VISION_MODEL`.

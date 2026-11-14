@@ -109,6 +109,17 @@ app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB
 from webapp.connections import operator_only_when_public, same_origin_only  # noqa: E402
 
 app.before_request(same_origin_only)
+
+
+@app.before_request
+def _keep_host_identity_token():
+    """On Vercel each request carries the deployment's identity token, which
+    is what signs this app in to the Claude API when no key is stored."""
+    token = request.headers.get("x-vercel-oidc-token")
+    if token:
+        from lib import anthropic_auth
+        anthropic_auth.remember_identity_token(token)
+
 # Under a real domain the bench is on the internet: operator login required.
 app.before_request(operator_only_when_public)
 

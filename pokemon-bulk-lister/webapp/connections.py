@@ -170,6 +170,16 @@ def operator_only_when_public():
     return redirect("/portfolio?scan=operator-only")
 
 
+def _anthropic_ready() -> bool:
+    from lib import anthropic_auth
+    return anthropic_auth.configured()
+
+
+def _anthropic_keyless() -> bool:
+    from lib import anthropic_auth
+    return anthropic_auth.federated()
+
+
 def _has(*names: str) -> bool:
     return all(bool(os.getenv(n)) for n in names)
 
@@ -517,8 +527,9 @@ def connections_status():
                     "to .env and restart. eBay needs each card photo at a public URL.",
         },
         "identify": {
-            "ready": _has("ANTHROPIC_API_KEY"),
-            "next": "Configured." if _has("ANTHROPIC_API_KEY") else
+            "ready": _anthropic_ready(),
+            "next": ("Configured (signs in with the host's identity, no stored key)." if _anthropic_keyless()
+                     else "Configured.") if _anthropic_ready() else
                     "Add ANTHROPIC_API_KEY to .env and restart. Without it only the free "
                     "image match can identify cards.",
         },

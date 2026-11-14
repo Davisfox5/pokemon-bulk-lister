@@ -73,9 +73,9 @@ _SYSTEM = (
 
 
 def _client():
-    import anthropic  # deferred so the webapp can start without the SDK installed
+    from lib import anthropic_auth
 
-    return anthropic.Anthropic()
+    return anthropic_auth.client()
 
 
 def _encode_image(image_path: str, max_edge: int) -> str:
