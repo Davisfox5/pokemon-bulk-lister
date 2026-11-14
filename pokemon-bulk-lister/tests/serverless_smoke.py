@@ -143,7 +143,7 @@ assert client.get("/output/crops/nope.jpg").status_code == 404
 seen_files = []
 
 
-def fake_page(path):
+def fake_page(path, rows=3, cols=3, model=None):
     assert Path(path).exists(), path                       # fetched back from Blob
     seen_files.append(Path(path).name)
     return [{"row": r_, "col": c_, "name": f"Card {r_}{c_}", "set_name": "Test Set", "set_code": "tst",
@@ -360,6 +360,23 @@ r = ann.post("/api/grids/upload", headers=public, content_type="multipart/form-d
              data={"file": (io.BytesIO(heic.getvalue()), "IMG_5834.HEIC"), "mode": "single"})
 assert r.status_code == 200 and r.get_json()["skipped"] == [], r.get_data(as_text=True)
 assert r.get_json()["grids"] == [{"filename": "IMG_5834.jpg", "crops": 1}], r.get_json()
+
+# ---------------------------------------------------------------- no mode: the cards are found, whatever the layout
+table = np.full((1000, 1300, 3), (44, 42, 46), np.uint8)
+rng = np.random.default_rng(4)
+for i, x in enumerate((180, 520, 860)):
+    card = np.full((352, 252, 3), (60, 210, 245), np.uint8)
+    cv2.rectangle(card, (13, 13), (238, 338), (90 + 50 * i, 160, 200 - 40 * i), -1)
+    card[40:176, 22:230] = cv2.resize(rng.integers(0, 255, (10, 14, 3)).astype(np.uint8), (208, 136),
+                                     interpolation=cv2.INTER_CUBIC)
+    table[300:652, x:x + 252] = card
+ok, three = cv2.imencode(".jpg", table)
+r = ann.post("/api/grids/upload", headers=public, content_type="multipart/form-data",
+             data={"file": (io.BytesIO(three.tobytes()), "three.jpg")})
+assert r.status_code == 200 and r.get_json()["grids"] == [{"filename": "three.jpg", "crops": 3}], r.get_data(as_text=True)
+mine = ann.get("/api/cards", headers=public).get_json()["cards"]
+assert sorted((c["row"], c["col"]) for c in mine if "three_" in c["crop_path"]) == [(0, 0), (0, 1), (0, 2)]
+assert "output/pages/three.jpg" in blob.files          # the sheet page-level identification reads
 
 # ---------------------------------------------------------------- no SECRET_KEY, no start
 del os.environ["SECRET_KEY"]

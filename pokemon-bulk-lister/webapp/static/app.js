@@ -179,7 +179,7 @@ function setupDropzone() {
   async function sendPhotos(list, mode) {
     const fd = new FormData();
     for (const f of list) fd.append("file", f, f.name);
-    fd.append("mode", mode);
+    if (mode) fd.append("mode", mode);
     const res = await fetch("/api/grids/upload", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
@@ -233,15 +233,10 @@ function setupDropzone() {
 
   // Remember the two scan settings between visits.
   const saved = JSON.parse(localStorage.getItem("scan-settings") || "{}");
-  if (saved.mode) $$('input[name="scan-mode"]').forEach(r => { r.checked = r.value === saved.mode; });
   if (saved.auto === false) $("#auto-process").checked = false;
   const remember = () => {
-    localStorage.setItem("scan-settings", JSON.stringify({ mode: scanMode(), auto: $("#auto-process").checked }));
-    $("#dropzone-hint").textContent = scanMode() === "single"
-      ? "One card per photo. Drop, or tap to choose"
-      : "Drop, or tap to choose";
+    localStorage.setItem("scan-settings", JSON.stringify({ auto: $("#auto-process").checked }));
   };
-  $$('input[name="scan-mode"]').forEach(r => r.addEventListener("change", remember));
   $("#auto-process").addEventListener("change", remember);
   remember();
 }
@@ -333,9 +328,10 @@ function csvParts(text, maxChars = 3000000) {
   return parts;
 }
 
+// The server works out what is in each photo (one card, several, a binder
+// page), so no mode is sent.
 function scanMode() {
-  const picked = $('input[name="scan-mode"]:checked');
-  return picked ? picked.value : "grid";
+  return null;
 }
 
 const JOB_BUTTONS = ["#process-btn", "#identify-btn", "#run-pricing-btn"];

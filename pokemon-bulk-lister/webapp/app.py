@@ -324,12 +324,14 @@ def api_bulk_update_cards():
 
 @app.route("/api/grids/upload", methods=["POST"])
 def api_upload_grid():
-    """Form fields: file (repeatable), mode = "grid" (binder page, default)
-    or "single" (each photo is one card)."""
+    """Form fields: file (repeatable). Each photo may hold any number of
+    cards in any layout; they are found, cropped and squared up
+    (`_record_photo`). mode = "grid" or "single" forces the old fixed
+    reading (a 3x3 binder page, or one card filling the frame)."""
     files = request.files.getlist("file") or []
     if not files:
         abort(400, "no file uploaded")
-    single = request.form.get("mode") == "single"
+    mode = request.form.get("mode")
 
     sg = get_split_grids()
     total_crops = 0
@@ -347,7 +349,7 @@ def api_upload_grid():
         file.save(dest)
         dest = _as_readable_photo(dest)
 
-        n = _record_single(sg, dest) if single else _split_and_record(sg, dest)
+        n = _record_photo(sg, dest, mode)
         total_crops += n
         grids_added.append({"filename": dest.name, "crops": n})
 
@@ -359,7 +361,7 @@ MAX_DRIVE_PHOTO_BYTES = 40 * 1024 * 1024
 
 @app.route("/api/drive/import/photo", methods=["POST"])
 def api_drive_import_photo():
-    """Body: {file_id, mode: "grid"|"single"}. Fetches one photo from the
+    """Body: {file_id, mode?}. Fetches one photo from the
     signed-in account's Google Drive and files it exactly as an upload would
     be. The page sends one photo per request. The server reads Drive itself,
     so a host's cap on upload size does not apply."""
@@ -382,7 +384,7 @@ def api_drive_import_photo():
     dest.write_bytes(content)
     dest = _as_readable_photo(dest)
     sg = get_split_grids()
-    n = _record_single(sg, dest) if body.get("mode") == "single" else _split_and_record(sg, dest)
+    n = _record_photo(sg, dest, body.get("mode"))
     return jsonify({"grids": [{"filename": dest.name, "crops": n}], "total_crops": n, "skipped": []})
 
 
@@ -426,6 +428,53 @@ def _unique_upload_name(name: str) -> str:
         n += 1
         stem = f"{path.stem}-{n}"
     return f"{stem}{path.suffix}"
+
+
+def _record_photo(sg, photo_path: Path, mode: Optional[str] = None) -> int:
+    """File the cards in one photo, however they are laid out. Returns how
+    many were filed.
+
+    The cards are found by their outlines (lib/card_finder: one card, a
+    pair, a block, a loose scatter, a binder page on a table). When that
+    finds nothing, the photo is read the old way: as a 3x3 binder page if it
+    looks like one filling the frame, otherwise as one card."""
+    if mode == "single":
+        return _record_single(sg, photo_path)
+    if mode == "grid":
+        return _split_and_record(sg, photo_path)
+    from lib import card_finder
+
+    img = cv2.imread(str(photo_path))
+    if img is None:
+        return 0
+    found = card_finder.find_cards(img)
+    if not found:
+        if len(sg.detect_cards(sg.auto_orient(img))) >= sg.DETECTOR_MIN_HITS:
+            return _split_and_record(sg, photo_path)
+        return _record_single(sg, photo_path)
+    crops = [card_finder.crop(img, f["quad"]) for f in found]
+    print(f"[split] {photo_path.name}: {len(crops)} card(s) found by outline", file=sys.stderr)
+
+    stem = photo_path.stem
+    if len(crops) >= 3:
+        # What page-level identification reads: the squared-up cards three
+        # across, so card i is at row i // 3, column i % 3 whatever the
+        # layout on the table was.
+        pages_dir = OUTPUT_DIR / "pages"
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        sheet = pages_dir / f"{stem}.jpg"
+        cv2.imwrite(str(sheet), card_finder.contact_sheet(crops), [cv2.IMWRITE_JPEG_QUALITY, 88])
+        runtime.save_file(sheet)
+    with db.connect(DB_PATH) as conn:
+        grid_id = db.get_or_create_grid(conn, stem, rel_path(photo_path))
+        for i, card in enumerate(crops):
+            r, c = divmod(i, 3)
+            out_path = CROPS_DIR / f"{stem}_r{r}c{c}.jpg"
+            cv2.imwrite(str(out_path), card, [cv2.IMWRITE_JPEG_QUALITY, 92])
+            runtime.save_file(out_path)
+            db.insert_card_stub(conn, grid_id, rel_path(out_path), r, c)
+        db.update_grid_count(conn, grid_id)
+    return len(crops)
 
 
 def _record_single(sg, photo_path: Path) -> int:
@@ -1121,9 +1170,12 @@ def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=N
             page_path = prepared
         if page_path.exists():
             try:
+                # A photo of more than nine cards makes a sheet of more
+                # than three rows.
+                rows = max([3] + [int(c.get("row") or 0) + 1 for c in group])
                 page_results = {
                     (r.get("row"), r.get("col")): r
-                    for r in identify_page(str(page_path))
+                    for r in identify_page(str(page_path), rows=rows)
                 }
             except Exception as exc:
                 tally["last_error"] = str(exc)
