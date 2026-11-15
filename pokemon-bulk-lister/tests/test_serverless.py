@@ -19,6 +19,7 @@ def _run(tmp_path, database_url):
         VERCEL="1", DATA_ROOT=str(tmp_path / "data"), DATABASE_URL=database_url,
         SECRET_KEY="test-secret", BLOB_READ_WRITE_TOKEN="fake", CRON_SECRET="cron-secret",
         JOB_SLICE_SECONDS="0", ADMIN_EMAILS="op@example.com", PRICE_REFRESH_ENABLED="0",
+        CARD_CATALOG_OFFLINE="1",
     )
     done = subprocess.run([sys.executable, str(HERE / "serverless_smoke.py")], env=env, cwd=HERE.parent,
                           capture_output=True, text=True, timeout=300)

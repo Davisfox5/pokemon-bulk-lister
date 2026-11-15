@@ -407,7 +407,6 @@ def adopt_unowned(conn: sqlite3.Connection, user_id: int) -> None:
     once, for the operator, when an install moves under a public host."""
     for table in ("grids", "cards"):
         conn.execute(f"UPDATE {table} SET owner_id = ? WHERE owner_id IS NULL", (int(user_id),))
-    conn.commit()
 
 
 def get_card(conn: sqlite3.Connection, card_id: int, any_owner: bool = False) -> Optional[dict]:

@@ -94,8 +94,18 @@ runtime routing audit. This section covers what the tool calls when it runs.
 
 - Sign-in to the Claude API is `lib/anthropic_auth.py`: `ANTHROPIC_API_KEY` when set, otherwise keyless (Workload Identity Federation) with the host's identity token, which on Vercel arrives in the `x-vercel-oidc-token` request header.
 - One runtime LLM touchpoint: `lib/vision_identify.py`. It calls Claude vision to
-  identify cards, defaults to `claude-haiku-4-5`, and is overridable with
-  `VISION_MODEL`.
+  identify cards, defaults to `claude-haiku-5-5` (falling back to
+  `claude-haiku-4-5` when that is refused), and is overridable with
+  `VISION_MODEL`. The prompt carries the newest sets from the catalog, and the
+  model is told to read what is printed, not to name a set from memory.
+- What the model read is never trusted on its own. `lib/card_catalog.py` checks
+  it against the real catalog with no model call (name + "023/128" pin the card
+  and its set) and `_checked_identity` in `webapp/app.py` sets the confidence
+  from that: verified, probable, or not a real card. `POST /api/identify/verify`
+  (Scan, "Check IDs") runs the same check over cards already on the bench. The
+  catalog cache (sets, each set's card list) lives in `app_state` under
+  `catalog:*`; `data/sets.json` is the bundled fallback. Tests run with
+  `CARD_CATALOG_OFFLINE=1`.
 - That is the correct tier and it should stay there. Identification is constrained
   extraction with a JSON schema through `output_config.format`, which is exactly
   Haiku's job, and it runs at binder-page volume where a higher tier would be

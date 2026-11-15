@@ -82,7 +82,11 @@ if _PG_TEST_URL:
     _route_tests_to_postgres()
 
 
+import os  # noqa: E402
 import re  # noqa: E402
+
+# The card catalog is a slow outside service: tests never call it.
+os.environ["CARD_CATALOG_OFFLINE"] = "1"
 
 import pytest  # noqa: E402
 

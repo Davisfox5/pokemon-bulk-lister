@@ -769,6 +769,32 @@ function setupToolbar() {
 
   $("#bundle-btn").addEventListener("click", openBundle);
 
+  // Check every card against the real catalog: no AI call, a few seconds a go.
+  $("#verify-btn").addEventListener("click", async () => {
+    const btn = $("#verify-btn");
+    const status = $("#upload-status");
+    btn.disabled = true;
+    const sum = { verified: 0, probable: 0, unverified: 0, unknown: 0 };
+    try {
+      let after = 0;
+      for (;;) {
+        const r = await api("/api/identify/verify", { method: "POST", body: JSON.stringify({ after }) });
+        for (const k of Object.keys(sum)) sum[k] += r[k] || 0;
+        after = r.last_id;
+        status.textContent = `Checking IDs… ${sum.verified + sum.probable + sum.unverified + sum.unknown} done`;
+        if (!r.remaining || !r.checked) break;
+      }
+      status.textContent = `IDs checked: ${sum.verified} confirmed, ${sum.probable} likely (number corrected), `
+        + `${sum.unverified} not a real card as read`
+        + (sum.unknown ? `, ${sum.unknown} could not be checked (catalog unreachable)` : "") + ".";
+      await loadCards();
+    } catch (err) {
+      status.textContent = `Could not check IDs: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $("#export-csv-btn").addEventListener("click", async () => {
     const btn = $("#export-csv-btn");
     btn.disabled = true; const orig = btn.textContent; btn.textContent = "Generating…";

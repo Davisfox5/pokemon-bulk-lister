@@ -1046,6 +1046,44 @@ def _remember_identification(crop_path: Path, res: dict) -> None:
         traceback.print_exc()  # cache failures must never break identification
 
 
+# What an identification is worth once it has been checked against the real
+# card catalog. The reader's own confidence says how legible the card was, not
+# whether such a card exists, so the check overrides it.
+ID_VERIFIED = 0.97        # this name and number exist in a set that fits what is printed
+ID_PROBABLE = 0.6         # the name is in the right set under another number
+ID_UNVERIFIED_CAP = 0.3   # no such card: a person should look
+
+
+def _checked_identity(fields: dict, total: Any = None, printed_code: Optional[str] = None) -> tuple[dict, str]:
+    """(changes, status) for a card's name / set / number checked against the
+    catalog, with no model call. `fields` holds name, set_name, set_code,
+    card_number and id_confidence as read."""
+    from lib import card_catalog
+
+    name = (fields.get("name") or "").strip()
+    if not name:
+        return {}, "unnamed"
+    try:
+        found = card_catalog.resolve(name, fields.get("card_number"), total=total, printed_code=printed_code,
+                                     set_code=fields.get("set_code"), set_name=fields.get("set_name"))
+    except Exception as exc:
+        print(f"[identify] catalog check failed for {name}: {exc}", file=sys.stderr)
+        return {}, "unknown"
+    status = found["status"]
+    read = float(fields.get("id_confidence") or 0.0)
+    if status in ("verified", "probable"):
+        real = found["card"]
+        changes = {"name": real["name"], "set_name": real["set_name"] or "", "set_code": real["set_code"],
+                   "card_number": real["card_number"],
+                   "id_confidence": ID_VERIFIED if status == "verified" else min(max(read, 0.4), ID_PROBABLE)}
+        if real.get("rarity"):
+            changes["rarity"] = real["rarity"]
+        return changes, status
+    if status == "unverified":
+        return {"id_confidence": round(min(read, ID_UNVERIFIED_CAP), 3)}, status
+    return {}, status           # catalog unreachable: leave the reading as it is
+
+
 def _identification_patch(res: dict, card: dict) -> dict[str, Any]:
     num = (res.get("card_number") or "").strip()
     num = num.lstrip("0") or num  # pokemontcg.io numbers carry no leading zeros
@@ -1060,7 +1098,46 @@ def _identification_patch(res: dict, card: dict) -> dict[str, Any]:
     }
     if not (card.get("condition_guess") or "").strip():
         patch["condition_guess"] = "NM"  # inventory default: Near Mint unless noted
+    # Does a card with this name and number exist? Asked of the catalog, not
+    # of a model. The catalog's own spelling, set and rarity replace the
+    # reading when it does.
+    changes, _ = _checked_identity(patch, total=res.get("number_total"), printed_code=res.get("set_code_printed"))
+    patch.update(changes)
     return patch
+
+
+@app.route("/api/identify/verify", methods=["POST"])
+def api_verify_identities():
+    """Check every named card on this bench against the real card catalog.
+    No model call. Body: {after: <card id>} to carry on where the last call
+    stopped. Cards that check out take the catalog's spelling, set and rarity;
+    ones that do not exist are marked down so they sort to the top for a look."""
+    body = request.get_json(silent=True) or {}
+    try:
+        after = int(body.get("after") or 0)
+    except (TypeError, ValueError):
+        after = 0
+    with db.connect(DB_PATH) as conn:
+        cards = [c for c in db.list_cards(conn, sort="oldest") if (c.get("name") or "").strip() and int(c["id"]) > after]
+    deadline = time.monotonic() + 20
+    tally = {"verified": 0, "probable": 0, "unverified": 0, "unknown": 0}
+    last = after
+    done = 0
+    for card in cards:
+        if time.monotonic() > deadline:
+            break
+        changes, status = _checked_identity(card)
+        tally[status] = tally.get(status, 0) + 1
+        # A changed card's old price belonged to another printing.
+        if any(changes.get(k) not in (None, card.get(k)) for k in ("set_code", "card_number", "name")):
+            changes.update(final_price=None, pricing_confidence=0.0, pricing_notes=None, tcgplayer_market=None,
+                           cardmarket_trend_usd=None, cardmarket_trend_eur=None, outlier_flag=0)
+        if changes:
+            with db.connect(DB_PATH) as conn:
+                db.update_card(conn, int(card["id"]), changes)
+        last = int(card["id"])
+        done += 1
+    return jsonify({**tally, "checked": done, "remaining": len(cards) - done, "last_id": last})
 
 
 @app.route("/api/cards/<int:card_id>/identify", methods=["POST"])
@@ -2124,6 +2201,13 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(catalog_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(market_bp)
+# The card catalog's cache (sets, each set's cards) lives in the database, so
+# every instance shares it and it survives a restart.
+from lib import card_catalog as _card_catalog  # noqa: E402
+
+_card_catalog.use_store(lambda key: runtime.state_get(f"catalog:{key}"),
+                        lambda key, value: runtime.state_set(f"catalog:{key}", value))
+
 if SERVERLESS:
     # No process to run a timer in: the daily cron below does the refresh.
     price_scheduler.install(price_fn=_price_card)
@@ -2191,6 +2275,11 @@ def api_cron_daily():
     except Exception as exc:
         traceback.print_exc()
         out["price_error"] = str(exc)
+    try:
+        from lib import card_catalog
+        out["sets"] = card_catalog.refresh_sets()      # new sets reach identification within a day
+    except Exception as exc:
+        out["sets_error"] = str(exc)
     try:
         out["ebay_sales"] = sales_sync.sync_ebay()
     except Exception as exc:

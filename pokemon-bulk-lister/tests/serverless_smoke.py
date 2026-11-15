@@ -378,6 +378,48 @@ mine = ann.get("/api/cards", headers=public).get_json()["cards"]
 assert sorted((c["row"], c["col"]) for c in mine if "three_" in c["crop_path"]) == [(0, 0), (0, 1), (0, 2)]
 assert "output/pages/three.jpg" in blob.files          # the sheet page-level identification reads
 
+# ---------------------------------------------------------------- cards scanned before accounts existed go to an account
+with db.connect(appmod.DB_PATH) as conn:
+    unowned_before = conn.execute("SELECT COUNT(*) AS n FROM cards WHERE owner_id IS NULL").fetchone()["n"]
+    db.adopt_unowned(conn, ben_id)
+with db.connect(appmod.DB_PATH) as conn:
+    assert conn.execute("SELECT COUNT(*) AS n FROM cards WHERE owner_id IS NULL").fetchone()["n"] == 0
+    assert unowned_before > 0
+
+# ---------------------------------------------------------------- IDs are checked against the catalog, with no model call
+from lib import card_catalog  # noqa: E402
+
+real = {"name": "Pikachu", "set_name": "30th Celebration", "set_code": "me55", "card_number": "23",
+        "rarity": "Pikachu Rare"}
+
+
+def fake_resolve(name, number=None, total=None, printed_code=None, set_code=None, set_name=None, **_):
+    if name == "Card of annpage":
+        return {"status": "verified", "card": real, "why": ""}
+    return {"status": "unverified", "card": None, "why": "no such card"}
+
+
+card_catalog.resolve = fake_resolve
+calls_before = len(seen_files)
+with db.connect(appmod.DB_PATH) as conn:
+    conn.execute("UPDATE cards SET final_price = 9.5, id_confidence = 0.9 WHERE id = ?", (ann_card,))
+r = ann.post("/api/identify/verify", headers=public, json={}).get_json()
+assert (r["verified"], r["remaining"]) == (1, 0), r
+assert len(seen_files) == calls_before                              # no vision call was made
+checked = ann.get(f"/api/cards/{ann_card}", headers=public).get_json()
+assert (checked["name"], checked["set_code"], checked["card_number"], checked["rarity"]) == (
+    "Pikachu", "me55", "23", "Pikachu Rare"), checked
+assert checked["id_confidence"] == appmod.ID_VERIFIED
+assert checked["final_price"] is None                               # its old price was for another printing
+# What was read by the model goes through the same check before it is saved.
+patch = appmod._identification_patch({"name": "Card of annpage", "card_number": "023", "number_total": "128",
+                                      "set_code_printed": "30C", "set_code": "sv8", "set_name": "Surging Sparks",
+                                      "confidence": 0.5}, {})
+assert (patch["set_code"], patch["card_number"], patch["id_confidence"]) == ("me55", "23", appmod.ID_VERIFIED), patch
+patch = appmod._identification_patch({"name": "Not A Card", "card_number": "9", "confidence": 0.95}, {})
+assert patch["id_confidence"] == appmod.ID_UNVERIFIED_CAP and patch["name"] == "Not A Card", patch
+assert ben.get(f"/api/cards/{ben_card}", headers=public).get_json()["name"] == "Card of benpage"   # not ann's to check
+
 # ---------------------------------------------------------------- no SECRET_KEY, no start
 del os.environ["SECRET_KEY"]
 try:
