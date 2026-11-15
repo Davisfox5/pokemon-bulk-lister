@@ -448,6 +448,16 @@ def title_condition(title: str) -> str:
     return hit.group(1) if hit else "NM"
 
 
+def title_is_holo(title: str) -> bool:
+    """Holofoil and holographic count. Reverse and non-holo do not."""
+    words = _norm(title).split()
+    if "nonholo" in words or ("non" in words and any(w.startswith("holo") for w in words)):
+        return False
+    if any(w.startswith("reverse") for w in words):
+        return False
+    return any(w.startswith("holo") for w in words)
+
+
 def match_title(s, title: str, budget: _Budget) -> tuple[Optional[dict], str]:
     """(card, "") when the title names exactly one card, else (None, why)."""
     if _LOT.search(title):
@@ -458,7 +468,7 @@ def match_title(s, title: str, budget: _Budget) -> tuple[Optional[dict], str]:
     number = hit.group(1).lstrip("0") or "0"
     total = int(hit.group(2))
     title_norm = f" {_norm(title)} "
-    holo = " holo " in title_norm and " non holo " not in title_norm and " reverse holo " not in title_norm
+    holo = title_is_holo(title)
 
     # Cards the catalog already has, when the title also names their set.
     local = [c for c in s.query(CatalogCard).filter(CatalogCard.card_number.isnot(None)).all()
@@ -525,15 +535,24 @@ def _place(s, row: ExternalListing, card: dict, condition: str, note: Optional[s
     return item
 
 
-def _use_sheet_price(s, cc: CatalogCard, line: dict) -> bool:
-    """A card with no price takes the market price its owner's sheet gives,
-    marked as such. A live price found later replaces it."""
+def _use_sheet_price(s, cc: CatalogCard, line: dict, user_id: Optional[int] = None) -> bool:
+    """A card nobody else holds, and that has no price yet, can show the
+    number from this account's sheet. It is not a market price, so it is
+    marked for a look. Another account's sheet never becomes their price."""
     price = line.get("sheet_price")
     if price is None or cc.final_price is not None:
         return False
+    if user_id is not None:
+        held = (s.query(InventoryItem)
+                .filter(InventoryItem.catalog_card_id == cc.id,
+                        InventoryItem.user_id != user_id,
+                        InventoryItem.quantity > 0)
+                .first())
+        if held is not None:
+            return False
     source = line.get("sheet_price_source")
     record_price(s, cc, {
-        "final_price": price, "pricing_confidence": 0.5,
+        "final_price": price, "pricing_confidence": 0.4,
         "pricing_notes": "From your spreadsheet" + (f" ({source})" if source else ""),
     })
     return True
@@ -561,7 +580,7 @@ def _repair_from_sheet(s, row: ExternalListing, line: dict) -> bool:
     if not line.get("condition_assumed") and item.condition != line["condition"]:
         item.condition = row.condition = line["condition"]
         changed = True
-    if _use_sheet_price(s, cc, line):
+    if _use_sheet_price(s, cc, line, item.user_id):
         changed = True
     row.title = (line.get("title") or row.title or "")[:500]
     return changed
@@ -665,7 +684,7 @@ def import_lines(uid: int, source: str, lines: list[dict]) -> dict:
             if _GRADED.search(row.title or ""):
                 note = "graded; see the listing title"
             item = _place(s, row, card, condition or "NM", note, cost=line.get("cost"))
-            _use_sheet_price(s, s.get(CatalogCard, item.catalog_card_id), line)
+            _use_sheet_price(s, s.get(CatalogCard, item.catalog_card_id), line, uid)
             if row.sku:
                 skus[row.sku] = item.id
             out["added"] += 1

@@ -245,8 +245,16 @@ def _jk(base: str) -> str:
 
 
 def _mine_job(state) -> dict:
-    """The in-process job state as this request's account should see it."""
-    return dict(state) if state.get("owner") == db.owner() else dict(_IDLE)
+    """The in-process job state as this request's account should see it.
+    Another account's job is still running, but its card counts stay hidden."""
+    if state.get("owner") == db.owner():
+        return dict(state)
+    if state.get("running"):
+        idle = dict(_IDLE)
+        idle["running"] = True
+        idle["message"] = "Someone else is using this. Try again in a moment."
+        return idle
+    return dict(_IDLE)
 
 
 def _csv_dir() -> Path:
@@ -883,11 +891,20 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         # is some other printing, and its price says nothing about this card.
         attempts = [({"set_code": set_code, "card_number": None}, "exact")] if set_code else []
     seen: set = set()
-    for kwargs, level in attempts:
+    for kwargs, _planned in attempts:
         key = (kwargs.get("set_code"), kwargs.get("card_number"))
         if key in seen:
             continue
         seen.add(key)
+        sent_set, sent_num = kwargs.get("set_code"), kwargs.get("card_number")
+        if sent_set and sent_num:
+            level = "exact"
+        elif sent_set:
+            level = "no_number"
+        elif sent_num:
+            level = "no_set"
+        else:
+            level = "name_only"
         try:
             prices = tcg.lookup_prices(
                 name=name,
@@ -1137,7 +1154,7 @@ def _checked_identity(fields: dict, total: Any = None, printed_code: Optional[st
         if found["status"] == "verified":
             changes["id_confidence"] = ID_VERIFIED
         elif found["status"] == "probable":
-            changes["id_confidence"] = round(max(read, ID_PROBABLE), 3)
+            changes["id_confidence"] = round(min(max(read, 0.4), ID_PROBABLE), 3)
         else:
             # A Japanese trainer or item the name table does not have is not
             # a confident read, even if the model was sure.
@@ -1339,9 +1356,14 @@ def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=N
             page_path = prepared
         if page_path.exists():
             try:
-                # The sheet is 3 across. Use the real row count. Forcing 3
-                # told the model a 4-card photo had an empty third row.
-                rows = max(int(c.get("row") or 0) + 1 for c in group)
+                with db.connect(DB_PATH) as conn:
+                    top = conn.execute(
+                        "SELECT MAX(row) AS m FROM cards WHERE grid_id = ?", (grid["id"],)
+                    ).fetchone()
+                # The picture is the whole sheet. `group` is only the cards
+                # still unnamed, so a named bottom row must not shrink it.
+                sheet_rows = int(top["m"]) + 1 if top and top["m"] is not None else 0
+                rows = max(sheet_rows, max(int(c.get("row") or 0) + 1 for c in group))
                 page_results = {
                     (r.get("row"), r.get("col")): r
                     for r in identify_page(str(page_path), rows=rows)

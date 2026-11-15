@@ -97,9 +97,11 @@ class TCGPlayerClient:
             return None
 
         if card_number:
+            want = _same_number(card_number)
             for c in cards:
-                if str(c.get("number", "")).lstrip("0") == str(card_number).lstrip("0"):
+                if _same_number(c.get("number")) == want:
                     return c
+            return None
         if set_code and not card_number:
             # Several printings of one name in a set: the ordinary one has
             # the lowest number, the full-art ones come after the printed total.
@@ -149,13 +151,14 @@ class TCGPlayerClient:
         if not prices:
             return None
 
-        if prefer_holo:
-            for key in ("reverseHoloTrend", "trendPrice", "reverseHoloSell", "averageSellPrice"):
-                v = prices.get(key)
-                if v:
-                    return float(v)
-        else:
-            for key in ("trendPrice", "averageSellPrice", "reverseHoloTrend", "reverseHoloSell"):
+        # trendPrice is this printing. reverseHoloTrend is the reverse of it,
+        # which is a different, usually cheaper card. A holo must not take it.
+        for key in ("trendPrice", "averageSellPrice"):
+            v = prices.get(key)
+            if v:
+                return float(v)
+        if not prefer_holo:
+            for key in ("reverseHoloTrend", "reverseHoloSell"):
                 v = prices.get(key)
                 if v:
                     return float(v)
@@ -203,6 +206,12 @@ class TCGPlayerClient:
             "tcgplayer_market_usd": self.market_price(card, prefer_holo=is_holo),
             "cardmarket_trend_eur": self.cardmarket_trend_eur(card, prefer_holo=is_holo),
         }
+
+
+def _same_number(text) -> str:
+    """'023', 'TG05' and 'tg5' are the same collector number."""
+    from lib.card_catalog import _number
+    return _number(None if text is None else str(text))
 
 
 def _escape(value: str) -> str:

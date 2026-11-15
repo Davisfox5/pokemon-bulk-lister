@@ -134,7 +134,10 @@ def test_a_japanese_card_is_verified_against_an_english_twin_set(monkeypatch):
     found = card_catalog.resolve_japanese("ロケット団のニドラン♂", number="061", printed_code="sv10")
     assert found["card"]["name"] == "Team Rocket's Nidoran♂"
     monkeypatch.setattr(card_catalog, "set_cards", lambda set_id: [
+        {"id": "full", "name": "Cottonee", "number": "186", "rarity": "Illustration Rare"},
         {"id": "rsv10pt5-4", "name": "Cottonee", "number": "4", "rarity": "Common"}])
+    found = card_catalog.resolve_japanese("モンメン", number="012", printed_code="sv11W")
+    assert found["card"]["rarity"] == "Common"
     # A name the English set does not have is still named, not verified.
     found = card_catalog.resolve_japanese("ダゲキ", number="046", printed_code="sv11W")
     assert found["status"] == "probable" and found["card"]["name"] == "Sawk"

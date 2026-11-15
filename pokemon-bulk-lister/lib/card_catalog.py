@@ -301,11 +301,15 @@ def resolve_japanese(name_printed: str, name_read: Optional[str] = None, number:
         named = ([c for c in cards if c["name"].casefold() == translated.casefold()]       # "Nidoran♂" is not "Nidoran♀"
                  or [c for c in cards if _norm(c["name"]) == _norm(translated)])
         if named:
-            # A set lists its ordinary printing first and the full-art ones
-            # after the printed total. A number within the total is the
-            # ordinary one; past it the rarity is not known from here.
-            ordinary = len(named) == 1 or (num.isdigit() and int(num) <= int((known or {}).get("total") or 0))
-            return {"status": "verified", "card": record(named[0]["name"], named[0].get("rarity") if ordinary else None),
+            def _ord(c: dict) -> tuple:
+                raw = str(c.get("number") or "")
+                return (0, int(raw)) if raw.isdigit() else (1, raw)
+            named = sorted(named, key=_ord)
+            total_n = int((known or {}).get("total") or 0)
+            ordinary_cards = [c for c in named if str(c.get("number") or "").isdigit() and int(c["number"]) <= total_n]
+            asked_ordinary = len(named) == 1 or (num.isdigit() and total_n and int(num) <= total_n)
+            pick = ordinary_cards[0] if asked_ordinary and ordinary_cards else named[0]
+            return {"status": "verified", "card": record(pick["name"], pick.get("rarity") if asked_ordinary else None),
                     "why": ""}
     if translated:
         return {"status": "probable", "card": record(translated),

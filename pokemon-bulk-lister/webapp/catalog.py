@@ -31,8 +31,10 @@ from webapp.models import (
     utcnow,
 )
 
+from webapp.runtime import DATA_ROOT
+
 ROOT = Path(__file__).resolve().parent.parent
-BENCH_DB_PATH = str(ROOT / os.getenv("OUTPUT_DIR", "output") / "db.sqlite")
+BENCH_DB_PATH = str(DATA_ROOT / os.getenv("OUTPUT_DIR", "output") / "db.sqlite")
 
 # Prices under this confidence get the "needs a human look" treatment.
 LOW_CONFIDENCE = float(os.getenv("LOW_CONFIDENCE", "0.5"))

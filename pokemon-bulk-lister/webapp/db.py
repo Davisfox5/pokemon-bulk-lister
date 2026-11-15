@@ -343,7 +343,7 @@ def insert_card_stub(
         """,
         (grid_id, crop_path, row, col, owner()),
     )
-    if cur.lastrowid:
+    if cur.rowcount:
         return int(cur.lastrowid)
     existing = conn.execute(
         "SELECT id FROM cards WHERE crop_path = ?", (crop_path,)
