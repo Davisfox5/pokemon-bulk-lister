@@ -200,7 +200,7 @@ assert runtime.state_get(appmod.MAIN_JOB)["progress"] == 0             # nobody 
 state["lease"] = 1.0                                                   # expired
 runtime.state_set(appmod.MAIN_JOB, state)
 status, _ = run_to_end("/api/pricing/status")
-assert status["message"] == f"done, priced {total} card(s)", status
+assert status["message"] == f"Priced {total} cards", status
 
 # ---------------------------------------------------------------- CSV download from another instance
 r = client.post("/api/export/csvs")
