@@ -104,6 +104,7 @@ function renderRow(card) {
       <td class="actions">
         <button data-act="edit">Edit</button>
         <button data-act="price">Price</button>
+        <button data-act="delete" title="Delete this card and its photo" aria-label="Delete">✕</button>
       </td>
     </tr>
   `;
@@ -141,6 +142,31 @@ function updateBundleButton() {
   const n = state.selected.size;
   btn.textContent = `Bundle selected (${n})`;
   btn.disabled = n < 2;
+  const del = $("#delete-btn");
+  if (del) {
+    del.textContent = `Delete selected (${n})`;
+    del.disabled = n < 1;
+  }
+}
+
+// Remove cards (and their photos) from this page, after a yes.
+async function deleteCards(ids) {
+  const n = ids.length;
+  const { ok } = await askConfirm({
+    title: `Delete ${n} card${n === 1 ? "" : "s"}?`,
+    html: `<p>${n === 1 ? "This card and its photo are" : `These ${n} cards and their photos are`} removed from this page.
+           Cards already added to your library stay there.</p>`,
+    confirm: "Delete",
+  });
+  if (!ok) return;
+  try {
+    const res = await api("/api/cards/delete", { method: "POST", body: JSON.stringify({ ids }) });
+    ids.forEach(id => state.selected.delete(id));
+    $("#upload-status").textContent = `Deleted ${res.deleted} card${res.deleted === 1 ? "" : "s"}.`;
+    await loadCards();
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 function escapeHtml(s) {
@@ -430,6 +456,7 @@ function setupTable() {
     if (!btn) return;
     const tr = ev.target.closest("tr");
     const id = parseInt(tr.dataset.id, 10);
+    if (btn.dataset.act === "delete") { await deleteCards([id]); return; }
     if (btn.dataset.act === "edit") openEdit(id);
     else if (btn.dataset.act === "price") {
       btn.disabled = true; btn.textContent = "…";
@@ -768,6 +795,7 @@ function setupToolbar() {
   }).catch(() => {});
 
   $("#bundle-btn").addEventListener("click", openBundle);
+  $("#delete-btn").addEventListener("click", () => deleteCards(Array.from(state.selected)));
 
   // Check every card against the real catalog: no AI call, a few seconds a go.
   $("#verify-btn").addEventListener("click", async () => {

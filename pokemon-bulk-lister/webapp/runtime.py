@@ -148,6 +148,32 @@ def save_file(path: Path) -> Optional[str]:
     return result.url
 
 
+def delete_file(path: Path) -> None:
+    """Remove a file kept with save_file: the local copy and, on a serverless
+    host, the stored one. A file that is already gone is not an error."""
+    try:
+        Path(path).unlink()
+    except OSError:
+        pass
+    if not blob_enabled():
+        return
+    from webapp.models import StoredFile, get_session
+
+    s = get_session()
+    try:
+        row = s.get(StoredFile, rel_path(path))
+        if row is None:
+            return
+        try:
+            _blob().delete_blob(row.url)
+        except Exception as exc:      # the record goes either way, so the app stops serving it
+            print(f"[storage] could not delete {row.path}: {exc}", file=sys.stderr)
+        s.delete(row)
+        s.commit()
+    finally:
+        s.close()
+
+
 def file_url(rel: str) -> Optional[str]:
     """Public URL of a stored file, or None if it only exists on local disk."""
     if not blob_enabled():

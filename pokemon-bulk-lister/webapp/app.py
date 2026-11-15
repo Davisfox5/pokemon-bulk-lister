@@ -303,6 +303,42 @@ def api_patch_card(card_id: int):
     return jsonify(card)
 
 
+@app.route("/api/cards/delete", methods=["POST"])
+def api_delete_cards():
+    """Remove scanned cards and their photos from this bench.
+    Body: {"ids": [..]} or {"all": true}. A card already added to a library
+    stays there; only its photo is kept for it."""
+    body = request.get_json(silent=True) or {}
+    everything = body.get("all") is True
+    ids = body.get("ids")
+    # Nothing is deleted unless the request says exactly what.
+    if not everything and (not isinstance(ids, list) or not ids):
+        return jsonify({"error": "ids (list) or all:true required"}), 400
+    if everything:
+        ids = None
+    with db.connect(DB_PATH) as conn:
+        gone = db.delete_cards(conn, ids)
+
+    # Photos a library entry still shows are kept.
+    from webapp.models import InventoryItem, get_session
+    s = get_session()
+    try:
+        in_library = {row[0] for row in s.query(InventoryItem.source_crop_path)
+                      .filter(InventoryItem.source_crop_path.isnot(None)).all()}
+    finally:
+        s.close()
+    for card in gone["cards"]:
+        if card.get("crop_path") and card["crop_path"] not in in_library:
+            runtime.delete_file(data_path(card["crop_path"]))
+    for grid in gone["grids"]:
+        if grid.get("original_path"):
+            runtime.delete_file(data_path(grid["original_path"]))
+        stem = Path(grid.get("original_path") or grid.get("filename") or "").stem
+        if stem:
+            runtime.delete_file(OUTPUT_DIR / "pages" / f"{stem}.jpg")
+    return jsonify({"deleted": len(gone["cards"]), "photos": len(gone["grids"])})
+
+
 @app.route("/api/cards/bulk", methods=["POST"])
 def api_bulk_update_cards():
     """Bulk update — paste a JSON list with crop_path keys to apply identifications.

@@ -36,6 +36,9 @@ class FakeBlob:
         self.files[pathname] = bytes(body)
         return type("Put", (), {"url": f"https://store1.public.blob.vercel-storage.com/{pathname}"})()
 
+    def delete_blob(self, url):
+        self.files.pop(url.split("/", 3)[-1], None)
+
     def get_blob(self, url_or_pathname, *, access):
         key = url_or_pathname.split(".vercel-storage.com/", 1)[-1]
         return type("Get", (), {"body": self.files[key]})()
@@ -348,6 +351,22 @@ assert session["logged_in"] is True and session["operator"] is False
 assert ann.get("/api/publish/status", headers=public).status_code == 403
 assert ann.get("/api/connections", headers=public).status_code == 403
 assert ann.post("/api/publish/ebay", headers=public).status_code == 403
+
+# ---------------------------------------------------------------- cards can be deleted, each account its own
+assert ann.post("/api/cards/delete", headers=public, json={"ids": [ben_card]}).get_json()["deleted"] == 0
+assert ben.get(f"/api/cards/{ben_card}", headers=public).status_code == 200
+assert ann.post("/api/cards/delete", headers=public, json={}).status_code == 400
+extra = bench_card(ann_id, "todelete")
+blob.files["output/crops/todelete_r0c0.jpg"] = b"x"
+s = models.get_session()
+s.add(models.StoredFile(path="output/crops/todelete_r0c0.jpg", url="https://store1.public.blob.vercel-storage.com/output/crops/todelete_r0c0.jpg"))
+s.commit()
+s.close()
+r = ann.post("/api/cards/delete", headers=public, json={"ids": [extra]}).get_json()
+assert r == {"deleted": 1, "photos": 1}, r
+assert ann.get(f"/api/cards/{extra}", headers=public).status_code == 404
+assert "output/crops/todelete_r0c0.jpg" not in blob.files           # the stored photo went with it
+assert ann.get(f"/api/cards/{ann_card}", headers=public).status_code == 200
 
 # ---------------------------------------------------------------- an iPhone photo (HEIC) is read like any other
 import pillow_heif  # noqa: E402

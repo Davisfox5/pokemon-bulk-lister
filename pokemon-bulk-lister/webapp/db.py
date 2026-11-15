@@ -409,6 +409,36 @@ def adopt_unowned(conn: sqlite3.Connection, user_id: int) -> None:
         conn.execute(f"UPDATE {table} SET owner_id = ? WHERE owner_id IS NULL", (int(user_id),))
 
 
+def delete_cards(conn: sqlite3.Connection, card_ids: Optional[list[int]] = None) -> dict:
+    """Delete cards from the current owner's bench: the ones named, or all of
+    them when card_ids is None. A photo with no cards left goes too. Returns
+    {"cards": [the deleted rows], "grids": [the deleted photo rows]} so the
+    caller can remove their files."""
+    mine, args = _mine()
+    if card_ids is None:
+        rows = conn.execute(f"SELECT * FROM cards WHERE {mine}", args).fetchall()
+    else:
+        ids = [int(i) for i in card_ids]
+        if not ids:
+            return {"cards": [], "grids": []}
+        marks = ",".join("?" for _ in ids)
+        rows = conn.execute(f"SELECT * FROM cards WHERE id IN ({marks}) AND {mine}", ids + args).fetchall()
+    cards = [dict(r) for r in rows]
+    grids: list[dict] = []
+    for card in cards:
+        conn.execute(f"DELETE FROM cards WHERE id = ? AND {mine}", [card["id"]] + args)
+    for grid_id in sorted({c["grid_id"] for c in cards if c.get("grid_id") is not None}):
+        left = conn.execute("SELECT COUNT(*) AS n FROM cards WHERE grid_id = ?", (grid_id,)).fetchone()
+        if int(left["n"]) == 0:
+            row = conn.execute(f"SELECT * FROM grids WHERE id = ? AND {mine}", [grid_id] + args).fetchone()
+            if row:
+                grids.append(dict(row))
+                conn.execute(f"DELETE FROM grids WHERE id = ? AND {mine}", [grid_id] + args)
+        else:
+            update_grid_count(conn, grid_id)
+    return {"cards": cards, "grids": grids}
+
+
 def get_card(conn: sqlite3.Connection, card_id: int, any_owner: bool = False) -> Optional[dict]:
     """One card of the current owner's bench. any_owner is for the few jobs
     that act for the whole install by a card's globally unique id (marking a
