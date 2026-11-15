@@ -162,11 +162,156 @@ def set_cards(set_id: str) -> list[dict]:
                   "rarity": c.get("rarity")}
                  for c in _all_pages("/cards", {"q": f"set.id:{set_id}", "select": "id,name,number,rarity"})]
     except Exception:
-        if cards is not None:
-            return cards
-        raise
+        try:
+            fresh = _mirror_cards(set_id)
+        except Exception:
+            if cards is not None:
+                return cards
+            raise
     _store.set(key, {"at": time.time(), "cards": fresh})
     return fresh
+
+
+MIRROR = "https://raw.githubusercontent.com/PokemonTCG/pokemon-tcg-data/master/cards/en"
+
+
+def _mirror_cards(set_id: str) -> list[dict]:
+    """A set's card list from the catalog's own data repository, which stays
+    up when its API does not. No prices there, which this does not need."""
+    if os.getenv("CARD_CATALOG_OFFLINE") == "1" or not re.fullmatch(r"[a-z0-9]+", set_id or ""):
+        raise RuntimeError("card catalog unreachable")
+    import requests
+
+    r = requests.get(f"{MIRROR}/{set_id}.json", timeout=15)
+    r.raise_for_status()
+    return [{"id": c.get("id"), "name": c.get("name") or "", "number": str(c.get("number") or ""),
+             "rarity": c.get("rarity")} for c in r.json()]
+
+
+# ---------------------------------------------------------------- Japanese cards
+#
+# The catalog is English. A Japanese card is named from a table (the printed
+# name -> the English one, no model), and checked by number only where an
+# English set prints the same cards under the same numbers.
+
+JA_NAMES = ROOT / "data" / "pokemon_names_ja.json"
+JA_SETS = ROOT / "data" / "ja_sets.json"
+JAPANESE = "(Japanese)"
+
+_OWNERS = {"ロケット団": "Team Rocket's", "N": "N's", "ヒビキ": "Ethan's", "リーリエ": "Lillie's", "マリィ": "Marnie's",
+           "ナンジャモ": "Iono's", "ホップ": "Hop's", "ダイゴ": "Steven's", "シロナ": "Cynthia's", "カスミ": "Misty's"}
+_REGIONS = {"アローラ": "Alolan", "ガラル": "Galarian", "ヒスイ": "Hisuian", "パルデア": "Paldean"}
+_FORMS = {"ヒートロトム": "Heat Rotom", "ウォッシュロトム": "Wash Rotom", "フロストロトム": "Frost Rotom",
+          "スピンロトム": "Fan Rotom", "カットロトム": "Mow Rotom"}
+_ja_names: Optional[dict] = None
+_ja_sets: Optional[dict] = None
+
+
+def is_japanese(text: Optional[str]) -> bool:
+    """Has kana or kanji in it."""
+    return bool(re.search(r"[\u3040-\u30ff\u4e00-\u9fff]", text or ""))
+
+
+def _ja_table() -> dict:
+    global _ja_names
+    if _ja_names is None:
+        try:
+            _ja_names = json.loads(JA_NAMES.read_text(encoding="utf-8"))["names"]
+        except (OSError, ValueError, KeyError):
+            _ja_names = {}
+    return _ja_names
+
+
+def japanese_set(printed_code: Optional[str]) -> Optional[dict]:
+    """What is known of a Japanese set from the code printed on the card
+    ("sv11W"): name, total, and the English twin set if there is one."""
+    global _ja_sets
+    if _ja_sets is None:
+        try:
+            _ja_sets = json.loads(JA_SETS.read_text(encoding="utf-8"))["sets"]
+        except (OSError, ValueError, KeyError):
+            _ja_sets = {}
+    return _ja_sets.get((printed_code or "").strip().lower())
+
+
+def japanese_set_named(set_name: Optional[str]) -> Optional[dict]:
+    """The same, from a stored set name such as "White Flare (Japanese)"."""
+    japanese_set("")
+    plain = _norm((set_name or "").replace(JAPANESE, ""))
+    for row in (_ja_sets or {}).values():
+        if _norm(row.get("name")) == plain:
+            return row
+    return None
+
+
+def english_name(printed: Optional[str]) -> Optional[str]:
+    """The English name of a card from its printed Japanese name, or None
+    when the table does not have it (trainers, items)."""
+    text = unicodedata.normalize("NFKC", printed or "").strip()
+    text = re.sub(r"\s+", "", text)
+    suffix = ""
+    m = re.search(r"(ex|EX|GX|VMAX|VSTAR|V)$", text)
+    if m and is_japanese(text[:m.start()]):
+        suffix, text = " " + m.group(1), text[:m.start()]
+    owner = ""
+    for ja, en in _OWNERS.items():
+        if text.startswith(ja + "の"):
+            owner, text = en + " ", text[len(ja) + 1:]
+            break
+    region = ""
+    for ja, en in _REGIONS.items():
+        if text.startswith(ja) and text[len(ja):] in _ja_table():
+            region, text = en + " ", text[len(ja):]
+            break
+    base = _FORMS.get(text) or _ja_table().get(text)
+    return f"{owner}{region}{base}{suffix}" if base else None
+
+
+def resolve_japanese(name_printed: str, name_read: Optional[str] = None, number: Optional[str] = None,
+                     total: Any = None, printed_code: Optional[str] = None,
+                     set_name_read: Optional[str] = None) -> dict:
+    """Check a Japanese card. Same shape as resolve():
+      verified  the printed name translates to a card that is, once, in the
+                English set that reprints this one (its numbers differ, so
+                the number stays as read).
+      probable  the printed name is in the name table, so the name is right;
+                the set and number are as read.
+      unknown   neither: what the reader made of it stands.
+    The set name carries "(Japanese)" and there is no set_code: the catalog
+    ids are English sets."""
+    num = _number(number)
+    known = japanese_set(printed_code)
+    if known is None and _total(total):
+        fits = [s for s in (japanese_set("") or _ja_sets or {}).values() if s.get("total") == _total(total)]
+        known = fits[0] if len(fits) == 1 else None
+    set_name = (known or {}).get("name") or (set_name_read or "").replace(JAPANESE, "").strip()
+    set_name = f"{set_name} {JAPANESE}".strip()
+    translated = english_name(name_printed)
+
+    def record(name: str, rarity: Optional[str] = None) -> dict:
+        return {"name": name, "set_name": set_name, "set_code": "", "card_number": num or (number or ""),
+                "rarity": rarity}
+
+    twin = (known or {}).get("twin")
+    if twin and translated:
+        try:
+            cards = set_cards(twin)
+        except Exception:
+            cards = []
+        named = ([c for c in cards if c["name"].casefold() == translated.casefold()]       # "Nidoran♂" is not "Nidoran♀"
+                 or [c for c in cards if _norm(c["name"]) == _norm(translated)])
+        if named:
+            # A set lists its ordinary printing first and the full-art ones
+            # after the printed total. A number within the total is the
+            # ordinary one; past it the rarity is not known from here.
+            ordinary = len(named) == 1 or (num.isdigit() and int(num) <= int((known or {}).get("total") or 0))
+            return {"status": "verified", "card": record(named[0]["name"], named[0].get("rarity") if ordinary else None),
+                    "why": ""}
+    if translated:
+        return {"status": "probable", "card": record(translated),
+                "why": "named from the printed Japanese name; the English catalog has no list for this set"}
+    return {"status": "unknown", "card": record((name_read or "").strip()) if name_read else None,
+            "why": "a Japanese card the name table does not have"}
 
 
 # ---------------------------------------------------------------- matching

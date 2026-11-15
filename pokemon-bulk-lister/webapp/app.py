@@ -853,6 +853,12 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     set_code = card.get("set_code") or None
     card_number = card.get("card_number") or None
     is_holo = bool(card.get("is_holo"))
+    # A Japanese card has no price source of its own here. The English
+    # printing's price is shown as a guide and always flagged for a look.
+    japanese = (set_name or "").endswith(_card_catalog.JAPANESE)
+    if japanese:
+        twin = (_card_catalog.japanese_set_named(set_name) or {}).get("twin")
+        set_name, set_code, card_number = None, twin, None      # the English set numbers its cards differently
 
     tcg_price: Optional[float] = None
     cm_eur: Optional[float] = None
@@ -868,6 +874,10 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         ({"set_code": None, "card_number": card_number},     "no_set"),
         ({"set_code": None, "card_number": None},            "name_only"),
     ]
+    if japanese:
+        # Only the English set that reprints this one. A match by name alone
+        # is some other printing, and its price says nothing about this card.
+        attempts = [({"set_code": set_code, "card_number": None}, "exact")] if set_code else []
     seen: set = set()
     for kwargs, level in attempts:
         key = (kwargs.get("set_code"), kwargs.get("card_number"))
@@ -895,7 +905,7 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     # Cardmarket daily price-guide fallback: only when pokemontcg.io gave no
     # Cardmarket price. Name-only match, so the guide refuses ambiguous cards.
     cm_fallback_note: Optional[str] = None
-    if cm_eur is None and CARDMARKET_FALLBACK and name:
+    if cm_eur is None and CARDMARKET_FALLBACK and name and not japanese:
         try:
             cm_eur, cm_fallback_note = get_cardmarket().lookup_trend_eur(name, is_holo=is_holo)
             if cm_eur is None:
@@ -917,6 +927,8 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
                 f"name-only match to {matched_set_id} — set_code was not provided, "
                 "match may not reflect the actual printing"
             )
+        if japanese:
+            match_warning = "Japanese card: this is the English printing's price, check before listing"
         if tcg_price and cm_usd and tcg_price > 0 and cm_usd > 0:
             ratio = max(tcg_price, cm_usd) / min(tcg_price, cm_usd)
             if ratio > 3.0:
@@ -966,6 +978,9 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     # but mis-prices the listing).
     final_conf = result.confidence
     final_needs_review = result.needs_review
+    if japanese and not match_warning and result.price is not None:
+        match_warning = "Japanese card: this is the English printing's price, check before listing"
+        notes_parts.append(f"⚠ {match_warning}")
     if match_warning:
         final_conf = min(final_conf, 0.2)
         final_needs_review = True
@@ -1099,6 +1114,23 @@ def _checked_identity(fields: dict, total: Any = None, printed_code: Optional[st
     name = (fields.get("name") or "").strip()
     if not name:
         return {}, "unnamed"
+    printed = (fields.get("name_printed") or "").strip()
+    if not printed and (fields.get("set_name") or "").endswith(card_catalog.JAPANESE):
+        return {}, "unknown"            # already filed as a Japanese card; nothing printed left to check
+    if card_catalog.is_japanese(printed) or card_catalog.is_japanese(name) or fields.get("language") == "ja":
+        found = card_catalog.resolve_japanese(printed or name, name_read=name, number=fields.get("card_number"),
+                                              total=total, printed_code=printed_code,
+                                              set_name_read=fields.get("set_name"))
+        real = found["card"] or {}
+        read = float(fields.get("id_confidence") or 0.0)
+        changes = {k: real[k] for k in ("name", "set_name", "set_code", "card_number") if real.get(k) is not None}
+        if real.get("rarity"):
+            changes["rarity"] = real["rarity"]
+        if found["status"] == "verified":
+            changes["id_confidence"] = ID_VERIFIED
+        elif found["status"] == "probable":
+            changes["id_confidence"] = round(max(read, ID_PROBABLE), 3)
+        return changes, found["status"]
     try:
         found = card_catalog.resolve(name, fields.get("card_number"), total=total, printed_code=printed_code,
                                      set_code=fields.get("set_code"), set_name=fields.get("set_name"))
@@ -1132,12 +1164,13 @@ def _identification_patch(res: dict, card: dict) -> dict[str, Any]:
         "is_holo": bool(res.get("is_holo")),
         "id_confidence": round(float(res.get("confidence") or 0.0), 3),
     }
+    checked = dict(patch, name_printed=res.get("name_printed"), language=(res.get("language") or "").strip().lower())
     if not (card.get("condition_guess") or "").strip():
         patch["condition_guess"] = "NM"  # inventory default: Near Mint unless noted
     # Does a card with this name and number exist? Asked of the catalog, not
     # of a model. The catalog's own spelling, set and rarity replace the
     # reading when it does.
-    changes, _ = _checked_identity(patch, total=res.get("number_total"), printed_code=res.get("set_code_printed"))
+    changes, _ = _checked_identity(checked, total=res.get("number_total"), printed_code=res.get("set_code_printed"))
     patch.update(changes)
     return patch
 

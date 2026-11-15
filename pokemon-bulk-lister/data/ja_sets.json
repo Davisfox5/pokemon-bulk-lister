@@ -1,0 +1,8 @@
+{
+  "note": "Japanese sets, by the code printed on the card. twin is the English set (pokemontcg.io id) that reprints the same cards, under its own numbers.",
+  "sets": {
+    "sv10": {"name": "Glory of Team Rocket", "total": 98, "twin": "sv10"},
+    "sv11w": {"name": "White Flare", "total": 86, "twin": "rsv10pt5"},
+    "sv11b": {"name": "Black Bolt", "total": 86, "twin": "zsv10pt5"}
+  }
+}

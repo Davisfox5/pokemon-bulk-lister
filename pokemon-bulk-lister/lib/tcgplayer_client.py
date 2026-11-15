@@ -49,6 +49,9 @@ class TCGPlayerClient:
             if resp.status_code == 429:
                 time.sleep(2 ** attempt)
                 continue
+            if resp.status_code >= 500 and attempt < 2:      # it answers 5xx about as often as not
+                time.sleep(0.6 * (attempt + 1))
+                continue
             resp.raise_for_status()
             return resp.json()
         if last_exc is not None:
@@ -97,6 +100,14 @@ class TCGPlayerClient:
             for c in cards:
                 if str(c.get("number", "")).lstrip("0") == str(card_number).lstrip("0"):
                     return c
+        if set_code and not card_number:
+            # Several printings of one name in a set: the ordinary one has
+            # the lowest number, the full-art ones come after the printed total.
+            def order(c: dict) -> tuple:
+                digits = "".join(ch for ch in str(c.get("number", "")) if ch.isdigit())
+                return (0, int(digits)) if str(c.get("number", "")).isdigit() else (1, int(digits or 0))
+            exact = [c for c in cards if (c.get("name") or "").lower() == (name or "").lower()]
+            return min(exact or cards, key=order)
         return cards[0]
 
     def market_price(self, card: dict, prefer_holo: bool = False) -> Optional[float]:

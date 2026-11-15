@@ -4,6 +4,7 @@ import time
 import pytest
 
 from lib import card_catalog as cc
+card_catalog = cc
 
 SETS = [
     {"id": "sv8", "name": "Surging Sparks", "ptcgoCode": "SSP", "printedTotal": 191, "releaseDate": "2024/11/08"},
@@ -88,3 +89,65 @@ def test_the_prompt_lists_the_newest_sets_first():
     text = cc.prompt_reference(2)
     assert text.splitlines()[0].startswith("30th Celebration | id me55 | printed code 30C | 128 cards")
     assert len(text.splitlines()) == 2
+
+
+# ---------------------------------------------------------------- Japanese cards
+
+def test_japanese_names_come_from_a_table_not_a_model():
+    assert card_catalog.english_name("ガントル") == "Boldore"
+    assert card_catalog.english_name("モンメン") == "Cottonee"
+    assert card_catalog.english_name("ロケット団のニドラン♂") == "Team Rocket's Nidoran♂"
+    assert card_catalog.english_name("カットロトム") == "Mow Rotom"
+    assert card_catalog.english_name("ヒスイダイケンキ") == "Hisuian Samurott"
+    assert card_catalog.english_name("ピカチュウex") == "Pikachu ex"
+    assert card_catalog.english_name("ロケット団のサカキ") is None          # a trainer: not in the table
+    assert card_catalog.is_japanese("ダゲキ") and not card_catalog.is_japanese("Sawk")
+
+
+def test_a_japanese_card_is_named_and_filed_as_japanese():
+    found = card_catalog.resolve_japanese("ロケット団のドガース", name_read="Koffing", number="069", total="098",
+                                          printed_code="sv10")
+    assert found["status"] == "probable"
+    assert found["card"] == {"name": "Team Rocket's Koffing", "set_name": "Glory of Team Rocket (Japanese)",
+                             "set_code": "", "card_number": "69", "rarity": None}
+    # A trainer keeps the name the reader gave it.
+    found = card_catalog.resolve_japanese("ロケット団のサカキ", name_read="Team Rocket's Giovanni", number="093",
+                                          printed_code="sv10")
+    assert found["status"] == "unknown" and found["card"]["name"] == "Team Rocket's Giovanni"
+    assert found["card"]["set_name"] == "Glory of Team Rocket (Japanese)"
+
+
+def test_a_japanese_card_is_verified_against_an_english_twin_set(monkeypatch):
+    monkeypatch.setattr(card_catalog, "set_cards", lambda set_id: [
+        {"id": "rsv10pt5-4", "name": "Cottonee", "number": "4", "rarity": "Common"},
+        {"id": "rsv10pt5-5", "name": "Whimsicott", "number": "5", "rarity": "Uncommon"}] if set_id == "rsv10pt5" else [])
+    found = card_catalog.resolve_japanese("モンメン", name_read="Munna", number="012", total="086", printed_code="sv11W")
+    assert found["status"] == "verified"         # the English set numbers it 4; the Japanese number is kept
+    assert found["card"] == {"name": "Cottonee", "set_name": "White Flare (Japanese)", "set_code": "",
+                             "card_number": "12", "rarity": "Common"}
+    monkeypatch.setattr(card_catalog, "set_cards", lambda set_id: [
+        {"id": "a", "name": "Team Rocket's Nidoran♀", "number": "110", "rarity": "Common"},
+        {"id": "b", "name": "Team Rocket's Nidoran♂", "number": "114", "rarity": "Common"}])
+    found = card_catalog.resolve_japanese("ロケット団のニドラン♂", number="061", printed_code="sv10")
+    assert found["card"]["name"] == "Team Rocket's Nidoran♂"
+    monkeypatch.setattr(card_catalog, "set_cards", lambda set_id: [
+        {"id": "rsv10pt5-4", "name": "Cottonee", "number": "4", "rarity": "Common"}])
+    # A name the English set does not have is still named, not verified.
+    found = card_catalog.resolve_japanese("ダゲキ", number="046", printed_code="sv11W")
+    assert found["status"] == "probable" and found["card"]["name"] == "Sawk"
+    # A trainer the table cannot name is never matched by number alone.
+    found = card_catalog.resolve_japanese("古びたはねの化石", name_read="Plume Fossil", number="005", printed_code="sv11W")
+    assert found["status"] == "unknown" and found["card"]["name"] == "Plume Fossil"
+    assert card_catalog.japanese_set_named("White Flare (Japanese)")["twin"] == "rsv10pt5"
+
+
+def test_a_set_list_comes_from_the_mirror_when_the_api_is_down(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(card_catalog, "_store", type("S", (), {"get": lambda self, k: saved.get(k),
+                                                               "set": lambda self, k, v: saved.__setitem__(k, v)})())
+    def down(*a, **k):
+        raise RuntimeError("card catalog unreachable")
+    monkeypatch.setattr(card_catalog, "_all_pages", down)
+    monkeypatch.setattr(card_catalog, "_mirror_cards", lambda set_id: [{"id": "x-1", "name": "Fennekin", "number": "25", "rarity": "Common"}])
+    assert card_catalog.set_cards("swsh12")[0]["name"] == "Fennekin"
+    assert saved["set-cards:swsh12"]["cards"][0]["number"] == "25"

@@ -106,6 +106,12 @@ runtime routing audit. This section covers what the tool calls when it runs.
   catalog cache (sets, each set's card list) lives in `app_state` under
   `catalog:*`; `data/sets.json` is the bundled fallback. Tests run with
   `CARD_CATALOG_OFFLINE=1`.
+- A set's card list falls back to the catalog's data repository on GitHub when
+  its API is down. Japanese cards are named from a table with no model call
+  (`data/pokemon_names_ja.json`, printed name to English name), filed with
+  "(Japanese)" on the set name and no `set_code`, and checked by name against the
+  English set that reprints them (`data/ja_sets.json`; numbers differ, so the
+  printed number is kept). Their price is the English printing's, always flagged.
 - That is the correct tier and it should stay there. Identification is constrained
   extraction with a JSON schema through `output_config.format`, which is exactly
   Haiku's job, and it runs at binder-page volume where a higher tier would be

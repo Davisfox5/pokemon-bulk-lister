@@ -45,7 +45,9 @@ JPEG_QUALITY = 85
 _CARD_PROPS = {
     "row": {"type": "integer", "description": "0-indexed row in the grid, top to bottom"},
     "col": {"type": "integer", "description": "0-indexed column in the grid, left to right"},
-    "name": {"type": "string", "description": "Card name as printed, e.g. 'Pikachu ex'. Empty string if unreadable."},
+    "name": {"type": "string", "description": "Card name in English, e.g. 'Pikachu ex'. For a card printed in another language, its English name. Empty string if unreadable."},
+    "name_printed": {"type": "string", "description": "The card name exactly as printed, in the card's own script, e.g. 'ロケット団のニドラン♂'. Same as name for an English card."},
+    "language": {"type": "string", "description": "Language the card is printed in: 'en', 'ja', or another two-letter code."},
     "set_name": {"type": "string", "description": "Set name, e.g. 'Surging Sparks'. Empty string if unknown."},
     "set_code": {
         "type": "string",
@@ -84,6 +86,11 @@ _SYSTEM = (
     "swsh12, sv3pt5, sv8), and only when the printed code or total identifies the set, "
     "or the list of recent sets below does. Sets newer than your training exist: do not "
     "assign a card to a set you remember just because the Pokémon matches. "
+    "Cards in other languages turn up, Japanese most often. Copy the printed name "
+    "character for character into name_printed and set language; the printed name is "
+    "translated from a table afterwards, so an exact copy matters more than your own "
+    "translation. Japanese cards print their set code in a small box at the bottom left "
+    "(for example 'sv10', 'sv11W'): put that in set_code_printed and leave set_code empty. "
     "Accuracy matters more than completeness: leave a field as an empty string rather "
     "than guessing, and reflect any uncertainty in the confidence score. Glare, sleeves, "
     "and partial occlusion are common — do your best."
