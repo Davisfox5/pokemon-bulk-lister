@@ -121,6 +121,19 @@ runtime routing audit. This section covers what the tool calls when it runs.
   "(Japanese)" on the set name and no `set_code`, and checked by name against the
   English set that reprints them (`data/ja_sets.json`; numbers differ, so the
   printed number is kept). Their price is the English printing's, always flagged.
+- What was read off a card (printed name, the total after the slash, the printed
+  set code) is kept with it in `cards.id_read`, so a later check has it. A card
+  the catalog could not settle gets a Choose button on Scan: `GET
+  /api/cards/<id>/choices` lists the real cards it could be (no model call), or
+  the person types it in or has the photo read again.
+- The Scan table keeps itself current (`loadCards` every few seconds and on each
+  job step). A named card with no price and no pricing note is priced in the
+  background by the page (`priceWaitingCards`); changing which card it is clears
+  both (`db.update_card`), which is how an edit gets priced again.
+- A price is for the card's finish (`lib/printing.py`). Old sets list theirs as
+  `unlimited`; a card printed in one ordinary finish takes that one; a reverse
+  holo or 1st Edition price never stands in for another card
+  (`tcgplayer_client._variant_key`).
 - That is the correct tier and it should stay there. Identification is constrained
   extraction with a JSON schema through `output_config.format`, which is exactly
   Haiku's job, and it runs at binder-page volume where a higher tier would be

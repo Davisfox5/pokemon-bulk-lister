@@ -287,3 +287,17 @@ details.sales-panel { display: block; }
   .compact-prices td:nth-child(10) { grid-column: 2 / 4; grid-row: 5; white-space: normal; }
   .compact-prices td[colspan] { grid-column: 1 / -1; }
 }
+
+/* Which card is this */
+.choose-card { max-width: 640px; }
+.choose-side { flex: 1; min-width: 0; display: grid; gap: 10px; align-content: start; }
+.choose-list { display: grid; gap: 6px; max-height: 46vh; overflow: auto; }
+.choose-opt { display: flex; gap: 8px; align-items: flex-start; padding: 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.choose-opt:has(input:checked) { border-color: var(--accent); background: #eff6ff; }
+.choose-opt input { margin-top: 3px; }
+.choose-other { display: flex; gap: 8px; flex-wrap: wrap; }
+.pricing-now { color: var(--muted); font-weight: 400; }
+@media (max-width: 640px) {
+  #choose-modal .modal-body { flex-direction: column; }
+  #choose-modal .modal-body img { max-width: 120px; max-height: 170px; }
+}

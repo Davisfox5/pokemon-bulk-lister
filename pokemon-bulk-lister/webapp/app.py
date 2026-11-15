@@ -1166,6 +1166,14 @@ def _checked_identity(fields: dict, total: Any = None, printed_code: Optional[st
     name = (fields.get("name") or "").strip()
     if not name:
         return {}, "unnamed"
+    # A card checked again later still has what was printed on it.
+    read = _id_read(fields)
+    if total in (None, ""):
+        total = read.get("number_total")
+    if not printed_code:
+        printed_code = read.get("set_code_printed")
+    fields = {**fields, "name_printed": fields.get("name_printed") or read.get("name_printed"),
+              "language": fields.get("language") or read.get("language")}
     printed = (fields.get("name_printed") or "").strip()
     if not printed and (fields.get("set_name") or "").endswith(card_catalog.JAPANESE):
         return {}, "unknown"            # already filed as a Japanese card; nothing printed left to check
@@ -1208,6 +1216,48 @@ def _checked_identity(fields: dict, total: Any = None, printed_code: Optional[st
     return {}, status           # catalog unreachable: leave the reading as it is
 
 
+def _id_read(card: dict) -> dict:
+    """What the reader saw printed on a card, kept with it (cards.id_read)."""
+    try:
+        read = json.loads(card.get("id_read") or "{}")
+    except (TypeError, ValueError):
+        read = {}
+    return read if isinstance(read, dict) else {}
+
+
+@app.route("/api/cards/<int:card_id>/choices")
+def api_card_choices(card_id: int):
+    """The real cards this one could be, for a person to pick from. No model call."""
+    from lib import card_catalog
+
+    with db.connect(DB_PATH) as conn:
+        card = db.get_card(conn, card_id)
+    if not card:
+        abort(404)
+    read = _id_read(card)
+    name = (card.get("name") or "").strip()
+    printed = (read.get("name_printed") or "").strip()
+    found: list[dict] = []
+    if name:
+        try:
+            if card_catalog.is_japanese(printed) or (card.get("set_name") or "").endswith(card_catalog.JAPANESE):
+                one = card_catalog.resolve_japanese(printed or name, name_read=name, number=card.get("card_number"),
+                                                    total=read.get("number_total"),
+                                                    printed_code=read.get("set_code_printed"),
+                                                    set_name_read=card.get("set_name"))
+                if one.get("card") and one["status"] in ("verified", "probable"):
+                    found = [{**one["card"], "why": "named from the printed Japanese name"}]
+            else:
+                found = card_catalog.choices(name, card.get("card_number"), total=read.get("number_total"),
+                                             printed_code=read.get("set_code_printed"),
+                                             set_code=card.get("set_code"), set_name=card.get("set_name"))
+        except Exception as exc:
+            print(f"[identify] choices for {name}: {exc}", file=sys.stderr)
+    current = {k: card.get(k) for k in ("name", "set_name", "set_code", "card_number", "rarity")}
+    return jsonify({"choices": found, "current": current,
+                    "read": {k: read.get(k) for k in ("name_printed", "number_total", "set_code_printed")}})
+
+
 def _identification_patch(res: dict, card: dict) -> dict[str, Any]:
     num = (res.get("card_number") or "").strip()
     num = num.lstrip("0") or num  # pokemontcg.io numbers carry no leading zeros
@@ -1222,6 +1272,13 @@ def _identification_patch(res: dict, card: dict) -> dict[str, Any]:
         "id_confidence": round(float(res.get("confidence") or 0.0), 3),
     }
     checked = dict(patch, name_printed=res.get("name_printed"), language=(res.get("language") or "").strip().lower())
+    patch["id_read"] = json.dumps({
+        "name": patch["name"], "name_printed": (res.get("name_printed") or "").strip(),
+        "language": checked["language"], "card_number": (res.get("card_number") or "").strip(),
+        "number_total": str(res.get("number_total") or "").strip(),
+        "set_code_printed": (res.get("set_code_printed") or "").strip(),
+        "set_name": patch["set_name"], "set_code": patch["set_code"],
+    }, ensure_ascii=False)
     if not (card.get("condition_guess") or "").strip():
         patch["condition_guess"] = "NM"  # inventory default: Near Mint unless noted
     # Does a card with this name and number exist? Asked of the catalog, not

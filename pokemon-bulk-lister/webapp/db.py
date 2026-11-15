@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS cards (
     col                     INTEGER,
 
     printing                TEXT,
+    id_read                 TEXT,
 
     -- identification (filled by you / Claude vision)
     name                    TEXT,
@@ -125,7 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_cards_name         ON cards(name);
 CARD_FIELDS = (
     "id", "grid_id", "crop_path", "row", "col",
     "name", "set_name", "set_code", "card_number", "rarity",
-    "is_holo", "printing", "condition_guess", "id_confidence",
+    "is_holo", "printing", "id_read", "condition_guess", "id_confidence",
     "tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
     "ebay_median_30d", "ebay_max_30d", "ebay_sold_count_30d",
     "terapeak_median_usd", "terapeak_sold_count_365d",
@@ -146,6 +147,7 @@ _MIGRATIONS = (
     ("listed_at", "TEXT"),
     ("owner_id", "INTEGER"),
     ("printing", "TEXT"),
+    ("id_read", "TEXT"),       # JSON: what was read off the card (printed name, total, set code)
 )
 _GRID_MIGRATIONS = (
     ("owner_id", "INTEGER"),
@@ -284,6 +286,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 # A database made before benches had owners.
                 conn.execute("ALTER TABLE grids ADD COLUMN IF NOT EXISTS owner_id BIGINT")
                 conn.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS owner_id BIGINT")
+                # CREATE TABLE IF NOT EXISTS leaves a table that is already
+                # there as it was, so columns added since are added here.
+                for column, coltype in _MIGRATIONS:
+                    if column != "owner_id":
+                        conn.execute(f"ALTER TABLE cards ADD COLUMN IF NOT EXISTS {column} {coltype}")
                 conn.execute(_OWNER_INDEX)
             return
         conn.executescript(SCHEMA)

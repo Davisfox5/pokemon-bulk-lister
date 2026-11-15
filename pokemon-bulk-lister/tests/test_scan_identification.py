@@ -136,3 +136,81 @@ def test_pricing_keeps_identity_and_printing_disagreements_visible(bench, monkey
     assert patch['needs_review'] and patch['pricing_confidence'] <= 0.2
     assert '⚠' in patch['pricing_notes']
     assert ('card number was not used' if drop_number else 'identification needs review') in patch['pricing_notes']
+
+
+# ---------------------------------------------------------------- which card is this
+
+def _two_sets(monkeypatch):
+    from lib import card_catalog as cc
+    sets = [{"id": "old128", "name": "Old Set", "printedTotal": 128, "ptcgoCode": "OLD", "releaseDate": "2010/01/01"},
+            {"id": "new128", "name": "New Set", "printedTotal": 128, "ptcgoCode": "NEW", "releaseDate": "2024/01/01"}]
+    cards = {"old128": [{"id": "o23", "name": "Geodude", "number": "23", "rarity": "Common"},
+                        {"id": "o24", "name": "Graveler", "number": "24", "rarity": "Uncommon"}],
+             "new128": [{"id": "n23", "name": "Geodude", "number": "23", "rarity": "Common"},
+                        {"id": "n77", "name": "Pikachu", "number": "77", "rarity": "Common"}]}
+    monkeypatch.setattr(cc, "sets", lambda: sets)
+    monkeypatch.setattr(cc, "set_cards", lambda set_id: cards[set_id])
+    return cc
+
+
+def test_choices_lists_the_cards_a_doubtful_reading_could_be(monkeypatch):
+    cc = _two_sets(monkeypatch)
+    # The same name and number in two sets of one size: both, newest set first.
+    both = cc.choices("Geodude", "23", total=128)
+    assert [(c["set_code"], c["why"]) for c in both] == [("new128", "name and number match"),
+                                                          ("old128", "name and number match")]
+    # A number that belongs to another card: the named card first, then the card with that number.
+    mixed = cc.choices("Pikachu", "24", total=128)
+    assert [(c["name"], c["card_number"]) for c in mixed] == [("Pikachu", "77"), ("Graveler", "24")]
+    assert cc.choices("Nosuchmon", "99", total=128) == []
+
+
+def test_what_was_printed_stays_with_the_card_and_is_used_when_it_is_checked_again(bench, monkeypatch):
+    import json
+    cc = _two_sets(monkeypatch)
+    cards, _ = add_cards(bench, 1)
+    patch = bench._identification_patch(
+        dict(name="Pikachu", set_name="Old Set", set_code="", card_number="077", number_total="128",
+             set_code_printed="NEW", name_printed="Pikachu", language="en", confidence=0.9), cards[0])
+    assert json.loads(patch["id_read"])["number_total"] == "128"
+    assert (patch["set_code"], patch["id_confidence"]) == ("new128", bench.ID_VERIFIED)
+
+    # Later the set is wrong on file. The printed total and code still find it.
+    with db.connect(bench.DB_PATH) as conn:
+        db.update_card(conn, cards[0]["id"], {**{k: v for k, v in patch.items() if not k.startswith("_")},
+                                             "set_name": "Old Set", "set_code": "old128", "id_confidence": 0.5})
+        card = db.get_card(conn, cards[0]["id"])
+    changes, status = bench._checked_identity(card)
+    assert status == "verified" and changes["set_code"] == "new128"
+
+    client = bench.app.test_client()
+    data = client.get(f"/api/cards/{cards[0]['id']}/choices").get_json()
+    assert data["read"]["number_total"] == "128"
+    assert [c["set_code"] for c in data["choices"]] == ["new128"]
+    assert client.get("/api/cards/999999/choices").status_code == 404
+
+
+def test_changing_which_card_it_is_clears_the_old_price_so_it_is_priced_again(bench):
+    cards, _ = add_cards(bench, 1)
+    client = bench.app.test_client()
+    cid = cards[0]["id"]
+    with db.connect(bench.DB_PATH) as conn:
+        db.update_card(conn, cid, {"name": "Geodude", "set_code": "old128", "card_number": "23", "id_confidence": 0.97})
+        db.update_card(conn, cid, {"final_price": 4.2, "pricing_confidence": 1.0, "pricing_notes": "two sources"})
+    same = client.patch(f"/api/cards/{cid}", json={"rarity": "Common"}).get_json()
+    assert same["final_price"] == 4.2
+    moved = client.patch(f"/api/cards/{cid}", json={"set_code": "new128"}).get_json()
+    # No price and no note is what the page prices by itself.
+    assert moved["final_price"] is None and not moved["pricing_notes"]
+
+
+@pytest.mark.skipif(not __import__("os").getenv("TEST_DATABASE_URL"), reason="needs a Postgres to run against")
+def test_a_postgres_table_from_before_gets_the_columns_added_since(bench):
+    with db.connect(bench.DB_PATH) as conn:
+        conn.execute("ALTER TABLE cards DROP COLUMN id_read")
+        conn.execute("ALTER TABLE cards DROP COLUMN printing")
+    db.init_db(bench.DB_PATH)
+    with db.connect(bench.DB_PATH) as conn:
+        have = {r["column_name"] for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'cards'").fetchall()}
+    assert {"id_read", "printing"} <= have

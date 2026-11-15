@@ -12,6 +12,9 @@ const state = {
   editing: null,
   selected: new Set(),
   search: "",
+  jobRunning: false,
+  pricing: new Set(),      // card ids being priced right now
+  priceTried: new Set(),   // ids this page already tried, so a failure is not retried in a loop
 };
 
 // ---------------------------------------------------------------- network
@@ -103,10 +106,11 @@ function renderRow(card) {
       <td class="price">${fmt(card.tcgplayer_market)}</td>
       <td class="price">${fmt(card.cardmarket_trend_usd)}</td>
       <td class="price">${ebayCell}</td>
-      <td class="price"><strong>${fmt(card.final_price)}</strong>${priceBasis(card)}</td>
+      <td class="price">${state.pricing.has(card.id) ? '<span class="pricing-now">Pricing…</span>' : `<strong>${fmt(card.final_price)}</strong>${priceBasis(card)}`}</td>
       <td><span class="id-status ${card.id_confidence <= 0.6 ? 'review' : ''}">${!card.name ? 'Not identified' : card.id_confidence <= 0.6 ? 'Check ID' : card.id_confidence >= 0.97 ? 'Catalog match' : 'Check photo'}</span>
       <span class="src">${Math.round((card.id_confidence || 0) * 100)}% ID confidence</span></td>
       <td class="actions">
+        ${card.name && card.id_confidence <= 0.6 ? '<button data-act="choose" class="primary">Choose</button>' : ""}
         <button data-act="edit">Edit</button>
         <button data-act="price">Price</button>
         <button data-act="delete" title="Delete this card and its photo" aria-label="Delete">✕</button>
@@ -190,6 +194,7 @@ function escapeHtml(s) {
 
 // ---------------------------------------------------------------- data fetch
 let cardsRequest = 0;
+let cardsShown = "";
 async function loadCards() {
   const request = ++cardsRequest;
   const params = new URLSearchParams({ sort: state.sort });
@@ -199,8 +204,54 @@ async function loadCards() {
   if (request !== cardsRequest) return;
   state.cards = data.cards;
   state.stats = data.stats;
-  renderStats(state.stats);
+  // The table refreshes by itself, so it is only redrawn when something changed.
+  const now = JSON.stringify([data.cards, data.stats]);
+  if (now !== cardsShown) {
+    cardsShown = now;
+    renderStats(state.stats);
+    renderCards();
+  }
+  priceWaitingCards();
+}
+
+function redrawCards() {
+  cardsShown = "";
   renderCards();
+}
+
+// A named card with no price and no pricing note has not been priced since
+// it was named or changed (an edit clears both). Price those in the
+// background, two at a time, and show each price as it arrives.
+async function priceWaitingCards() {
+  if (state.jobRunning) return;
+  const waiting = state.cards.filter(c => c.name && c.final_price == null && !c.pricing_notes && !c.sold
+    && !state.pricing.has(c.id) && !state.priceTried.has(c.id));
+  if (!waiting.length) return;
+  waiting.forEach(c => state.pricing.add(c.id));
+  redrawCards();
+  const work = async () => {
+    for (let card = waiting.shift(); card; card = waiting.shift()) {
+      state.priceTried.add(card.id);
+      try {
+        const updated = await api(`/api/cards/${card.id}/price`, { method: "POST" });
+        const i = state.cards.findIndex(c => c.id === updated.id);
+        if (i >= 0) state.cards[i] = { ...state.cards[i], ...updated };
+      } catch { /* left unpriced; the Price button tries again */ }
+      state.pricing.delete(card.id);
+      redrawCards();
+    }
+  };
+  await Promise.all([work(), work()]);
+  loadCards().catch(() => {});
+}
+
+// Keep the table current without a click: prices found by a running job, by
+// another tab or by the daily refresh show up on their own.
+function startLiveRefresh() {
+  setInterval(() => {
+    const busy = document.querySelector(".modal:not(.hidden)") || state.pricing.size;
+    if (!document.hidden && !busy) loadCards().catch(() => {});
+  }, 8000);
 }
 
 // ---------------------------------------------------------------- upload
@@ -502,10 +553,12 @@ function setupTable() {
     const tr = ev.target.closest("tr");
     const id = parseInt(tr.dataset.id, 10);
     if (btn.dataset.act === "delete") { await deleteCards([id]); return; }
+    if (btn.dataset.act === "choose") { chooseCard(id); return; }
     if (btn.dataset.act === "edit") openEdit(id);
     else if (btn.dataset.act === "price") {
       btn.disabled = true; btn.textContent = "…";
       try {
+        state.priceTried.add(id);
         await api(`/api/cards/${id}/price`, { method: "POST" });
         await loadCards();
       } catch (err) {
@@ -596,9 +649,10 @@ async function saveEdit({ priceAfter = false } = {}) {
     } else {
       activeBtn.textContent = "Saved ✓";
       await new Promise(r => setTimeout(r, 350));
+      state.priceTried.delete(state.editing);     // a changed card is priced again by itself
     }
-    await loadCards();
     closeEdit();
+    await loadCards();
   } catch (err) {
     activeBtn.textContent = originalLabel;
     alert(`Failed: ${err.message}`);
@@ -659,6 +713,118 @@ async function uploadCloudinary() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ---------------------------------------------------------------- which card is this
+// For a card the catalog could not settle: the real cards it could be, or
+// "something else" (type it in, or read the photo again).
+let choosing = null;
+function closeChoose() {
+  $("#choose-modal").classList.add("hidden");
+  choosing = null;
+}
+
+function drawChoices(data) {
+  const cur = data.current || {};
+  const read = data.read || {};
+  const seen = [cur.name, cur.set_name, cur.card_number ? `#${cur.card_number}${read.number_total ? "/" + read.number_total : ""}` : ""]
+    .filter(Boolean).join(" · ");
+  $("#choose-read").textContent = seen ? `Read as: ${seen}` : "Nothing could be read off this card.";
+  choosing.choices = data.choices || [];
+  const rows = choosing.choices.map((c, i) => `
+    <label class="choose-opt"><input type="radio" name="choose-pick" value="${i}" />
+      <span><strong>${escapeHtml(c.name)}</strong>
+        <span class="src">${escapeHtml([c.set_name, c.card_number ? "#" + c.card_number : "", c.rarity].filter(Boolean).join(" · "))}</span>
+        <span class="src">${escapeHtml(c.why || "")}</span></span></label>`).join("");
+  $("#choose-list").innerHTML = rows + `
+    <label class="choose-opt"><input type="radio" name="choose-pick" value="other" ${rows ? "" : "checked"} />
+      <span><strong>Something else</strong><span class="src">${rows ? "None of these is the card." : "The catalog has no card that fits what was read."}</span></span></label>`;
+  $("#choose-status").textContent = "";
+  syncChoose();
+}
+
+function syncChoose() {
+  const picked = document.querySelector('input[name="choose-pick"]:checked');
+  $("#choose-other").classList.toggle("hidden", !picked || picked.value !== "other");
+  $("#choose-ok").disabled = !picked || picked.value === "other";
+}
+
+async function chooseCard(id) {
+  const card = state.cards.find(c => c.id === id);
+  if (!card) return;
+  choosing = { id, choices: [] };
+  $("#choose-img").src = `/${card.crop_path}`;
+  $("#choose-img").alt = `Photo of ${card.name || "the card"}`;
+  $("#choose-read").textContent = "";
+  $("#choose-list").innerHTML = "";
+  $("#choose-other").classList.add("hidden");
+  $("#choose-ok").disabled = true;
+  $("#choose-status").textContent = "Looking it up…";
+  $("#choose-modal").classList.remove("hidden");
+  $("#choose-cancel").focus();
+  try {
+    const data = await api(`/api/cards/${id}/choices`);
+    if (choosing && choosing.id === id) drawChoices(data);
+  } catch (err) {
+    $("#choose-status").textContent = `Could not look it up: ${err.message}`;
+    drawChoices({ choices: [], current: card });
+  }
+}
+
+function setupChoose() {
+  $("#choose-x").addEventListener("click", closeChoose);
+  $("#choose-cancel").addEventListener("click", closeChoose);
+  $("#choose-modal").addEventListener("click", ev => { if (ev.target.id === "choose-modal") closeChoose(); });
+  $("#choose-list").addEventListener("change", syncChoose);
+  $("#choose-manual").addEventListener("click", () => {
+    const id = choosing?.id;
+    closeChoose();
+    if (id) openEdit(id);
+  });
+  $("#choose-retry").addEventListener("click", async () => {
+    if (!choosing) return;
+    const id = choosing.id;
+    const btn = $("#choose-retry");
+    btn.disabled = true;
+    $("#choose-status").textContent = "Reading the photo again…";
+    try {
+      const updated = await api(`/api/cards/${id}/identify`, { method: "POST", body: JSON.stringify({ force_ai: true }) });
+      const i = state.cards.findIndex(c => c.id === id);
+      if (i >= 0) state.cards[i] = { ...state.cards[i], ...updated };
+      redrawCards();
+      if (updated.id_confidence > 0.6) {          // the catalog confirmed the new reading
+        closeChoose();
+        state.priceTried.delete(id);
+        await loadCards();
+        return;
+      }
+      const data = await api(`/api/cards/${id}/choices`);
+      if (choosing && choosing.id === id) drawChoices(data);
+    } catch (err) {
+      $("#choose-status").textContent = `Could not read it: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $("#choose-ok").addEventListener("click", async () => {
+    const picked = document.querySelector('input[name="choose-pick"]:checked');
+    const card = choosing && picked ? choosing.choices[Number(picked.value)] : null;
+    if (!card) return;
+    const id = choosing.id;
+    $("#choose-ok").disabled = true;
+    try {
+      const patch = { name: card.name, set_name: card.set_name || "", set_code: card.set_code || "",
+                      card_number: card.card_number || "", id_confidence: 0.97, needs_review: false };
+      if (card.rarity) patch.rarity = card.rarity;
+      await api(`/api/cards/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      closeChoose();
+      state.priceTried.delete(id);
+      await loadCards();                          // the new card is priced by itself
+    } catch (err) {
+      $("#choose-status").textContent = `Could not save: ${err.message}`;
+      $("#choose-ok").disabled = false;
+    }
+  });
 }
 
 function setupModal() {
@@ -895,14 +1061,21 @@ async function pollJob() {
   const fill = $("#progress-fill");
   const msg = $(".job-message");
   bar.classList.remove("hidden");
+  state.jobRunning = true;
+  let seen = "";
   const tick = async () => {
     try {
       const status = await api("/api/pricing/status");
       const pct = status.total ? (status.progress / status.total) * 100 : 0;
       fill.style.width = `${pct}%`;
       msg.textContent = status.message || "…";
-      if (status.running) setTimeout(tick, 1500);
-      else {
+      if (status.running) {
+        // Names and prices go into the table as each batch lands.
+        const at = `${status.phase || ""}:${status.progress}`;
+        if (at !== seen) { seen = at; loadCards().catch(() => {}); }
+        setTimeout(tick, 1500);
+      } else {
+        state.jobRunning = false;
         await loadCards();
         JOB_BUTTONS.forEach(s => { $(s).disabled = false; });
         // The finished message says how many were identified and priced;
@@ -1419,6 +1592,7 @@ function setupKeyboard() {
     }
     if (ev.key === "Escape") {
       if (modal?.id === "confirm-modal") $("#confirm-cancel").click();
+      else if (modal?.id === "choose-modal") closeChoose();
       else if (modal?.id === "conn-modal") closeConnections();
       else if (modal?.id === "bundle-modal") closeBundle();
       else closeEdit();
@@ -1429,10 +1603,14 @@ function setupKeyboard() {
 setupDropzone();
 setupTable();
 setupModal();
+setupChoose();
 setupBundleModal();
 setupToolbar();
 setupKeyboard();
 loadCards();
+startLiveRefresh();
+// A job started before this page was opened carries on showing here.
+api("/api/pricing/status").then(s => { if (s.running && !state.jobRunning) pollJob(); }).catch(() => {});
 // Publishing, Connections, sales sync and Terapeak use the install's own
 // outside accounts, so only the operator gets them. The server enforces it;
 // this keeps the page from showing controls that would be refused.

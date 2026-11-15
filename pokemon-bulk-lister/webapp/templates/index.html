@@ -220,6 +220,32 @@
     </div>
   </div>
 
+  <!-- Which card is this: pick from the catalog's matches, or something else -->
+  <div id="choose-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="choose-title">
+    <div class="modal-card choose-card">
+      <header>
+        <h2 id="choose-title">Which card is this?</h2>
+        <button id="choose-x" aria-label="Close">×</button>
+      </header>
+      <div class="modal-body">
+        <img id="choose-img" alt="" />
+        <div class="choose-side">
+          <p id="choose-read" class="muted small"></p>
+          <div id="choose-list" class="choose-list"></div>
+          <div id="choose-other" class="choose-other hidden">
+            <button id="choose-manual" type="button">Enter it myself</button>
+            <button id="choose-retry" type="button">Read the photo again</button>
+          </div>
+          <p id="choose-status" class="muted small"></p>
+          <div class="actions">
+            <button id="choose-cancel" type="button">Cancel</button>
+            <button id="choose-ok" type="button" class="primary" disabled>Use this card</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Bundle-as-lot modal -->
   <div id="bundle-modal" class="modal hidden">
     <div class="modal-card">

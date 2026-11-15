@@ -462,6 +462,35 @@ def resolve(name: str, number: Optional[str] = None, total: Any = None, printed_
     return {"status": "unverified", "card": None, "why": f"no card named {name!r} numbered {number or '?'} in: {tried}"}
 
 
+def choices(name: str, number: Optional[str] = None, total: Any = None, printed_code: Optional[str] = None,
+            set_code: Optional[str] = None, set_name: Optional[str] = None, max_sets: int = 8,
+            limit: int = 8) -> list[dict]:
+    """The real cards a doubtful reading could be, best first, for a person
+    to pick from. Each is a catalog record (name, set_name, set_code,
+    card_number, rarity) with "why": how it fits what was read."""
+    num = _number(number)
+    total_n = _total(total) if total not in (None, "") else (
+        _total(str(number).split("/")[1]) if number and "/" in str(number) else None)
+    found: list[tuple[int, int, dict]] = []
+    for order, s in enumerate(_candidate_sets(total_n, printed_code, set_code, set_name)[:max_sets]):
+        try:
+            cards = set_cards(s["id"])
+        except Exception:
+            continue
+        for c in cards:
+            same_number = bool(num) and _number(c["number"]) == num
+            same_name = _same_name(name, c["name"])
+            if not (same_number or same_name):
+                continue
+            rank, why = ((0, "name and number match") if same_number and same_name else
+                         (1, f"same name, numbered {c['number']}") if same_name else
+                         (2, "same number, a different name"))
+            found.append((rank, order, {"name": c["name"], "set_name": s.get("name"), "set_code": s["id"],
+                                        "card_number": c["number"], "rarity": c.get("rarity"), "why": why}))
+    found.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in found[:limit]]
+
+
 def prompt_reference(n: int = 60) -> str:
     """The newest sets as text for the identification prompt: a reader that
     has never seen a set can still name it from the code and total printed on

@@ -124,8 +124,8 @@ class TCGPlayerClient:
             return None
 
         from lib.printing import normalize
-        finish = normalize(printing, prefer_holo)
-        variant = prices.get(finish) or {}
+        key = _variant_key(prices, normalize(printing, prefer_holo))
+        variant = prices.get(key) or {} if key else {}
         value = variant.get("market") if isinstance(variant, dict) else None
         return float(value) if value is not None and value > 0 else None
 
@@ -146,10 +146,11 @@ class TCGPlayerClient:
         keys = ("reverseHoloTrend", "reverseHoloSell") if finish == "reverseHolofoil" else ("trendPrice", "averageSellPrice")
         if finish == "unknown":
             return None
-        # When the product explicitly lists its available finishes, do not
-        # call the ordinary product's trend a holo/non-holo price it lacks.
+        # trendPrice is the ordinary (non-reverse) product. When the product
+        # lists its finishes and none of them stands for this card, it is not
+        # this card's price.
         variants = ((card or {}).get("tcgplayer") or {}).get("prices") or {}
-        if finish != "reverseHolofoil" and variants and finish not in variants:
+        if finish != "reverseHolofoil" and variants and _variant_key(variants, finish) is None:
             return None
         for key in keys:
             value = prices.get(key)
@@ -201,6 +202,39 @@ class TCGPlayerClient:
             "tcgplayer_market_usd": self.market_price(card, prefer_holo=is_holo, printing=printing),
             "cardmarket_trend_eur": self.cardmarket_trend_eur(card, prefer_holo=is_holo, printing=printing),
         }
+
+
+# A finish as the price source names it. Sets before 2003 have no "normal" or
+# "holofoil": theirs are "unlimited" and "unlimitedHolofoil". A 1st Edition
+# card is a different, dearer product and never stands in for one.
+_VARIANTS = {
+    "normal": ("normal", "unlimited"),
+    "holofoil": ("holofoil", "unlimitedHolofoil"),
+    "reverseHolofoil": ("reverseHolofoil",),
+}
+
+
+def _variant_key(prices: dict, finish: str) -> Optional[str]:
+    """Which of a product's price variants stands for this finish, or None.
+
+    A card printed in one ordinary finish only (a holo rare has no non-holo
+    printing) takes that one, whichever of holo / non-holo the photo was read
+    as: the reader gets that wrong often, and there is no other card it could
+    be. A reverse holo never stands in for anything else, nor the other way."""
+    def has(key: str) -> bool:
+        v = prices.get(key)
+        return isinstance(v, dict) and (v.get("market") or 0) > 0
+
+    for key in _VARIANTS.get(finish, ()):
+        if has(key):
+            return key
+    if finish in ("normal", "holofoil"):
+        other = "holofoil" if finish == "normal" else "normal"
+        if not any(k in prices for k in _VARIANTS[finish]):
+            for key in _VARIANTS[other]:
+                if has(key):
+                    return key
+    return None
 
 
 def _same_number(text) -> str:
