@@ -132,6 +132,14 @@ def sets() -> list[dict]:
     when the source cannot be reached."""
     saved = _store.get("sets") or {}
     rows = saved.get("sets") or []
+    if not rows:
+        bundled = _bundled_sets()
+        if bundled:
+            # The first photo should not wait on a full catalog refresh.
+            # The daily refresh replaces this seed with the live set list.
+            saved = {"at": time.time(), "sets": bundled}
+            _store.set("sets", saved)
+            rows = bundled
     if not rows or time.time() - float(saved.get("at") or 0) > SETS_MAX_AGE:
         try:
             refresh_sets()
@@ -158,12 +166,14 @@ def set_cards(set_id: str) -> list[dict]:
     if cards is not None and time.time() - float(saved.get("at") or 0) <= CARDS_MAX_AGE:
         return cards
     try:
-        fresh = [{"id": c.get("id"), "name": c.get("name") or "", "number": str(c.get("number") or ""),
-                  "rarity": c.get("rarity")}
-                 for c in _all_pages("/cards", {"q": f"set.id:{set_id}", "select": "id,name,number,rarity"})]
+        # Identification needs the static card list, not prices. Read the
+        # catalog's data mirror first rather than waiting through API retries.
+        fresh = _mirror_cards(set_id)
     except Exception:
         try:
-            fresh = _mirror_cards(set_id)
+            fresh = [{"id": c.get("id"), "name": c.get("name") or "", "number": str(c.get("number") or ""),
+                      "rarity": c.get("rarity")}
+                     for c in _all_pages("/cards", {"q": f"set.id:{set_id}", "select": "id,name,number,rarity"})]
         except Exception:
             if cards is not None:
                 return cards
@@ -317,6 +327,7 @@ def resolve_japanese(name_printed: str, name_read: Optional[str] = None, number:
 # ---------------------------------------------------------------- matching
 
 def _norm(text: Optional[str]) -> str:
+    text = (text or "").replace("♀", " female ").replace("♂", " male ").replace("☆", " star ").replace("δ", " delta ")
     text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
@@ -342,6 +353,10 @@ def _same_name(read: str, real: str) -> bool:
         return False
     if a == b or a.replace(" ", "") == b.replace(" ", ""):
         return True
+    # These marks name different products, even when only a character apart.
+    variants = {"ex", "gx", "v", "vmax", "vstar", "lv", "x", "star", "delta", "male", "female"}
+    if (set(a.split()) & variants) != (set(b.split()) & variants):
+        return False
     if abs(len(a) - len(b)) > 2 or min(len(a), len(b)) < 5:
         return False
     # edit distance <= 2
@@ -369,10 +384,16 @@ def _candidate_sets(total: Optional[int], printed_code: Optional[str], set_code:
 
     if code and total:
         add([s for s in every if (s.get("ptcgoCode") or "").upper() == code and s.get("printedTotal") == total])
+        if ranked:
+            return ranked
     if code:
         add([s for s in every if (s.get("ptcgoCode") or "").upper() == code])
+        if ranked:
+            return ranked
     if total:
         add([s for s in every if s.get("printedTotal") == total])
+        if ranked:
+            return ranked
     if set_code:
         add([s for s in every if s["id"].lower() == set_code.strip().lower()])
     if set_name:
@@ -407,22 +428,27 @@ def resolve(name: str, number: Optional[str] = None, total: Any = None, printed_
     by_number: list[dict] = []
     by_name: list[dict] = []
     reached = False
+    incomplete = len(candidates) > max_sets
     for s in candidates[:max_sets]:
         try:
             cards = set_cards(s["id"])
         except Exception:
+            incomplete = True
             continue
         reached = True
         for c in cards:
             if num and _number(c["number"]) == num and _same_name(name, c["name"]):
                 by_number.append(record(s, c))
-        named = [c for c in cards if _same_name(name, c["name"])]
+        named = [c for c in cards if _norm(name) == _norm(c["name"])]
         if len(named) == 1:
             by_name.append(record(s, named[0]))
-        if by_number:
-            break               # candidates are in order of likelihood
     if not reached:
         return {"status": "unknown", "card": None, "why": "the card catalog could not be reached"}
+    if incomplete:
+        return {"status": "unknown", "card": None, "why": "not every possible set could be checked"}
+    if len(by_number) > 1:
+        return {"status": "unverified", "card": None,
+                "why": "the name and number match more than one set; check the printed set code"}
     if by_number:
         return {"status": "verified", "card": by_number[0], "why": ""}
     if len(by_name) == 1:

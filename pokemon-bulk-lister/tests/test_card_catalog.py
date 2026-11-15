@@ -45,7 +45,7 @@ def test_name_and_number_over_total_find_the_card_and_its_set():
     assert r["status"] == "verified"
     assert r["card"] == {"name": "Pikachu", "set_name": "30th Celebration", "set_code": "me55",
                          "card_number": "23", "rarity": "Pikachu Rare"}
-    # The total alone is enough, written either way; the newer of two sets that size is tried first.
+    # The total is enough when the name and number distinguish the sets.
     assert cc.resolve("Pikachu", "023/128")["card"]["set_code"] == "me55"
     assert cc.resolve("Geodude", "23", total=128)["card"]["set_code"] == "old128"
 
@@ -71,7 +71,36 @@ def test_a_misread_number_is_only_called_probable():
 def test_card_lists_are_fetched_once_then_kept(catalog):
     cc.resolve("Pikachu", "23", total=128)
     cc.resolve("Jirachi ex", "155", total=128)
-    assert [c for c in catalog if c[0] == "/cards"] == [("/cards", "set.id:me55")]
+    assert [c for c in catalog if c[0] == "/cards"] == [("/cards", "set.id:me55"), ("/cards", "set.id:old128")]
+
+
+@pytest.mark.parametrize("read,real", [
+    ("Pikachu", "Pikachu ex"), ("Mew V", "Mew VMAX"),
+    ("Nidoran♂", "Nidoran♀"), ("Charizard", "Charizard ☆"),
+])
+def test_different_printings_are_not_treated_as_spelling_errors(read, real):
+    assert not cc._same_name(read, real)
+
+
+def test_duplicate_name_and_number_in_two_sets_is_not_verified(monkeypatch):
+    monkeypatch.setattr(cc, "set_cards", lambda sid: [{"name": "Pikachu", "number": "23"}])
+    assert cc.resolve("Pikachu", "23", total=128)["status"] == "unverified"
+    # The printed code, rather than the model's guessed set, disambiguates.
+    r = cc.resolve("Pikachu", "23", total=128, printed_code="OLD", set_code="me55")
+    assert r["status"] == "verified" and r["card"]["set_code"] == "old128"
+
+
+def test_printed_total_does_not_fall_back_to_a_guessed_incompatible_set():
+    assert cc.resolve("Pikachu ex", "57", total=128, set_code="sv8")["status"] == "unverified"
+
+
+def test_a_missing_competing_set_prevents_false_verification(monkeypatch):
+    def cards(sid):
+        if sid == "old128":
+            raise RuntimeError("offline")
+        return CARDS[sid]
+    monkeypatch.setattr(cc, "set_cards", cards)
+    assert cc.resolve("Pikachu", "23", total=128)["status"] == "unknown"
 
 
 def test_nothing_is_decided_when_the_catalog_cannot_be_reached(monkeypatch):
@@ -89,6 +118,18 @@ def test_the_prompt_lists_the_newest_sets_first():
     text = cc.prompt_reference(2)
     assert text.splitlines()[0].startswith("30th Celebration | id me55 | printed code 30C | 128 cards")
     assert len(text.splitlines()) == 2
+
+
+def test_first_photo_uses_bundled_sets_without_waiting_for_a_refresh(monkeypatch, catalog):
+    monkeypatch.setattr(cc, "_bundled_sets", lambda: SETS)
+    assert len(cc.sets()) == 3
+    assert catalog == []
+
+
+def test_static_mirror_is_used_without_contacting_the_pricing_api(monkeypatch, catalog):
+    monkeypatch.setattr(cc, "_mirror_cards", lambda sid: CARDS[sid])
+    assert cc.set_cards("me55") == CARDS["me55"]
+    assert catalog == []
 
 
 # ---------------------------------------------------------------- Japanese cards

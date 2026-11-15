@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import threading
+import tempfile
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -384,6 +385,7 @@ def api_upload_grid():
     total_crops = 0
     grids_added = []
     skipped = []
+    errors = []
 
     for file in files:
         ext = Path(file.filename or "").suffix.lower()
@@ -394,13 +396,22 @@ def api_upload_grid():
         dest = INPUT_DIR / safe_name
         INPUT_DIR.mkdir(parents=True, exist_ok=True)
         file.save(dest)
-        dest = _as_readable_photo(dest)
-
-        n = _record_photo(sg, dest, mode)
+        try:
+            dest = _as_readable_photo(dest)
+            n = _record_photo(sg, dest, mode)
+        except (ValueError, cv2.error) as exc:
+            n = 0
+            errors.append({"filename": file.filename, "error": str(exc)})
+        if not n:
+            dest.unlink(missing_ok=True)
+            skipped.append(file.filename or "")
+            if not any(e["filename"] == file.filename for e in errors):
+                errors.append({"filename": file.filename, "error": "This photo could not be read. Try a JPEG or PNG."})
+            continue
         total_crops += n
         grids_added.append({"filename": dest.name, "crops": n})
 
-    return jsonify({"grids": grids_added, "total_crops": total_crops, "skipped": skipped})
+    return jsonify({"grids": grids_added, "total_crops": total_crops, "skipped": skipped, "errors": errors})
 
 
 MAX_DRIVE_PHOTO_BYTES = 40 * 1024 * 1024
@@ -927,6 +938,8 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
                 f"name-only match to {matched_set_id} — set_code was not provided, "
                 "match may not reflect the actual printing"
             )
+        elif match_level == "no_number" and card_number:
+            match_warning = "collector number was not matched; check the printing before listing"
         if japanese:
             match_warning = "Japanese card: this is the English printing's price, check before listing"
         if tcg_price and cm_usd and tcg_price > 0 and cm_usd > 0:
@@ -959,6 +972,9 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         cardmarket_trend_usd=cm_usd,
         terapeak_median_usd=terapeak_stats.get("median"),
     )
+
+    if card.get("id_confidence") is not None and float(card["id_confidence"] or 0) <= 0.6:
+        match_warning = ((match_warning + "; ") if match_warning else "") + "identification needs review; compare the card to its photo"
 
     # Build pricing_notes from all signals so the user has full context.
     notes_parts = []
@@ -1028,7 +1044,6 @@ ART_MATCH_ENABLED = os.getenv("ART_MATCH", "0" if SERVERLESS else "1") == "1"
 ART_INDEX_DIR = OUTPUT_DIR / "cache" / "art_index" / "catalog"
 LEARNED_CACHE_PATH = OUTPUT_DIR / "cache" / "art_index" / "learned.jsonl"
 ART_MATCH_CONFIDENCE = 0.9   # reported id_confidence for a catalog art match
-LEARN_MIN_CONFIDENCE = 0.6   # only cache AI results at least this confident
 
 _art_lock = threading.Lock()
 _art_state: dict[str, Any] = {"index": None, "learned": None}
@@ -1073,12 +1088,12 @@ def _match_crop(crop_path: Path) -> Optional[dict]:
     }
 
 
-def _remember_identification(crop_path: Path, res: dict) -> None:
+def _remember_identification(crop_path: Path, res: dict, patch: dict) -> None:
     """Feed a confident AI identification into the learned cache so duplicate
     cards and re-uploads never pay for AI again."""
     if not ART_MATCH_ENABLED or res.get("_source"):
         return
-    if float(res.get("confidence") or 0.0) < LEARN_MIN_CONFIDENCE:
+    if patch.get("_catalog_status") != "verified" or (patch.get("set_name") or "").endswith("(Japanese)"):
         return
     if not (res.get("name") or "").strip():
         return
@@ -1088,11 +1103,13 @@ def _remember_identification(crop_path: Path, res: dict) -> None:
         if desc is None:
             return
         _, learned = _art_matchers()
-        learned.add(desc, {
-            k: res.get(k)
+        meta = {
+            k: patch.get(k)
             for k in ("name", "set_name", "set_code", "card_number",
-                      "rarity", "is_holo", "confidence")
-        })
+                      "rarity", "is_holo")
+        }
+        meta["confidence"] = patch["id_confidence"]
+        learned.add(desc, meta)
     except Exception:
         traceback.print_exc()  # cache failures must never break identification
 
@@ -1129,7 +1146,7 @@ def _checked_identity(fields: dict, total: Any = None, printed_code: Optional[st
         if found["status"] == "verified":
             changes["id_confidence"] = ID_VERIFIED
         elif found["status"] == "probable":
-            changes["id_confidence"] = round(max(read, ID_PROBABLE), 3)
+            changes["id_confidence"] = round(min(read, ID_PROBABLE), 3)
         return changes, found["status"]
     try:
         found = card_catalog.resolve(name, fields.get("card_number"), total=total, printed_code=printed_code,
@@ -1170,8 +1187,12 @@ def _identification_patch(res: dict, card: dict) -> dict[str, Any]:
     # Does a card with this name and number exist? Asked of the catalog, not
     # of a model. The catalog's own spelling, set and rarity replace the
     # reading when it does.
-    changes, _ = _checked_identity(checked, total=res.get("number_total"), printed_code=res.get("set_code_printed"))
+    changes, status = _checked_identity(checked, total=res.get("number_total"), printed_code=res.get("set_code_printed"))
     patch.update(changes)
+    patch["_catalog_status"] = status
+    if status == "unknown":
+        patch["id_confidence"] = min(patch["id_confidence"], ID_PROBABLE)
+    patch["needs_review"] = patch["id_confidence"] <= ID_PROBABLE or bool(card.get("needs_review"))
     return patch
 
 
@@ -1197,10 +1218,8 @@ def api_verify_identities():
             break
         changes, status = _checked_identity(card)
         tally[status] = tally.get(status, 0) + 1
-        # A changed card's old price belonged to another printing.
-        if any(changes.get(k) not in (None, card.get(k)) for k in ("set_code", "card_number", "name")):
-            changes.update(final_price=None, pricing_confidence=0.0, pricing_notes=None, tcgplayer_market=None,
-                           cardmarket_trend_usd=None, cardmarket_trend_eur=None, outlier_flag=0)
+        if changes.get("id_confidence", 1) <= ID_PROBABLE:
+            changes["needs_review"] = True
         if changes:
             with db.connect(DB_PATH) as conn:
                 db.update_card(conn, int(card["id"]), changes)
@@ -1227,9 +1246,10 @@ def api_identify_card(card_id: int):
         except Exception as exc:
             traceback.print_exc()
             return jsonify({"error": f"identification failed: {exc}"}), 502
-        _remember_identification(crop, res)
+    patch = _identification_patch(res, card)
+    _remember_identification(crop, res, patch)
     with db.connect(DB_PATH) as conn:
-        updated = db.update_card(conn, card_id, _identification_patch(res, card))
+        updated = db.update_card(conn, card_id, patch)
     updated["identified_by"] = {"cache": "image cache", "match": "art match"}.get(
         res.get("_source"), "AI"
     )
@@ -1291,9 +1311,11 @@ def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=N
     each card so progress can be shown."""
     from lib.vision_identify import identify_crop, identify_page
 
-    def _apply(card: dict, res: dict) -> None:
+    def _apply(card: dict, res: dict, patch=None) -> dict:
+        patch = patch if patch is not None else _identification_patch(res, card)
         with db.connect(DB_PATH) as conn:
-            db.update_card(conn, int(card["id"]), _identification_patch(res, card))
+            db.update_card(conn, int(card["id"]), patch)
+        return patch
 
     def _done() -> None:
         tally["done"] += 1
@@ -1305,8 +1327,9 @@ def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=N
     for card in group:
         crop = data_path(card["crop_path"])
         res = _match_crop(crop) if ART_MATCH_ENABLED and runtime.ensure_local(crop) else None
-        if res is not None:
-            _apply(card, res)
+        patch = _identification_patch(res, card) if res is not None else None
+        if patch is not None and patch.get("_catalog_status") not in ("unverified", "probable"):
+            _apply(card, res, patch)
             tally["by_image"] += 1
             _done()
         else:
@@ -1317,45 +1340,62 @@ def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=N
     # Pass 1 (AI): one page-level call when several crops on the page still
     # need it (~9x cheaper than per-crop); otherwise go straight to per-crop
     # calls for the stragglers.
-    page_results: dict[tuple, dict] = {}
-    if grid and len(unmatched) >= 3:
-        page_path = data_path(grid["original_path"])
-        # Prefer the leveled page saved at split time: its orientation
-        # matches the crops' row/col assignments.
-        prepared = OUTPUT_DIR / "pages" / f"{page_path.stem}.jpg"
-        if runtime.ensure_local(prepared):
-            page_path = prepared
-        if page_path.exists():
+    page_results: dict[int, dict] = {}
+    if len(unmatched) >= 3:
+        # Send only the unresolved cards. Limit each sheet to nine so large
+        # photos do not shrink collector numbers below legibility or exhaust
+        # the response budget. The same crops work after a recycled instance.
+        from lib.card_finder import contact_sheet
+
+        for start in range(0, len(unmatched), 9):
+            batch = unmatched[start:start + 9]
+            available = []
+            images = []
+            for card in batch:
+                path = data_path(card["crop_path"])
+                image = cv2.imread(str(path)) if runtime.ensure_local(path) else None
+                if image is not None:
+                    available.append(card)
+                    images.append(cv2.resize(image, (480, 671), interpolation=cv2.INTER_AREA))
+            if len(images) < 3:
+                continue
             try:
-                # A photo of more than nine cards makes a sheet of more
-                # than three rows.
-                rows = max([3] + [int(c.get("row") or 0) + 1 for c in group])
-                page_results = {
-                    (r.get("row"), r.get("col")): r
-                    for r in identify_page(str(page_path), rows=rows)
-                }
+                with tempfile.TemporaryDirectory() as folder:
+                    page_path = Path(folder) / "identification.jpg"
+                    cv2.imwrite(str(page_path), contact_sheet(images))
+                    results = identify_page(str(page_path), rows=(len(images) + 2) // 3)
+                positions = {(r.get("row"), r.get("col")): r for r in results}
+                for i, card in enumerate(available):
+                    if divmod(i, 3) in positions:
+                        page_results[card["id"]] = positions[divmod(i, 3)]
             except Exception as exc:
                 tally["last_error"] = str(exc)
-                print(f"[identify] page grid={grid.get('id')}: {exc}", file=sys.stderr)
+                print(f"[identify] page: {exc}", file=sys.stderr)
 
     for card in unmatched:
-        res = page_results.get((card.get("row"), card.get("col")))
+        res = page_results.get(card["id"])
+        patch = _identification_patch(res, card) if res else None
         crop = data_path(card["crop_path"])
         have_crop = runtime.ensure_local(crop)
-        if res is None or float(res.get("confidence") or 0.0) < IDENTIFY_RETRY_CONF:
+        # An offline catalog cannot be repaired by another model call. Retry
+        # illegible reads and actual catalog disagreements, once per card.
+        if (patch is None or not patch.get("name") or
+                float(res.get("confidence") or 0.0) < IDENTIFY_RETRY_CONF or
+                patch.get("_catalog_status") in ("unverified", "probable")):
             if have_crop:
                 try:
                     crop_res = identify_crop(str(crop))
-                    if res is None or float(crop_res.get("confidence") or 0.0) >= float(res.get("confidence") or 0.0):
-                        res = crop_res
+                    crop_patch = _identification_patch(crop_res, card)
+                    if patch is None or float(crop_patch.get("id_confidence") or 0.0) >= float(patch.get("id_confidence") or 0.0):
+                        res, patch = crop_res, crop_patch
                 except Exception as exc:
                     tally["last_error"] = str(exc)
                     print(f"[identify] crop id={card['id']}: {exc}", file=sys.stderr)
         if res and (res.get("name") or "").strip():
-            _apply(card, res)
+            _apply(card, res, patch)
             tally["by_ai"] += 1
             if have_crop:
-                _remember_identification(crop, res)
+                _remember_identification(crop, res, patch)
         _done()
 
 
@@ -1494,7 +1534,7 @@ def _main_slice(state: dict) -> None:
         tally = state["tally"]
         if queue:
             grid_id = queue[0][1]
-            ids = [cid for cid, gid in queue if gid == grid_id] if grid_id is not None else [queue[0][0]]
+            ids = [cid for cid, gid in queue if gid == grid_id][:9] if grid_id is not None else [queue[0][0]]
             with db.connect(DB_PATH) as conn:
                 group = [c for c in (db.get_card(conn, cid) for cid in ids)
                          if c and not (c.get("name") or "").strip()]

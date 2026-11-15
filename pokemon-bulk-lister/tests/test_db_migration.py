@@ -77,3 +77,37 @@ def test_listing_write_and_stat(tmp_path):
     assert card["ebay_listing_id"] == "v1|123|0"
     assert card["ebay_listing_status"] == "listed"
     assert stats["ebay_listed"] == 1
+
+
+@pytest.mark.parametrize("edit", [{"name": "Raichu"}, {"card_number": "25"},
+                                  {"condition_guess": "LP"}, {"is_holo": True}])
+def test_changing_identity_clears_all_old_prices_and_product_links(tmp_path, edit):
+    path = str(tmp_path / "edit.sqlite")
+    db.init_db(path)
+    with db.connect(path) as conn:
+        gid = db.get_or_create_grid(conn, "page", "input/grids/page.jpg")
+        cid = db.insert_card_stub(conn, gid, "output/crops/card.jpg", 0, 0)
+        db.update_card(conn, cid, {"name": "Pikachu", "card_number": "23", "condition_guess": "NM",
+                                 "id_confidence": 0.97, "final_price": 20, "tcgplayer_market": 18,
+                                 "ebay_median_30d": 22, "ebay_max_30d": 25, "ebay_sold_count_30d": 4,
+                                 "terapeak_median_usd": 19, "terapeak_sold_count_365d": 10,
+                                 "tcgplayer_product_id": "old-23", "tcgplayer_url": "https://old",
+                                 "pricing_confidence": 0.9, "ebay_listing_id": "existing-listing"})
+        card = db.update_card(conn, cid, edit)
+        for key in ("final_price", "tcgplayer_market", "ebay_median_30d", "ebay_max_30d",
+                    "terapeak_median_usd", "tcgplayer_product_id", "tcgplayer_url"):
+            assert card[key] is None, key
+        assert card["ebay_sold_count_30d"] == card["terapeak_sold_count_365d"] == 0
+        assert card["pricing_confidence"] == 0
+        assert card["ebay_listing_id"] == "existing-listing"
+
+
+def test_pricing_does_not_clear_a_doubtful_identification(tmp_path):
+    path = str(tmp_path / "review.sqlite")
+    db.init_db(path)
+    with db.connect(path) as conn:
+        gid = db.get_or_create_grid(conn, "page", "input/grids/page.jpg")
+        cid = db.insert_card_stub(conn, gid, "output/crops/card.jpg", 0, 0)
+        db.update_card(conn, cid, {"name": "Pikachu", "id_confidence": 0.3})
+        card = db.update_card(conn, cid, {"final_price": 20, "pricing_confidence": 0.95, "needs_review": False})
+        assert card["needs_review"] == 1

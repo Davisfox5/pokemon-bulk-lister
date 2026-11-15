@@ -454,12 +454,27 @@ def get_card(conn: sqlite3.Connection, card_id: int, any_owner: bool = False) ->
 def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any],
                 any_owner: bool = False) -> Optional[dict]:
     # A card on someone else's bench does not exist as far as this one goes.
-    if get_card(conn, card_id, any_owner) is None:
+    current = get_card(conn, card_id, any_owner)
+    if current is None:
         return None
     safe = {k: v for k, v in patch.items()
             if k in CARD_FIELDS and k not in ("id", "crop_path", "created_at", "owner_id")}
     if not safe:
         return get_card(conn, card_id, any_owner)
+    # Prices and product links belong to a particular printing and condition.
+    # Invalidate them for every edit path, including AI retries and bulk edits.
+    identity = ("name", "set_name", "set_code", "card_number", "is_holo", "condition_guess")
+    if any(k in safe and safe[k] != current.get(k) for k in identity):
+        for field in ("tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
+                      "ebay_median_30d", "ebay_max_30d", "terapeak_median_usd", "final_price",
+                      "tcgplayer_product_id", "tcgplayer_url", "cardmarket_url", "pricing_notes"):
+            safe.setdefault(field, None)
+        for field in ("ebay_sold_count_30d", "terapeak_sold_count_365d", "pricing_confidence", "outlier_flag"):
+            safe.setdefault(field, 0)
+    # Pricing agreement cannot make a doubtful identification safe to list.
+    if (safe.get("name", current.get("name")) and
+            float(safe.get("id_confidence", current.get("id_confidence")) or 0) <= 0.6):
+        safe["needs_review"] = 1
     # Coerce booleans.
     for bool_field in ("is_holo", "outlier_flag", "needs_review"):
         if bool_field in safe:

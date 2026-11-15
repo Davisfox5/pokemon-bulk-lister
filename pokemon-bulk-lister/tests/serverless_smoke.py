@@ -162,6 +162,21 @@ def fake_crop(path):
 
 
 vision.identify_page, vision.identify_crop = fake_page, fake_crop
+# The synthetic cards have a synthetic catalog too. A confident model answer
+# without a real catalog match now correctly gets a crop retry.
+from lib import card_catalog as scan_catalog
+original_resolve = scan_catalog.resolve
+
+
+def scan_resolve(name, number=None, **kwargs):
+    if kwargs.get("set_code") == "tst":
+        return {"status": "verified", "why": "", "card": {
+            "name": name, "set_name": "Test Set", "set_code": "tst",
+            "card_number": number, "rarity": "Common"}}
+    return original_resolve(name, number, **kwargs)
+
+
+scan_catalog.resolve = scan_resolve
 priced = []
 
 
@@ -179,7 +194,7 @@ assert client.post("/api/pricing/run-all").status_code == 409
 status, polls = run_to_end("/api/pricing/status")
 assert polls >= 4, polls                                               # identify x2, switch, price, finish
 assert f"identified {total}/{total}" in status["message"] and f"priced {total} card(s)" in status["message"], status
-assert "IMG_1.jpg" in seen_files                                       # the page photo, for the 9-card call
+assert "identification.jpg" in seen_files                             # unresolved crops, in a temporary contact sheet
 after = cards()
 assert all(c["name"] and c["final_price"] == 1.25 for c in after) and len(priced) == total
 assert {c["name"] for c in after} >= {"Card 00", "Single Card"}
