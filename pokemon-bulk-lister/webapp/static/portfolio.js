@@ -248,11 +248,28 @@ function renderLedger(kind) {
 const emptyRow = (n, text) => `<tr><td colspan="${n}" class="empty">${text}</td></tr>`;
 const noteHtml = (e) => (e.note ? `<div class="inv-set">${esc(e.note)}</div>` : "");
 
-$$("#library .tab").forEach((tab) => tab.addEventListener("click", () => {
-  $$("#library .tab").forEach((t) => t.classList.toggle("active", t === tab));
+const libraryTabs = $$("#library .tab");
+libraryTabs.forEach((tab, index) => {
+  tab.setAttribute("aria-selected", index === 0 ? "true" : "false");
+  tab.tabIndex = index === 0 ? 0 : -1;
+  tab.addEventListener("keydown", e => {
+    let next;
+    if (e.key === "ArrowRight") next = (index + 1) % libraryTabs.length;
+    if (e.key === "ArrowLeft") next = (index + libraryTabs.length - 1) % libraryTabs.length;
+    if (e.key === "Home") next = 0;
+    if (e.key === "End") next = libraryTabs.length - 1;
+    if (next !== undefined) { e.preventDefault(); libraryTabs[next].click(); libraryTabs[next].focus(); }
+  });
+  tab.addEventListener("click", () => {
+  libraryTabs.forEach((t) => {
+    t.classList.toggle("active", t === tab);
+    t.setAttribute("aria-selected", t === tab ? "true" : "false");
+    t.tabIndex = t === tab ? 0 : -1;
+  });
   lib.tab = tab.dataset.tab;
   renderLibrary();
-}));
+  });
+});
 ["#lib-search", "#lib-sort", "#lib-flagged", "#lib-unlisted"].forEach((sel) =>
   $(sel).addEventListener("input", renderLibrary));
 

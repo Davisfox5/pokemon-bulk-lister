@@ -7,10 +7,11 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
+  <a class="skip-link" href="#cards-heading">Skip to cards</a>
   <header>
     <h1>Pokémon bulk lister</h1>
-    <nav class="topnav">
-      <a href="/" class="active">Scan</a>
+    <nav class="topnav" aria-label="Main navigation">
+      <a href="/" class="active" aria-current="page">Scan</a>
       <a href="/portfolio">Library</a>
       <a href="/decks">Decks</a>
       <a href="/market">Marketplace</a>
@@ -18,10 +19,16 @@
     <div id="stats" class="stats"></div>
   </header>
 
+  <main>
+  <section class="scan-intro" aria-labelledby="scan-title">
+    <div><h2 id="scan-title">Turn photos into a card collection</h2>
+      <p class="muted">Add photos, check the card names and prices, then save to your library or create listings.</p></div>
+    <ol class="scan-steps" aria-label="Scan workflow"><li><span>1</span> Add photos</li><li><span>2</span> Review cards</li><li><span>3</span> Save or list</li></ol>
+  </section>
   <section class="panel" id="upload-panel">
     <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload card photos">
       <p><strong>Add card photos</strong></p>
-      <p class="muted" id="dropzone-hint">Drop, or tap to choose</p>
+      <p class="muted" id="dropzone-hint">Drop photos here or choose files</p>
       <input id="file-input" type="file" multiple accept="image/*" hidden />
       <input id="camera-input" type="file" accept="image/*" capture="environment" hidden />
     </div>
@@ -29,46 +36,79 @@
       <button id="camera-btn" type="button" title="Opens the camera on a phone or tablet">Camera</button>
       <button id="drive-photos-btn" type="button" title="Pick photos or a folder from your Google Drive">Google Drive</button>
       <label title="After each upload: identify the new cards, then price them">
-        <input type="checkbox" id="auto-process" checked /> Auto identify + price
+        <input type="checkbox" id="auto-process" checked /> Identify and price after upload
       </label>
     </div>
+    <p class="muted small photo-tip">One card or a whole binder page. Keep card edges visible and avoid glare. Check the detected cards below.</p>
     <div id="upload-status" class="muted" role="status"></div>
   </section>
 
   <section class="panel toolbar">
     <div class="toolbar-left">
+      <label class="search-label">Find a card<input type="search" id="card-search" placeholder="Name, set or number" /></label>
       <label>Sort:
         <select id="sort">
-          <option value="confidence_asc">Confidence (lowest first)</option>
-          <option value="confidence_desc">Confidence (highest first)</option>
+          <option value="confidence_asc">Price confidence (lowest first)</option>
+          <option value="confidence_desc">Price confidence (highest first)</option>
           <option value="price_desc">Price (highest first)</option>
           <option value="price_asc">Price (lowest first)</option>
           <option value="newest">Newest first</option>
           <option value="oldest">Oldest first</option>
         </select>
       </label>
-      <label><input type="checkbox" id="filter-review" /> Review only</label>
-      <label><input type="checkbox" id="filter-unid" /> Unidentified only</label>
+      <label><input type="checkbox" id="filter-review" /> Needs review</label>
+      <label><input type="checkbox" id="filter-unid" /> Missing a name</label>
     </div>
     <div class="toolbar-right">
-      <label id="terapeak-label" title="Adds the 365-day eBay sold median (~5s per card)">
-        <input type="checkbox" id="use-terapeak" />
-        Use Terapeak <span class="muted small" id="terapeak-status">(checking…)</span>
-      </label>
-      <button id="process-btn" class="primary" title="Identify every unidentified card, then price every card that has no price yet">Identify + price new cards</button>
-      <button id="identify-btn" title="Identify all unidentified cards (free image match first, then one Claude vision call per binder page)">Identify only</button>
-      <button id="verify-btn" title="Check every card's name, set and number against the real card catalog. No AI call. Cards that do not exist drop to low confidence.">Check IDs</button>
-      <button id="run-pricing-btn" title="Re-price every identified card, including ones already priced">Re-price all</button>
+      <button id="process-btn" class="primary" title="Identify cards without names, then price cards without prices">Identify + price new cards</button>
       <button id="library-btn" title="Add priced cards to your library">Add to library</button>
       <button id="export-csv-btn">Export CSVs</button>
+      <details class="more-tools"><summary>More tools</summary><div class="more-tools-body">
+      <button id="identify-btn">Identify only</button>
+      <button id="verify-btn" title="Check names, sets and collector numbers against the catalog without AI">Check card IDs</button>
+      <button id="run-pricing-btn">Refresh all prices</button>
+      <label id="terapeak-label" title="Slower eBay sold-price lookup, available on local installs"><input type="checkbox" id="use-terapeak" /> Include Terapeak <span class="muted small" id="terapeak-status">(checking…)</span></label>
+      </div></details>
       <button id="bundle-btn" disabled title="Select 2+ cards to bundle as a single lot listing">Bundle selected (0)</button>
       <button id="delete-btn" disabled title="Remove the selected cards and their photos from this page">Delete selected (0)</button>
     </div>
   </section>
 
-  <section id="job-bar" class="panel job-bar hidden">
-    <div class="job-message">Pricing…</div>
+  <section id="job-bar" class="panel job-bar hidden" role="status" aria-live="polite">
+    <div class="job-message">Processing cards…</div>
+    <span class="muted small">Keep this page open while processing.</span>
     <div class="progress"><div id="progress-fill" class="progress-fill"></div></div>
+  </section>
+
+  <section id="publish-bar" class="panel job-bar hidden">
+    <div class="job-message" id="publish-bar-msg">Publishing…</div>
+    <div class="progress"><div id="publish-progress-fill" class="progress-fill"></div></div>
+  </section>
+
+  <section class="panel cards-panel" aria-labelledby="cards-heading">
+    <div class="cards-heading"><div><h2 id="cards-heading" tabindex="-1">Review your cards <span id="visible-count" class="muted"></span></h2>
+    <p class="muted small">Check names, sets and condition against the photos. Identification does not assess condition.</p></div>
+    <div class="review-options"><button id="select-visible-btn" type="button" class="phone-select">Select shown cards</button>
+    <label><input type="checkbox" id="show-comparisons" /> Compare price sources</label></div></div>
+    <div class="table-wrap">
+    <table id="cards-table" class="compact-prices">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all" title="Select all visible" aria-label="Select all visible cards" /></th>
+          <th>Photo</th>
+          <th>Card</th>
+          <th>Set / # / Rarity</th>
+          <th>TCGplayer<br><span class="th-sub">market USD</span></th>
+          <th>Cardmarket<br><span class="th-sub">trend USD</span></th>
+          <th>eBay<br><span class="th-sub" id="ebay-col-sub">median (best window)</span></th>
+          <th>Price estimate</th>
+          <th>Card ID</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="cards-body"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
+    </table>
+    </div>
   </section>
 
   <section class="panel publish-panel">
@@ -83,7 +123,8 @@
     <div id="publish-msg" class="muted"></div>
   </section>
 
-  <section class="panel sales-panel">
+  <details class="panel sales-panel">
+    <summary>Sales and order imports</summary>
     <div class="publish-row">
       <strong>Sales</strong>
       <button id="sync-ebay-btn" title="Read recent orders from eBay and record what sold">Sync eBay sales</button>
@@ -99,39 +140,16 @@
         <tbody id="sales-unmatched-body"></tbody>
       </table>
     </div>
-  </section>
+  </details>
 
-  <section id="publish-bar" class="panel job-bar hidden">
-    <div class="job-message" id="publish-bar-msg">Publishing…</div>
-    <div class="progress"><div id="publish-progress-fill" class="progress-fill"></div></div>
-  </section>
-
-  <section class="panel table-wrap">
-    <table id="cards-table">
-      <thead>
-        <tr>
-          <th><input type="checkbox" id="select-all" title="Select all visible" /></th>
-          <th>Crop</th>
-          <th>Identified</th>
-          <th>Set / # / Rarity</th>
-          <th>TCGplayer<br><span class="th-sub">market USD</span></th>
-          <th>Cardmarket<br><span class="th-sub">trend USD</span></th>
-          <th>eBay<br><span class="th-sub" id="ebay-col-sub">median (best window)</span></th>
-          <th>Final</th>
-          <th>Conf.</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="cards-body"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
-    </table>
-  </section>
+  </main>
 
   <!-- Edit modal -->
-  <div id="modal" class="modal hidden">
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-card">
       <header>
         <h2 id="modal-title">Edit card</h2>
-        <button id="modal-close">×</button>
+        <button id="modal-close" aria-label="Close card editor">×</button>
       </header>
       <div class="modal-body">
         <img id="modal-img" alt="" />
@@ -142,14 +160,14 @@
           <label>Set code <input name="set_code" placeholder="e.g. base1" /></label>
           <label>Card number <input name="card_number" /></label>
           <label>Rarity <input name="rarity" /></label>
-          <label>Condition
+          <label>Condition (check by hand)
             <select name="condition_guess">
-              <option value="">—</option>
-              <option>NM</option>
-              <option>LP</option>
-              <option>MP</option>
-              <option>HP</option>
-              <option>DMG</option>
+              <option value="">Not checked</option>
+              <option value="NM">Near mint (NM)</option>
+              <option value="LP">Lightly played (LP)</option>
+              <option value="MP">Moderately played (MP)</option>
+              <option value="HP">Heavily played (HP)</option>
+              <option value="DMG">Damaged (DMG)</option>
             </select>
           </label>
           <label class="checkbox"><input type="checkbox" name="is_holo" /> Holo</label>
@@ -159,7 +177,7 @@
             <button type="submit">Save</button>
             <button type="button" id="modal-identify-btn" title="Identify this card with Claude vision">AI identify</button>
             <button type="button" id="modal-price-btn">Save + price now</button>
-            <button type="button" id="modal-upload-btn">Push to Cloudinary</button>
+            <button type="button" id="modal-upload-btn">Upload listing photo</button>
           </div>
         </form>
       </div>

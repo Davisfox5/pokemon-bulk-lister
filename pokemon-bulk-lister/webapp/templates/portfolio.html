@@ -9,10 +9,10 @@
 <body>
   <header class="topbar">
     <div class="topbar-left">
-      <span class="brand">Card Portfolio</span>
-      <nav>
+      <span class="brand">Pokémon bulk lister</span>
+      <nav aria-label="Main navigation">
         <a href="/">Scan</a>
-        <a href="/portfolio" class="active">Library</a>
+        <a href="/portfolio" class="active" aria-current="page">Library</a>
         <a href="/decks">Decks</a>
         <a href="/market">Marketplace</a>
       </nav>
@@ -25,6 +25,7 @@
   </header>
 
   <main class="wrap wide">
+    <div class="page-intro"><h1>Your library</h1><p class="muted">Keep track of what you own, what you paid and what you sold.</p></div>
     <!-- Shown until the account's email address is confirmed -->
     <section class="panel notice hidden" id="verify-banner" role="status">
       <div>
@@ -62,15 +63,15 @@
     <section class="panel" id="library">
       <div class="panel-head">
         <div class="tabs" role="tablist" aria-label="Library">
-          <button class="tab active" role="tab" data-tab="have">Have <span id="n-have" class="count"></span></button>
+          <button class="tab active" role="tab" data-tab="have">My cards <span id="n-have" class="count"></span></button>
           <button class="tab" role="tab" data-tab="sold">Sold <span id="n-sold" class="count"></span></button>
           <button class="tab" role="tab" data-tab="purchased">Purchased <span id="n-purchased" class="count"></span></button>
           <button class="tab" role="tab" data-tab="activity" title="Every card added, bought, sold or removed">Activity</button>
         </div>
         <div class="head-actions">
-          <button id="btn-add" class="btn" title="Add one card by name">+ Card</button>
+          <button id="btn-add" class="btn" title="Add one card by name">Add a card</button>
           <button id="btn-import-listings" class="btn" title="Bring in a spreadsheet, or cards you already list on eBay, TCGplayer or Whatnot">Import</button>
-          <button id="btn-promote" class="btn btn-primary" title="Add the cards you scanned on the Scan page">From Scan</button>
+          <button id="btn-promote" class="btn btn-primary" title="Add the cards you scanned on the Scan page">Add scanned cards</button>
         </div>
       </div>
 

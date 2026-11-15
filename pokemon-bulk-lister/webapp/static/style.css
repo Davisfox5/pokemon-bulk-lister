@@ -46,6 +46,35 @@ h2 { font-size: 16px; margin: 0; }
 .small { font-size: 12px; }
 .hidden { display: none !important; }
 
+main { max-width: 1600px; margin: 0 auto; }
+.skip-link { position: absolute; top: -60px; left: 12px; padding: 10px; background: white; z-index: 200; }
+.skip-link:focus { top: 8px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.scan-intro { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 24px 0 8px; }
+.scan-intro h2 { font-size: 22px; letter-spacing: -0.4px; }
+.scan-intro p { margin: 6px 0; }
+.scan-steps { display: flex; list-style: none; gap: 20px; margin: 0; padding: 0; color: var(--muted); font-size: 13px; }
+.scan-steps li { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.scan-steps span { display: grid; place-items: center; border-radius: 50%; background: #eff4ff; color: var(--accent); width: 26px; height: 26px; font-weight: 600; }
+.photo-tip { margin-bottom: 4px; }
+.search-label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+input[type="search"] { font: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; background: white; color: var(--fg); }
+.more-tools summary, .sales-panel > summary { cursor: pointer; padding: 8px 0; font-weight: 600; }
+.more-tools-body { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0; }
+.more-tools[open] { flex-basis: 100%; }
+.cards-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.cards-heading p { margin: 5px 0; }
+.cards-heading > label { font-size: 12px; white-space: nowrap; }
+.table-wrap { overflow-x: auto; }
+.compact-prices :is(th, td):nth-child(5),
+.compact-prices :is(th, td):nth-child(6),
+.compact-prices :is(th, td):nth-child(7) { display: none; }
+.id-status { display: inline-block; border-radius: 4px; padding: 3px 6px; background: #f3f4f6; white-space: nowrap; font-size: 12px; }
+.id-status.review { color: var(--row-flag-text); background: var(--row-flag); }
+.empty-state { text-align: center; padding: 32px 16px; }
+.empty-state strong { display: block; margin-bottom: 6px; color: var(--fg); }
+.sales-panel { display: block; }
+
 .dropzone {
   border: 2px dashed var(--border);
   border-radius: 8px;
@@ -204,6 +233,13 @@ td.actions { display: table-cell; margin-top: 0; }
 
 /* ---------- phones ---------- */
 @media (max-width: 700px) {
+  .scan-intro { flex-direction: column; align-items: flex-start; gap: 12px; padding-top: 18px; }
+  .scan-intro h2 { font-size: 20px; }
+  .scan-steps { gap: 12px; font-size: 12px; }
+  .cards-heading { flex-direction: column; align-items: flex-start; }
+  .job-bar { flex-wrap: wrap; }
+  .job-message { flex: 1 1 100%; overflow-wrap: anywhere; }
+  .progress { flex-basis: 100%; }
   .panel { padding: 12px; }
   .toolbar { flex-direction: column; align-items: stretch; }
   .toolbar-right button, .publish-row button { flex: 1 1 auto; }
@@ -216,4 +252,27 @@ td.actions { display: table-cell; margin-top: 0; }
   .modal-body img { max-width: 100%; max-height: 240px; align-self: center; }
   .actions { flex-wrap: wrap; }
   input, select, textarea { font-size: 16px; }
+}
+
+.review-options { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.phone-select { display: none; }
+details.sales-panel { display: block; }
+@media (max-width: 700px) {
+  button { min-height: 36px; }
+  .phone-select { display: inline-block; }
+  .table-wrap:has(.compact-prices) { overflow: visible; }
+  .table-wrap table.compact-prices { min-width: 0; }
+  .compact-prices thead { display: none; }
+  .compact-prices tbody { display: block; }
+  .compact-prices tbody tr { display: grid; grid-template-columns: 22px 60px minmax(0, 1fr); gap: 4px 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .compact-prices td { border: 0; padding: 0; overflow-wrap: anywhere; }
+  .compact-prices td:nth-child(1) { grid-column: 1; grid-row: 1; width: auto; }
+  .compact-prices td:nth-child(2) { grid-column: 2; grid-row: 1 / 5; }
+  .compact-prices td:nth-child(3) { grid-column: 3; grid-row: 1; }
+  .compact-prices td:nth-child(4) { grid-column: 3; grid-row: 2; }
+  .compact-prices td:nth-child(8) { grid-column: 3; grid-row: 3; }
+  .compact-prices td:nth-child(8)::before { content: "Estimate: "; color: var(--muted); }
+  .compact-prices td:nth-child(9) { grid-column: 3; grid-row: 4; }
+  .compact-prices td:nth-child(10) { grid-column: 2 / 4; grid-row: 5; white-space: normal; }
+  .compact-prices td[colspan] { grid-column: 1 / -1; }
 }

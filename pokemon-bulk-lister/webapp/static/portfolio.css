@@ -5,7 +5,7 @@
   --page: #f9f9f7;
   --ink: #0b0b0b;
   --ink-2: #52514e;
-  --muted: #898781;
+  --muted: #6b6862;
   --grid: #e1e0d9;
   --baseline: #c3c2b7;
   --border: rgba(11, 11, 11, 0.10);
@@ -21,7 +21,7 @@
     --page: #0d0d0d;
     --ink: #ffffff;
     --ink-2: #c3c2b7;
-    --muted: #898781;
+    --muted: #aaa79f;
     --grid: #2c2c2a;
     --baseline: #383835;
     --border: rgba(255, 255, 255, 0.10);
@@ -393,4 +393,13 @@ dialog textarea { width: 100%; min-height: 220px; font-family: ui-monospace, "SF
   #listing-sources li > :first-child { flex: 1 1 100%; }
   /* 16px stops iOS zooming the page when a field takes focus. */
   input, select, textarea { font-size: 16px !important; }
+}
+
+/* Clear landmarks and keyboard focus across collection screens. */
+.page-intro h1 { font-size: 22px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.4px; }
+.page-intro p { margin: 0; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 700px) {
+  .btn, .tab { min-height: 40px; }
+  .topbar-left { flex-wrap: wrap; }
 }

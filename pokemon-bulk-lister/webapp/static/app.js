@@ -11,6 +11,7 @@ const state = {
   unidentified: false,
   editing: null,
   selected: new Set(),
+  search: "",
 };
 
 // ---------------------------------------------------------------- network
@@ -72,7 +73,7 @@ function priceBasis(card) {
   const why = card.needs_review && card.pricing_notes
     ? `<span class="src why" title="${escapeHtml(card.pricing_notes)}">${escapeHtml(card.pricing_notes.slice(0, 70))}</span>`
     : "";
-  return basis + why;
+  return basis + `<span class="src">Price confidence: ${Math.round((card.pricing_confidence || 0) * 100)}%</span>` + why;
 }
 
 function renderRow(card) {
@@ -87,8 +88,8 @@ function renderRow(card) {
   const checked = state.selected.has(card.id) ? "checked" : "";
   return `
     <tr class="${flagClass}" data-id="${card.id}">
-      <td class="select"><input type="checkbox" data-act="select" ${checked} /></td>
-      <td class="thumb"><img src="/${card.crop_path}" alt="" loading="lazy" /></td>
+      <td class="select"><input type="checkbox" data-act="select" aria-label="Select ${escapeHtml(card.name || 'unidentified card')}" ${checked} /></td>
+      <td class="thumb"><img src="/${escapeHtml(card.crop_path)}" alt="Photo of ${escapeHtml(card.name || 'unidentified card')}" loading="lazy" /></td>
       <td>
         <strong>${escapeHtml(card.name) || "<span class='muted'>(unidentified)</span>"}</strong>
         ${card.is_holo ? "<span class='muted'> · holo</span>" : ""}
@@ -100,7 +101,8 @@ function renderRow(card) {
       <td class="price">${fmt(card.cardmarket_trend_usd)}</td>
       <td class="price">${ebayCell}</td>
       <td class="price"><strong>${fmt(card.final_price)}</strong>${priceBasis(card)}</td>
-      <td class="conf">${(card.pricing_confidence ?? 0).toFixed(2)}</td>
+      <td><span class="id-status ${card.id_confidence <= 0.6 ? 'review' : ''}">${!card.name ? 'Not identified' : card.id_confidence <= 0.6 ? 'Check ID' : card.id_confidence >= 0.97 ? 'Catalog match' : 'Check photo'}</span>
+      <span class="src">${Math.round((card.id_confidence || 0) * 100)}% ID confidence</span></td>
       <td class="actions">
         <button data-act="edit">Edit</button>
         <button data-act="price">Price</button>
@@ -110,19 +112,27 @@ function renderRow(card) {
   `;
 }
 
+function visibleCards() {
+  const q = state.search.trim().toLocaleLowerCase();
+  return state.cards.filter(c => !q || [c.name, c.set_name, c.set_code, c.card_number].some(v => String(v || '').toLocaleLowerCase().includes(q)));
+}
+
 function renderCards() {
   const body = $("#cards-body");
-  if (!state.cards.length) {
-    body.innerHTML = `<tr><td colspan="10" class="muted">No cards yet. Upload a grid above.</td></tr>`;
-    updateBundleButton();
-    return;
-  }
-  // Drop selections that aren't in the current view.
-  const visible = new Set(state.cards.map(c => c.id));
+  const cards = visibleCards();
+  const visible = new Set(cards.map(c => c.id));
   for (const id of Array.from(state.selected)) {
     if (!visible.has(id)) state.selected.delete(id);
   }
-  body.innerHTML = state.cards.map(renderRow).join("");
+  $("#visible-count").textContent = `(${cards.length} shown)`;
+  if (!cards.length) {
+    const filtered = state.search || state.needsReview || state.unidentified;
+    body.innerHTML = `<tr><td colspan="10" class="muted empty-state"><strong>${filtered ? 'No cards match these filters' : 'Your cards will appear here'}</strong>${filtered ? 'Clear the search or filters to see more cards.' : 'Add a photo above to get started. You can review and correct every card before listing.'}</td></tr>`;
+    syncSelectAllCheckbox();
+    updateBundleButton();
+    return;
+  }
+  body.innerHTML = cards.map(renderRow).join("");
   syncSelectAllCheckbox();
   updateBundleButton();
 }
@@ -130,8 +140,9 @@ function renderCards() {
 function syncSelectAllCheckbox() {
   const all = $("#select-all");
   if (!all) return;
-  const total = state.cards.length;
-  const sel = state.cards.filter(c => state.selected.has(c.id)).length;
+  const cards = visibleCards();
+  const total = cards.length;
+  const sel = cards.filter(c => state.selected.has(c.id)).length;
   all.checked = total > 0 && sel === total;
   all.indeterminate = sel > 0 && sel < total;
 }
@@ -175,11 +186,14 @@ function escapeHtml(s) {
 }
 
 // ---------------------------------------------------------------- data fetch
+let cardsRequest = 0;
 async function loadCards() {
+  const request = ++cardsRequest;
   const params = new URLSearchParams({ sort: state.sort });
   if (state.needsReview) params.set("needs_review", "1");
   if (state.unidentified) params.set("unidentified", "1");
   const data = await api(`/api/cards?${params}`);
+  if (request !== cardsRequest) return;
   state.cards = data.cards;
   state.stats = data.stats;
   renderStats(state.stats);
@@ -223,7 +237,7 @@ function setupDropzone() {
       } else {
         // A hosted install caps each request, so photos go one at a time,
         // shrunk first when they are too big.
-        data = { grids: [], total_crops: 0, skipped: [] };
+        data = { grids: [], total_crops: 0, skipped: [], errors: [] };
         let n = 0;
         for (const original of files) {
           status.textContent = `Uploading photo ${++n} of ${files.length}…`;
@@ -233,10 +247,11 @@ function setupDropzone() {
           data.grids.push(...one.grids);
           data.total_crops += one.total_crops;
           data.skipped.push(...(one.skipped || []));
+          data.errors.push(...(one.errors || []));
         }
       }
       const skipped = (data.skipped || []).length
-        ? ` Skipped ${data.skipped.length} file(s) that are not JPG, PNG, WEBP or TIFF.` : "";
+        ? ` Skipped ${data.skipped.length} unreadable or unsupported file(s): ${data.skipped.join(', ')}. Try JPEG, PNG or a smaller photo.` : "";
       status.textContent = data.total_crops
         ? `Added ${data.total_crops} card(s) from ${data.grids.length} photo(s).${skipped}`
         : `No cards found in ${data.grids.length} photo(s).${skipped}`;
@@ -258,10 +273,11 @@ function setupDropzone() {
   });
 
   // Remember the two scan settings between visits.
-  const saved = JSON.parse(localStorage.getItem("scan-settings") || "{}");
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("scan-settings") || "{}") || {}; } catch { /* Storage may be blocked or contain an old setting. */ }
   if (saved.auto === false) $("#auto-process").checked = false;
   const remember = () => {
-    localStorage.setItem("scan-settings", JSON.stringify({ auto: $("#auto-process").checked }));
+    try { localStorage.setItem("scan-settings", JSON.stringify({ auto: $("#auto-process").checked })); } catch { /* Optional preference. */ }
   };
   $("#auto-process").addEventListener("change", remember);
   remember();
@@ -336,21 +352,39 @@ async function fitPhoto(file, limit) {
 }
 
 // A CSV as pieces small enough to send, each starting with the header line.
-function csvParts(text, maxChars = 3000000) {
-  if (text.length <= maxChars) return [text];
-  const headerEnd = text.indexOf("\n") + 1;
-  const header = text.slice(0, headerEnd);
-  const parts = [];
-  let start = headerEnd;
-  while (start < text.length) {
-    let end = Math.min(text.length, start + maxChars);
-    if (end < text.length) {
-      const cut = text.lastIndexOf("\n", end);
-      if (cut > start) end = cut + 1;
+function csvParts(text, maxBytes = 3000000) {
+  // Requests carry JSON: count UTF-8 bytes including escaped quotes/newlines.
+  // A newline inside a quoted cell is not a record boundary.
+  const encoder = new TextEncoder();
+  const bytes = s => encoder.encode(JSON.stringify(s)).length - 2;
+  if (bytes(text) <= maxBytes) return [text];
+  const records = [];
+  let quoted = false, start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '"') {
+      if (quoted && text[i + 1] === '"') i++;
+      else quoted = !quoted;
+    } else if (text[i] === '\n' && !quoted) {
+      records.push(text.slice(start, i + 1));
+      start = i + 1;
     }
-    parts.push(header + text.slice(start, end));
-    start = end;
   }
+  if (quoted) throw new Error('A CSV cell has an unclosed quote. Export the file again.');
+  if (start < text.length) records.push(text.slice(start));
+  const header = records.shift() || '';
+  const headerBytes = bytes(header);
+  let part = header, used = headerBytes;
+  const parts = [];
+  for (const row of records) {
+    const rowBytes = bytes(row);
+    if (headerBytes + rowBytes > maxBytes) throw new Error('A CSV row is too large to upload. Shorten its notes or description.');
+    if (used + rowBytes > maxBytes) {
+      parts.push(part);
+      part = header; used = headerBytes;
+    }
+    part += row; used += rowBytes;
+  }
+  if (part !== header || !parts.length) parts.push(part);
   return parts;
 }
 
@@ -376,6 +410,7 @@ async function startProcess() {
 // ---------------------------------------------------------------- confirm
 // Resolves {ok, checked}. Used before publishing or moving cards off the bench.
 function askConfirm({ title, html, confirm = "Confirm", checkbox = null }) {
+  const previousFocus = document.activeElement;
   $("#confirm-title").textContent = title;
   $("#confirm-text").innerHTML = html;
   $("#confirm-ok").textContent = confirm;
@@ -384,11 +419,12 @@ function askConfirm({ title, html, confirm = "Confirm", checkbox = null }) {
   $("#confirm-check-label").textContent = checkbox || "";
   const modal = $("#confirm-modal");
   modal.classList.remove("hidden");
-  $("#confirm-ok").focus();
+  $("#confirm-cancel").focus();
   return new Promise(resolve => {
     const done = ok => {
       modal.classList.add("hidden");
       modal.removeEventListener("keydown", onKey);
+      previousFocus?.focus();
       resolve({ ok, checked: $("#confirm-check").checked });
     };
     const onKey = ev => { if (ev.key === "Escape") { ev.stopPropagation(); done(false); } };
@@ -441,6 +477,12 @@ async function addToLibrary() {
 
 // ---------------------------------------------------------------- table interactions
 function setupTable() {
+  $("#select-visible-btn").addEventListener("click", () => {
+    const cards = visibleCards();
+    const clear = cards.length && cards.every(c => state.selected.has(c.id));
+    cards.forEach(c => clear ? state.selected.delete(c.id) : state.selected.add(c.id));
+    renderCards();
+  });
   $("#cards-body").addEventListener("click", async ev => {
     const cb = ev.target.closest("input[type=checkbox][data-act=select]");
     if (cb) {
@@ -472,17 +514,19 @@ function setupTable() {
   });
 
   $("#select-all").addEventListener("change", ev => {
-    if (ev.target.checked) state.cards.forEach(c => state.selected.add(c.id));
-    else state.cards.forEach(c => state.selected.delete(c.id));
+    if (ev.target.checked) visibleCards().forEach(c => state.selected.add(c.id));
+    else visibleCards().forEach(c => state.selected.delete(c.id));
     renderCards();
   });
 }
 
 // ---------------------------------------------------------------- modals
+let editorOpener;
 function openEdit(id) {
   const card = state.cards.find(c => c.id === id);
   if (!card) return;
   state.editing = id;
+  editorOpener = document.activeElement;
   $("#modal-title").textContent = `Edit · ${card.name || "(unidentified)"}`;
   $("#modal-img").src = `/${card.crop_path}`;
   const form = $("#edit-form");
@@ -511,9 +555,14 @@ function openEdit(id) {
     <div>Notes<strong>${escapeHtml(card.pricing_notes || "")}</strong></div>
   `;
   $("#modal").classList.remove("hidden");
+  form.elements.namedItem("name").focus();
 }
 
-function closeEdit() { $("#modal").classList.add("hidden"); state.editing = null; }
+function closeEdit() {
+  const wasOpen = !$("#modal").classList.contains("hidden");
+  $("#modal").classList.add("hidden"); state.editing = null;
+  if (wasOpen) editorOpener?.focus();
+}
 
 async function saveEdit({ priceAfter = false } = {}) {
   if (!state.editing) return;
@@ -731,6 +780,10 @@ function setupBundleModal() {
 
 // ---------------------------------------------------------------- toolbar
 function setupToolbar() {
+  $("#card-search").addEventListener("input", e => { state.search = e.target.value; renderCards(); });
+  $("#show-comparisons").addEventListener("change", e => {
+    $("#cards-table").classList.toggle("compact-prices", !e.target.checked);
+  });
   $("#sort").addEventListener("change", e => { state.sort = e.target.value; loadCards(); });
   $("#filter-review").addEventListener("change", e => { state.needsReview = e.target.checked; loadCards(); });
   $("#filter-unid").addEventListener("change", e => { state.unidentified = e.target.checked; loadCards(); });
@@ -1353,10 +1406,23 @@ async function pollPublishJob() {
 // ---------------------------------------------------------------- init
 function setupKeyboard() {
   document.addEventListener("keydown", ev => {
+    const modal = ["#confirm-modal", "#conn-modal", "#bundle-modal", "#modal"]
+      .map(s => $(s)).find(el => !el.classList.contains("hidden"));
+    if (ev.key === "Tab" && modal) {
+      const focusable = Array.from(modal.querySelectorAll('button, input:not([type=hidden]), select, textarea, a[href], [tabindex="0"]'))
+        .filter(el => !el.disabled && el.getClientRects().length);
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (ev.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+        ev.preventDefault(); last?.focus();
+      } else if (!ev.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        ev.preventDefault(); first?.focus();
+      }
+    }
     if (ev.key === "Escape") {
-      closeEdit();
-      closeBundle();
-      if ($("#confirm-modal").classList.contains("hidden")) closeConnections();
+      if (modal?.id === "confirm-modal") $("#confirm-cancel").click();
+      else if (modal?.id === "conn-modal") closeConnections();
+      else if (modal?.id === "bundle-modal") closeBundle();
+      else closeEdit();
     }
   });
 }
