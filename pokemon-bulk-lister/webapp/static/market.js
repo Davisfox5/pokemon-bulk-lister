@@ -122,4 +122,13 @@ const preset = new URLSearchParams(location.search).get("q");
 if (preset) $("#mk-search").value = preset;
 
 load().catch((err) => toast(err.message, "err"));
-setInterval(() => { if (!document.querySelector("dialog[open]")) load().catch(() => {}); }, 60_000);
+// No timer: an idle open tab asks for nothing (every request wakes the
+// database). Coming back to the tab reads the listings once.
+let lastLook = Date.now();
+const lookAgain = () => {
+  if (document.hidden || document.querySelector("dialog[open]") || Date.now() - lastLook < 60_000) return;
+  lastLook = Date.now();
+  load().catch(() => {});
+};
+document.addEventListener("visibilitychange", lookAgain);
+window.addEventListener("focus", lookAgain);

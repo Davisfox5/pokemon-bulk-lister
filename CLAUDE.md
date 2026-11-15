@@ -126,8 +126,10 @@ runtime routing audit. This section covers what the tool calls when it runs.
   the catalog could not settle gets a Choose button on Scan: `GET
   /api/cards/<id>/choices` lists the real cards it could be (no model call), or
   the person types it in or has the photo read again.
-- The Scan table keeps itself current (`loadCards` every few seconds and on each
-  job step). A named card with no price and no pricing note is priced in the
+- The Scan table keeps itself current with no timer: rows update from a job's
+  progress and from each price as it lands, and the list is read once when the
+  tab comes back into view. An idle open tab must make no requests (each one
+  wakes the database), so do not add a polling interval. A named card with no price and no pricing note is priced in the
   background by the page (`priceWaitingCards`); changing which card it is clears
   both (`db.update_card`), which is how an edit gets priced again.
 - A price is for the card's finish (`lib/printing.py`). Old sets list theirs as

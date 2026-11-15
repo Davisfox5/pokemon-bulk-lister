@@ -1494,9 +1494,16 @@ function refreshAll() {
 }
 
 refreshAll();
-setInterval(() => {
+// No timer: an idle open tab asks for nothing (every request wakes the
+// database). Coming back to the tab reads the library once.
+let lastLook = Date.now();
+const lookAgain = () => {
+  if (document.hidden || Date.now() - lastLook < 60_000) return;
   if (document.querySelector("dialog[open]")) return;  // don't redraw under an open form
+  lastLook = Date.now();
   loadSummary().then(loadMarket).catch(() => {});
   loadLedger().catch(() => {});
   loadAlerts().catch(() => {});
-}, 60_000);
+};
+document.addEventListener("visibilitychange", lookAgain);
+window.addEventListener("focus", lookAgain);

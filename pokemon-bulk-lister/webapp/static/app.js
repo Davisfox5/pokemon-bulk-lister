@@ -245,13 +245,21 @@ async function priceWaitingCards() {
   loadCards().catch(() => {});
 }
 
-// Keep the table current without a click: prices found by a running job, by
-// another tab or by the daily refresh show up on their own.
+// The table is live without a timer. While work is under way the page is
+// already talking to the server (a job's progress, each price as it lands)
+// and the rows update from that. When nothing is under way nothing is asked,
+// so an open tab costs nothing. Coming back to the tab asks once, to pick up
+// anything changed elsewhere.
+let lastLook = Date.now();
 function startLiveRefresh() {
-  setInterval(() => {
-    const busy = document.querySelector(".modal:not(.hidden)") || state.pricing.size;
-    if (!document.hidden && !busy) loadCards().catch(() => {});
-  }, 8000);
+  const look = () => {
+    const busy = document.querySelector(".modal:not(.hidden)") || state.pricing.size || state.jobRunning;
+    if (document.hidden || busy || Date.now() - lastLook < 30000) return;
+    lastLook = Date.now();
+    loadCards().catch(() => {});
+  };
+  document.addEventListener("visibilitychange", look);
+  window.addEventListener("focus", look);
 }
 
 // ---------------------------------------------------------------- upload
