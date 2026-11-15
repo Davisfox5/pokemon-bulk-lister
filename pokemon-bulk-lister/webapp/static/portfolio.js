@@ -19,22 +19,22 @@ async function loadSummary() {
   const t = data.totals;
   $("#t-value").textContent = fmtUsd(t.value);
   $("#t-cards").textContent = t.card_count;
-  $("#t-cards-sub").textContent = `${t.priced_count} of ${t.item_count} entries priced`;
+  $("#t-cards-sub").textContent = `${t.priced_count} of ${t.item_count} cards priced`;
   $("#t-cost").textContent = fmtUsd(t.cost_basis);
   const costSub = $("#t-cost-sub");
   if (t.cost_basis && t.value != null) {
     const gain = t.value - t.cost_basis;
-    costSub.textContent = `${gain >= 0 ? "+" : ""}${fmtUsd(gain)} unrealized`;
+    costSub.textContent = `${gain >= 0 ? "Up " : "Down "}${fmtUsd(Math.abs(gain))}`;
     costSub.className = "tile-sub " + (gain >= 0 ? "up" : "down");
   } else {
-    costSub.textContent = "from cards with a price paid";
+    costSub.textContent = "Only cards with a price paid";
     costSub.className = "tile-sub";
   }
   $("#alerts-unread").textContent = t.unread_alerts ? `(${t.unread_alerts} unread)` : "";
   const sched = data.scheduler || {};
   $("#t-value-sub").textContent = sched.last_cycle_at
     ? `prices checked ${ago(sched.last_cycle_at)}`
-    : "from the latest catalog prices";
+    : "Using the latest saved prices";
 
   lib.items = data.items;
   for (const id of [...lib.selected]) if (!lib.items.some((i) => i.id === id)) lib.selected.delete(id);
@@ -116,9 +116,9 @@ function renderHave() {
   const body = $("#inv-body");
   const rows = visibleItems();
   $("#lib-count").textContent = lib.items.length
-    ? `${rows.length} of ${lib.items.length} entries` : "";
+    ? `${rows.length} of ${lib.items.length} cards` : "";
   if (!lib.items.length) {
-    body.innerHTML = `<tr><td colspan="9" class="empty">No cards yet. <a href="/">Scan</a> some, or use Import.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="empty">No cards yet. Add photos on <a href="/">Scan</a>, or import a list you already have.</td></tr>`;
   } else if (!rows.length) {
     body.innerHTML = '<tr><td colspan="9" class="empty">No cards match these filters.</td></tr>';
   } else {
@@ -846,7 +846,7 @@ if (new URLSearchParams(location.search).get("scan") === "operator-only") {
   loadAccount().catch(() => {}).finally(() => {
     const confirmed = !$("#verify-banner") || $("#verify-banner").classList.contains("hidden");
     toast(confirmed
-      ? "Scan is for the operator account only (the address in ADMIN_EMAILS). This account is not it."
+      ? "Scan is only available on the admin account."
       : "Scan opens once your email address is confirmed. See the banner at the top of this page.", "err");
   });
 }
@@ -863,7 +863,7 @@ async function loadChart() {
 function renderChart(series) {
   const host = $("#chart");
   if (series.length < 2) {
-    host.innerHTML = '<p class="muted">Not enough price history yet — the chart fills in as the scheduler collects snapshots.</p>';
+    host.innerHTML = '<p class="muted">Not enough history yet. This fills in as prices are checked.</p>';
     return;
   }
   const css = getComputedStyle(document.documentElement);

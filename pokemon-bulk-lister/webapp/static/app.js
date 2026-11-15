@@ -6,7 +6,7 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const state = {
   cards: [],
   stats: {},
-  sort: "confidence_asc",
+  sort: "newest",
   needsReview: false,
   unidentified: false,
   editing: null,
@@ -35,13 +35,27 @@ async function api(path, opts = {}) {
 function renderStats(stats) {
   $("#stats").innerHTML = `
     <span><strong>${stats.total ?? 0}</strong> cards</span>
-    <span><strong>${stats.identified ?? 0}</strong> identified</span>
+    <span><strong>${stats.identified ?? 0}</strong> named</span>
     <span><strong>${stats.priced ?? 0}</strong> priced</span>
-    <span><strong>${stats.flagged ?? 0}</strong> flagged</span>
-    <span><strong>${stats.uploaded ?? 0}</strong> uploaded</span>
+    <span><strong>${stats.flagged ?? 0}</strong> need a look</span>
     <span><strong>${stats.ebay_listed ?? 0}</strong> on eBay</span>
     <span>est. value: <strong>$${(stats.total_value ?? 0).toFixed(2)}</strong></span>
   `;
+}
+
+function reviewWhy(notes) {
+  const n = (notes || "").toLowerCase();
+  if (n.includes("japanese")) return "Japanese card. Price is the English printing.";
+  if (n.includes("disagree")) return "Price sources disagree. Check this printing.";
+  if (n.includes("name only") || n.includes("name-only")) return "Matched on the name only. Check the set.";
+  if (n.includes("number was not used")) return "Card number was not used. Check this printing.";
+  return "Check this price";
+}
+
+function checkLabel(card) {
+  if (card.needs_review) return "Check";
+  if (card.final_price != null) return "OK";
+  return "—";
 }
 
 function fmt(v) {
@@ -54,10 +68,10 @@ function bestEbay(card) {
   // Prefer Terapeak's 365-day median when present (deeper signal),
   // otherwise fall back to the 30-day MI median.
   if (card.terapeak_median_usd != null && card.terapeak_median_usd > 0) {
-    return { value: card.terapeak_median_usd, window: "365d", count: card.terapeak_sold_count_365d };
+    return { value: card.terapeak_median_usd, window: "last year", count: card.terapeak_sold_count_365d };
   }
   if (card.ebay_median_30d != null && card.ebay_median_30d > 0) {
-    return { value: card.ebay_median_30d, window: "30d", count: card.ebay_sold_count_30d };
+    return { value: card.ebay_median_30d, window: "last 30 days", count: card.ebay_sold_count_30d };
   }
   return { value: null, window: null, count: 0 };
 }
@@ -69,8 +83,8 @@ function priceBasis(card) {
   const n = [card.tcgplayer_market, card.cardmarket_trend_usd, card.ebay_median_30d, card.terapeak_median_usd]
     .filter(v => v != null && v > 0).length;
   const basis = `<span class="src">${n} source${n === 1 ? "" : "s"}</span>`;
-  const why = card.needs_review && card.pricing_notes
-    ? `<span class="src why" title="${escapeHtml(card.pricing_notes)}">${escapeHtml(card.pricing_notes.slice(0, 70))}</span>`
+  const why = card.needs_review
+    ? `<span class="src why" title="${escapeHtml(card.pricing_notes || "")}">${escapeHtml(reviewWhy(card.pricing_notes))}</span>`
     : "";
   return basis + why;
 }
@@ -83,14 +97,14 @@ function renderRow(card) {
   const ebay = bestEbay(card);
   const ebayCell = ebay.value == null
     ? `<span class="muted">—</span>`
-    : `${fmt(ebay.value)}<div class="muted small">${ebay.window} · n=${ebay.count}</div>`;
+    : `${fmt(ebay.value)}<div class="muted small">${ebay.count || 0} sold, ${ebay.window}</div>`;
   const checked = state.selected.has(card.id) ? "checked" : "";
   return `
     <tr class="${flagClass}" data-id="${card.id}">
       <td class="select"><input type="checkbox" data-act="select" ${checked} /></td>
       <td class="thumb"><img src="/${card.crop_path}" alt="" loading="lazy" /></td>
       <td>
-        <strong>${escapeHtml(card.name) || "<span class='muted'>(unidentified)</span>"}</strong>
+        <strong>${escapeHtml(card.name) || "<span class='muted'>No name yet</span>"}</strong>
         ${card.is_holo ? "<span class='muted'> · holo</span>" : ""}
         ${card.sold ? "<span class='sold-tag' title='Sold. It is left out of publishing and exports.'>sold</span>" : ""}
         <div class="muted small">${escapeHtml(card.condition_guess || "")}</div>
@@ -99,8 +113,8 @@ function renderRow(card) {
       <td class="price">${fmt(card.tcgplayer_market)}</td>
       <td class="price">${fmt(card.cardmarket_trend_usd)}</td>
       <td class="price">${ebayCell}</td>
-      <td class="price"><strong>${fmt(card.final_price)}</strong>${priceBasis(card)}</td>
-      <td class="conf">${(card.pricing_confidence ?? 0).toFixed(2)}</td>
+      <td class="price price-final"><strong>${fmt(card.final_price)}</strong>${priceBasis(card)}</td>
+      <td class="conf">${checkLabel(card)}</td>
       <td class="actions">
         <button data-act="edit">Edit</button>
         <button data-act="price">Price</button>
@@ -113,7 +127,7 @@ function renderRow(card) {
 function renderCards() {
   const body = $("#cards-body");
   if (!state.cards.length) {
-    body.innerHTML = `<tr><td colspan="10" class="muted">No cards yet. Upload a grid above.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="empty">No cards yet. Add a photo of your cards, or a photo of one card.</td></tr>`;
     updateBundleButton();
     return;
   }
@@ -140,7 +154,7 @@ function updateBundleButton() {
   const btn = $("#bundle-btn");
   if (!btn) return;
   const n = state.selected.size;
-  btn.textContent = `Bundle selected (${n})`;
+  btn.textContent = `Sell as one lot (${n})`;
   btn.disabled = n < 2;
   const del = $("#delete-btn");
   if (del) {
@@ -416,7 +430,7 @@ async function addToLibrary() {
   if (!ready.length) {
     $("#upload-status").textContent = picked.length
       ? "None of the selected cards are identified and priced yet."
-      : "No cards are identified and priced yet. Run “Identify + price new cards” first.";
+      : "No cards have a name and a price yet. Use “Name and price” first.";
     return;
   }
   const value = ready.reduce((sum, c) => sum + c.final_price, 0);
@@ -424,8 +438,8 @@ async function addToLibrary() {
     title: `Add ${plural(ready.length, "card")} to your library?`,
     html: `<p>${plural(ready.length, "priced card")}${picked.length ? " from your selection" : ""}, worth
       $${value.toFixed(2)} at current prices, will be added to your library. Cards already added are skipped.</p>
-      ${left ? `<p class="muted">${plural(left, "card")} without a name or price stay on the bench.</p>` : ""}
-      ${flagged ? `<p class="flag-text">${plural(flagged, "card")} ${flagged === 1 ? "has a price" : "have prices"} flagged for review. They are added too and stay flagged in the library.</p>` : ""}`,
+      ${left ? `<p class="muted">${plural(left, "card")} still need a name or a price. They stay on this page.</p>` : ""}
+      ${flagged ? `<p class="flag-text">${plural(flagged, "card")} ${flagged === 1 ? "needs" : "need"} a price check. ${flagged === 1 ? "It is" : "They are"} added too, and stay marked in the library.</p>` : ""}`,
     confirm: "Add to library",
   });
   if (!ok) return;
@@ -483,7 +497,7 @@ function openEdit(id) {
   const card = state.cards.find(c => c.id === id);
   if (!card) return;
   state.editing = id;
-  $("#modal-title").textContent = `Edit · ${card.name || "(unidentified)"}`;
+  $("#modal-title").textContent = `Edit · ${card.name || "No name yet"}`;
   $("#modal-img").src = `/${card.crop_path}`;
   const form = $("#edit-form");
   form.id.value = card.id;
@@ -497,18 +511,11 @@ function openEdit(id) {
   form.id_confidence.value = card.id_confidence ?? 0;
 
   $("#modal-prices").innerHTML = `
-    <div>TCG market<strong>${fmt(card.tcgplayer_market)}</strong></div>
-    <div>CM trend (USD)<strong>${fmt(card.cardmarket_trend_usd)}</strong></div>
-    <div>CM trend (EUR)<strong>${fmt(card.cardmarket_trend_eur)}</strong></div>
-    <div>eBay median 30d<strong>${fmt(card.ebay_median_30d)}</strong></div>
-    <div>eBay max 30d<strong>${fmt(card.ebay_max_30d)}</strong></div>
-    <div>Terapeak median<strong>${fmt(card.terapeak_median_usd)}</strong></div>
-    <div>eBay sold count<strong>${card.ebay_sold_count_30d || 0}</strong></div>
-    <div>Final price<strong>${fmt(card.final_price)}</strong></div>
-    <div>Pricing conf.<strong>${(card.pricing_confidence ?? 0).toFixed(2)}</strong></div>
-    <div>Outlier<strong>${card.outlier_flag ? "yes" : "no"}</strong></div>
-    <div>Image URL<strong>${card.image_url ? "uploaded" : "—"}</strong></div>
-    <div>Notes<strong>${escapeHtml(card.pricing_notes || "")}</strong></div>
+    <div>TCGplayer<strong>${fmt(card.tcgplayer_market)}</strong></div>
+    <div>Cardmarket<strong>${fmt(card.cardmarket_trend_usd)}</strong></div>
+    <div>eBay sold<strong>${fmt(card.ebay_median_30d)}</strong></div>
+    <div>Your price<strong>${fmt(card.final_price)}</strong></div>
+    <div class="price-note">${card.needs_review ? escapeHtml(reviewWhy(card.pricing_notes)) : ""}</div>
   `;
   $("#modal").classList.remove("hidden");
 }
@@ -767,8 +774,8 @@ function setupToolbar() {
     const { ok } = await askConfirm({
       title: `Re-price ${plural(n, "card")}?`,
       html: `<p>This looks up every identified card again, including the ones already priced, and
-        replaces their prices.${useTerapeak === "1" ? " Terapeak adds about 5 seconds per card." : ""}</p>
-        <p class="muted">To price only new cards, use “Identify + price new cards”.</p>`,
+        replaces their prices.${useTerapeak === "1" ? " A year of eBay sales adds about 5 seconds per card." : ""}</p>
+        <p class="muted">To price only new cards, use “Name and price”.</p>`,
       confirm: "Re-price all",
     });
     if (!ok) return;
@@ -787,10 +794,10 @@ function setupToolbar() {
   api("/api/terapeak/status").then(s => {
     const el = $("#terapeak-status");
     if (s.logged_in) {
-      el.textContent = "(logged in)";
+      el.textContent = "signed in";
       el.style.color = "#15803d";
     } else {
-      el.textContent = "(first run will prompt login)";
+      el.textContent = "you’ll sign in once";
     }
   }).catch(() => {});
 
@@ -809,15 +816,15 @@ function setupToolbar() {
         const r = await api("/api/identify/verify", { method: "POST", body: JSON.stringify({ after }) });
         for (const k of Object.keys(sum)) sum[k] += r[k] || 0;
         after = r.last_id;
-        status.textContent = `Checking IDs… ${sum.verified + sum.probable + sum.unverified + sum.unknown} done`;
+        status.textContent = `Checking names… ${sum.verified + sum.probable + sum.unverified + sum.unknown} done`;
         if (!r.remaining || !r.checked) break;
       }
-      status.textContent = `IDs checked: ${sum.verified} confirmed, ${sum.probable} likely (number corrected), `
-        + `${sum.unverified} not a real card as read`
-        + (sum.unknown ? `, ${sum.unknown} could not be checked (catalog unreachable)` : "") + ".";
+      status.textContent = `${sum.verified} names confirmed, ${sum.probable} numbers fixed, `
+        + `${sum.unverified} don’t match a real card`
+        + (sum.unknown ? `, ${sum.unknown} couldn’t be checked` : "") + ".";
       await loadCards();
     } catch (err) {
-      status.textContent = `Could not check IDs: ${err.message}`;
+      status.textContent = `Could not check names: ${err.message}`;
     } finally {
       btn.disabled = false;
     }

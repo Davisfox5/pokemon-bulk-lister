@@ -177,10 +177,10 @@ def identify_page(image_path: str, rows: int = 3, cols: int = 3, model: Optional
     with 0-indexed row/col matching the splitter's grid positions."""
     image_b64 = _encode_image(image_path, PAGE_MAX_EDGE)
     prompt = (
-        f"This photo shows a binder page holding Pokémon cards in a {rows}x{cols} grid "
-        f"(up to {rows * cols} pockets; some may be empty). Identify each card that is "
-        "present. Use 0-indexed row (top to bottom) and col (left to right). "
-        "Skip empty pockets entirely."
+        f"This image is a grid of Pokémon cards, {rows} rows by {cols} columns. "
+        "It may be a binder page or a sheet of upright card photos. "
+        "Identify each card that is there. Use 0-indexed row (top to bottom) and "
+        "col (left to right). Skip empty cells."
     )
     result = _vision_request(image_b64, prompt, _PAGE_SCHEMA, max_tokens=4096, model=model)
     return result.get("cards", [])

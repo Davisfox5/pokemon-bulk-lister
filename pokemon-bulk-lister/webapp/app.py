@@ -141,8 +141,6 @@ def healthz():
 
 
 # Lazy singletons
-_tcg_client: Optional[TCGPlayerClient] = None
-_ebay_client: Optional[EbayClient] = None
 _split_grids = None
 _csv_gen = None
 
@@ -173,18 +171,24 @@ def _init() -> None:
 _init()
 
 
+_thread_clients = threading.local()
+
+
 def get_tcg() -> TCGPlayerClient:
-    global _tcg_client
-    if _tcg_client is None:
-        _tcg_client = TCGPlayerClient()
-    return _tcg_client
+    # One client per thread. A shared Session is not safe across the price workers.
+    client = getattr(_thread_clients, "tcg", None)
+    if client is None:
+        client = TCGPlayerClient()
+        _thread_clients.tcg = client
+    return client
 
 
 def get_ebay() -> EbayClient:
-    global _ebay_client
-    if _ebay_client is None:
-        _ebay_client = EbayClient()
-    return _ebay_client
+    client = getattr(_thread_clients, "ebay", None)
+    if client is None:
+        client = EbayClient()
+        _thread_clients.ebay = client
+    return client
 
 
 _cardmarket_guide: Optional[CardmarketPriceGuide] = None
@@ -652,7 +656,7 @@ def _pricing_job(use_terapeak, only_unpriced: bool = False) -> None:
             targets = [c for c in targets if c.get("final_price") is None]
         _job_state["progress"] = 0
         if not targets:
-            _job_state["message"] = "nothing to price"
+            _job_state["message"] = "Nothing new to price"
             return
         total_units = len(targets) * (2 if terapeak_on else 1)
         _job_state["total"] = total_units
@@ -670,10 +674,10 @@ def _pricing_job(use_terapeak, only_unpriced: bool = False) -> None:
                 p2 = pass2_progress[0]
                 if terapeak_on:
                     _job_state["progress"] = p1 + p2
-                    _job_state["message"] = f"TCG/CM {p1}/{len(targets)} · Terapeak {p2}/{len(targets)}"
+                    _job_state["message"] = f"Pricing {p1} of {len(targets)} · eBay year {p2} of {len(targets)}"
                 else:
                     _job_state["progress"] = p1
-                    _job_state["message"] = f"TCG/CM {p1}/{len(targets)}"
+                    _job_state["message"] = f"Pricing {p1} of {len(targets)}"
 
         def price_one_pass1(card: dict) -> None:
             """TCG + CM + eBay-MI for one card."""
@@ -817,7 +821,7 @@ def _pricing_job(use_terapeak, only_unpriced: bool = False) -> None:
         if terapeak_thread is not None:
             terapeak_thread.join()
 
-        _job_state["message"] = f"done, priced {len(targets)} card(s)"
+        _job_state["message"] = f"Priced {len(targets)} cards"
     finally:
         if pool is not None:
             try:
@@ -924,17 +928,21 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         matched_set_id = (tcg_card.get("set") or {}).get("id", "")
         if match_level in ("no_set", "name_only"):
             match_warning = (
-                f"name-only match to {matched_set_id} — set_code was not provided, "
-                "match may not reflect the actual printing"
+                f"Matched on the name only ({matched_set_id}). Check the set before listing."
+            )
+        elif match_level == "no_number":
+            match_warning = (
+                f"The card number was not used ({matched_set_id}). "
+                "This may be a different printing."
             )
         if japanese:
-            match_warning = "Japanese card: this is the English printing's price, check before listing"
+            match_warning = "Japanese card. This price is the English printing. Check it before listing."
         if tcg_price and cm_usd and tcg_price > 0 and cm_usd > 0:
             ratio = max(tcg_price, cm_usd) / min(tcg_price, cm_usd)
             if ratio > 3.0:
                 match_warning = (
                     (match_warning + "; " if match_warning else "")
-                    + f"TCG/CM disagree {ratio:.1f}x on {matched_set_id} — variant mismatch?"
+                    + f"TCGplayer and Cardmarket disagree ({ratio:.1f}×) on {matched_set_id}. Check this printing."
                 )
 
     ebay_stats: dict[str, Any] = {"median": None, "max": None, "count": 0}
@@ -979,7 +987,7 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     final_conf = result.confidence
     final_needs_review = result.needs_review
     if japanese and not match_warning and result.price is not None:
-        match_warning = "Japanese card: this is the English printing's price, check before listing"
+        match_warning = "Japanese card. This price is the English printing. Check it before listing."
         notes_parts.append(f"⚠ {match_warning}")
     if match_warning:
         final_conf = min(final_conf, 0.2)
@@ -1130,6 +1138,10 @@ def _checked_identity(fields: dict, total: Any = None, printed_code: Optional[st
             changes["id_confidence"] = ID_VERIFIED
         elif found["status"] == "probable":
             changes["id_confidence"] = round(max(read, ID_PROBABLE), 3)
+        else:
+            # A Japanese trainer or item the name table does not have is not
+            # a confident read, even if the model was sure.
+            changes["id_confidence"] = round(min(read, ID_UNVERIFIED_CAP), 3)
         return changes, found["status"]
     try:
         found = card_catalog.resolve(name, fields.get("card_number"), total=total, printed_code=printed_code,
@@ -1327,9 +1339,9 @@ def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=N
             page_path = prepared
         if page_path.exists():
             try:
-                # A photo of more than nine cards makes a sheet of more
-                # than three rows.
-                rows = max([3] + [int(c.get("row") or 0) + 1 for c in group])
+                # The sheet is 3 across. Use the real row count. Forcing 3
+                # told the model a 4-card photo had an empty third row.
+                rows = max(int(c.get("row") or 0) + 1 for c in group)
                 page_results = {
                     (r.get("row"), r.get("col")): r
                     for r in identify_page(str(page_path), rows=rows)
@@ -1360,8 +1372,8 @@ def _identify_group(group: list[dict], grid: Optional[dict], tally: dict, tick=N
 
 
 def _identify_summary(tally: dict, total: int) -> str:
-    message = (f"identified {tally['by_image'] + tally['by_ai']}/{total} "
-               f"({tally['by_image']} free by image match, {tally['by_ai']} by AI)")
+    message = (f"Named {tally['by_image'] + tally['by_ai']} of {total} "
+               f"({tally['by_image']} from the photo, {tally['by_ai']} read)")
     missed = total - tally["by_image"] - tally["by_ai"]
     if missed and tally.get("last_error"):
         message += f", {missed} failed: {tally['last_error'][:160]}"
@@ -1377,7 +1389,7 @@ def _identify_job() -> Optional[int]:
             grids = {int(r["id"]): r for r in db.list_grids(conn)}
         _job_state["total"] = len(cards)
         if not cards:
-            _job_state["message"] = "nothing to identify"
+            _job_state["message"] = "Nothing new to name"
             return 0
 
         by_grid: dict[Any, list[dict]] = {}
@@ -1390,8 +1402,7 @@ def _identify_job() -> Optional[int]:
         def _tick() -> None:
             _job_state["progress"] = tally["done"]
             _job_state["message"] = (
-                f"Identifying {tally['done']}/{len(cards)} "
-                f"({tally['by_image']} by image match, {tally['by_ai']} by AI)"
+                f"Naming {tally['done']} of {len(cards)}"
             )
 
         for grid_id, group in by_grid.items():
@@ -1401,7 +1412,7 @@ def _identify_job() -> Optional[int]:
         return tally["by_image"] + tally["by_ai"]
     except Exception as exc:
         traceback.print_exc()
-        _job_state["message"] = f"identify failed: {exc}"
+        _job_state["message"] = f"Couldn’t name the cards: {exc}"
         return None
 
 
@@ -1507,10 +1518,9 @@ def _main_slice(state: dict) -> None:
             taken = set(ids)
             state["queue"] = [entry for entry in queue if entry[0] not in taken]
             state["progress"] = tally["done"]
-            state["message"] = (f"Identifying {tally['done']}/{state['id_total']} "
-                                f"({tally['by_image']} by image match, {tally['by_ai']} by AI)")
+            state["message"] = f"Naming {tally['done']} of {state['id_total']}"
             return
-        summary = _identify_summary(tally, state["id_total"]) if state["id_total"] else "nothing to identify"
+        summary = _identify_summary(tally, state["id_total"]) if state["id_total"] else "Nothing new to name"
         if state["kind"] != "scan":
             state.update(running=False, message=summary)
             return
@@ -1521,7 +1531,7 @@ def _main_slice(state: dict) -> None:
         return
 
     if not queue:
-        message = f"done, priced {state['total']} card(s)" if state["total"] else "nothing to price"
+        message = f"Priced {state['total']} cards" if state["total"] else "Nothing new to price"
         if state.get("id_message"):
             message = f"{state['id_message']}; {message}"
         state.update(running=False, message=message)
@@ -1543,7 +1553,7 @@ def _main_slice(state: dict) -> None:
     with ThreadPoolExecutor(max_workers=int(os.getenv("TCG_WORKERS", "6"))) as pool:
         list(pool.map(_as_owner(price), batch))
     state["progress"] += len(batch)
-    state["message"] = f"TCG/CM {state['progress']}/{state['total']}"
+    state["message"] = f"Pricing {state['progress']} of {state['total']}"
 
 
 # ----------------------------------------------------------------------

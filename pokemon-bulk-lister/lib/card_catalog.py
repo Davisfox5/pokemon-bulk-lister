@@ -367,11 +367,15 @@ def _candidate_sets(total: Optional[int], printed_code: Optional[str], set_code:
             if s not in ranked:
                 ranked.append(s)
 
+    pinned: list[dict] = []
     if code and total:
-        add([s for s in every if (s.get("ptcgoCode") or "").upper() == code and s.get("printedTotal") == total])
+        pinned = [s for s in every if (s.get("ptcgoCode") or "").upper() == code and s.get("printedTotal") == total]
+        add(pinned)
     if code:
         add([s for s in every if (s.get("ptcgoCode") or "").upper() == code])
-    if total:
+    # A printed total is shared by many sets. Once the printed code already
+    # named a set of that size, another set of the same size must not win.
+    if total and not pinned:
         add([s for s in every if s.get("printedTotal") == total])
     if set_code:
         add([s for s in every if s["id"].lower() == set_code.strip().lower()])

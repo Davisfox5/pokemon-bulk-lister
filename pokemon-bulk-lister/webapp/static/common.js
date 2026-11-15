@@ -56,7 +56,7 @@ function ago(iso) {
 
 const shortDate = (iso) => (iso ? new Date(iso).toLocaleDateString() : "—");
 
-const SOURCE_LABELS = { tcgplayer: "TCG", cardmarket: "CM", ebay_30d: "eBay" };
+const SOURCE_LABELS = { tcgplayer: "TCGplayer", cardmarket: "Cardmarket", ebay_30d: "eBay" };
 const SOURCE_NAMES = {
   tcgplayer: "TCGplayer market", cardmarket: "Cardmarket trend (USD)", ebay_30d: "eBay sold median, 30 days",
 };
@@ -68,19 +68,17 @@ function provenanceHtml(p) {
   const keys = Object.keys(SOURCE_LABELS).filter((k) => p.sources && p.sources[k] != null);
   const short = keys.map((k) => `${SOURCE_LABELS[k]} ${fmtUsd(p.sources[k])}`);
   const long = keys.map((k) => `${SOURCE_NAMES[k]}: ${fmtUsd(p.sources[k])}`);
-  const conf = (p.confidence ?? 0).toFixed(2);
   const title = [
     ...(long.length ? long : ["No source prices on file"]),
-    `Confidence ${conf} (0 to 1)`,
+    p.flagged ? "Check this price before listing" : "",
     `Priced ${new Date(p.priced_at).toLocaleString()}`,
-    p.notes || "",
   ].filter(Boolean).join("\n");
   // A price the owner's own spreadsheet gave, until a live one is found.
   const own = /^From your spreadsheet/.test(p.notes || "");
   const line = [short.length ? short.join(" · ") : own ? "from your spreadsheet" : "no source prices",
-    `conf ${conf}`, ago(p.priced_at)].join(" · ");
+    ago(p.priced_at)].join(" · ");
   const why = p.flagged
-    ? `<span class="flag-note">needs review${p.outlier ? ": sources disagree" : ""}${p.notes ? " · " + esc(p.notes) : ""}</span>`
+    ? `<span class="flag-note">Check this price${p.outlier ? " — the sources disagree" : ""}</span>`
     : "";
   return `<span class="prov" title="${esc(title)}">${line}</span>${why}`;
 }

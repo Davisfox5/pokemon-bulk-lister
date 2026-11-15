@@ -21,15 +21,15 @@
   <section class="panel" id="upload-panel">
     <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload card photos">
       <p><strong>Add card photos</strong></p>
-      <p class="muted" id="dropzone-hint">Drop, or tap to choose</p>
+      <p class="muted" id="dropzone-hint">Drop photos here, or tap to choose. Binder pages and single cards both work.</p>
       <input id="file-input" type="file" multiple accept="image/*" hidden />
       <input id="camera-input" type="file" accept="image/*" capture="environment" hidden />
     </div>
     <div class="upload-options">
       <button id="camera-btn" type="button" title="Opens the camera on a phone or tablet">Camera</button>
       <button id="drive-photos-btn" type="button" title="Pick photos or a folder from your Google Drive">Google Drive</button>
-      <label title="After each upload: identify the new cards, then price them">
-        <input type="checkbox" id="auto-process" checked /> Auto identify + price
+      <label title="After each upload, name the new cards and look up prices">
+        <input type="checkbox" id="auto-process" checked /> Name and price them after upload
       </label>
     </div>
     <div id="upload-status" class="muted" role="status"></div>
@@ -39,29 +39,28 @@
     <div class="toolbar-left">
       <label>Sort:
         <select id="sort">
-          <option value="confidence_asc">Confidence (lowest first)</option>
-          <option value="confidence_desc">Confidence (highest first)</option>
-          <option value="price_desc">Price (highest first)</option>
-          <option value="price_asc">Price (lowest first)</option>
-          <option value="newest">Newest first</option>
-          <option value="oldest">Oldest first</option>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="price_desc">Price, high to low</option>
+          <option value="price_asc">Price, low to high</option>
+          <option value="confidence_asc">Needs a look first</option>
         </select>
       </label>
       <label><input type="checkbox" id="filter-review" /> Review only</label>
       <label><input type="checkbox" id="filter-unid" /> Unidentified only</label>
     </div>
     <div class="toolbar-right">
-      <label id="terapeak-label" title="Adds the 365-day eBay sold median (~5s per card)">
+      <label id="terapeak-label" title="Looks up a year of eBay sales. About 5 seconds a card.">
         <input type="checkbox" id="use-terapeak" />
-        Use Terapeak <span class="muted small" id="terapeak-status">(checking…)</span>
+        Year of eBay sales <span class="muted small" id="terapeak-status"></span>
       </label>
-      <button id="process-btn" class="primary" title="Identify every unidentified card, then price every card that has no price yet">Identify + price new cards</button>
-      <button id="identify-btn" title="Identify all unidentified cards (free image match first, then one Claude vision call per binder page)">Identify only</button>
-      <button id="verify-btn" title="Check every card's name, set and number against the real card catalog. No AI call. Cards that do not exist drop to low confidence.">Check IDs</button>
-      <button id="run-pricing-btn" title="Re-price every identified card, including ones already priced">Re-price all</button>
+      <button id="process-btn" class="primary" title="Name every unnamed card, then price every card that has no price yet">Name and price</button>
+      <button id="identify-btn" title="Name cards that do not have a name yet">Name only</button>
+      <button id="verify-btn" title="Check every name and number against the real card list. No extra reading of the photo.">Check names</button>
+      <button id="run-pricing-btn" title="Look up prices again, including cards that already have one">Re-price all</button>
       <button id="library-btn" title="Add priced cards to your library">Add to library</button>
-      <button id="export-csv-btn">Export CSVs</button>
-      <button id="bundle-btn" disabled title="Select 2+ cards to bundle as a single lot listing">Bundle selected (0)</button>
+      <button id="export-csv-btn">Download spreadsheets</button>
+      <button id="bundle-btn" disabled title="Select 2 or more cards to sell as one lot">Sell as one lot (0)</button>
       <button id="delete-btn" disabled title="Remove the selected cards and their photos from this page">Delete selected (0)</button>
     </div>
   </section>
@@ -111,14 +110,14 @@
       <thead>
         <tr>
           <th><input type="checkbox" id="select-all" title="Select all visible" /></th>
-          <th>Crop</th>
-          <th>Identified</th>
+          <th>Photo</th>
+          <th>Card</th>
           <th>Set / # / Rarity</th>
-          <th>TCGplayer<br><span class="th-sub">market USD</span></th>
-          <th>Cardmarket<br><span class="th-sub">trend USD</span></th>
-          <th>eBay<br><span class="th-sub" id="ebay-col-sub">median (best window)</span></th>
-          <th>Final</th>
-          <th>Conf.</th>
+          <th>TCGplayer<br><span class="th-sub">market</span></th>
+          <th>Cardmarket<br><span class="th-sub">trend</span></th>
+          <th>eBay sold</th>
+          <th>Your price</th>
+          <th>Check</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -145,21 +144,21 @@
           <label>Condition
             <select name="condition_guess">
               <option value="">—</option>
-              <option>NM</option>
-              <option>LP</option>
-              <option>MP</option>
-              <option>HP</option>
-              <option>DMG</option>
+              <option value="NM">Near mint</option>
+              <option value="LP">Lightly played</option>
+              <option value="MP">Moderately played</option>
+              <option value="HP">Heavily played</option>
+              <option value="DMG">Damaged</option>
             </select>
           </label>
           <label class="checkbox"><input type="checkbox" name="is_holo" /> Holo</label>
-          <label>ID confidence <input type="number" step="0.05" min="0" max="1" name="id_confidence" /></label>
+          <input type="hidden" name="id_confidence" />
           <div class="prices-grid" id="modal-prices"></div>
           <div class="actions">
             <button type="submit">Save</button>
-            <button type="button" id="modal-identify-btn" title="Identify this card with Claude vision">AI identify</button>
-            <button type="button" id="modal-price-btn">Save + price now</button>
-            <button type="button" id="modal-upload-btn">Push to Cloudinary</button>
+            <button type="button" id="modal-identify-btn" title="Read this card again">Name this card again</button>
+            <button type="button" id="modal-price-btn">Save and price</button>
+            <button type="button" id="modal-upload-btn">Upload photo for listing</button>
           </div>
         </form>
       </div>
@@ -175,8 +174,7 @@
         <button id="conn-close" aria-label="Close">×</button>
       </header>
       <div class="modal-body conn-body">
-        <p class="muted small">Keys live in the <code>.env</code> file next to the app, never in this page.
-          After editing <code>.env</code>, restart the app.</p>
+        <p class="muted small">Some connections are set up by whoever runs this site. If a step below needs a key, ask them.</p>
         <div id="conn-list">Loading…</div>
       </div>
     </div>
@@ -231,8 +229,8 @@
           <label>Quantity (number of identical lots)
             <input type="number" min="1" step="1" name="quantity" value="1" />
           </label>
-          <label>Slug (used as folder name + SKU)
-            <input name="slug" placeholder="auto" />
+          <label>Lot name
+            <input name="slug" placeholder="Leave blank to name it for you" />
           </label>
           <label>Extra note for description (optional)
             <input name="note" placeholder="e.g. Smoke-free home, ships next business day." />
@@ -241,12 +239,11 @@
             <div><span class="muted">Lot price preview:</span> <strong id="bundle-price-preview">$0.00</strong></div>
           </div>
           <div class="actions">
-            <button type="submit" class="primary">Export lot CSVs</button>
+            <button type="submit" class="primary">Download lot spreadsheets</button>
             <span id="bundle-status" class="muted small"></span>
           </div>
           <p class="muted small">
-            One row per CSV is written to <code>output/csvs/lots/&lt;slug&gt;/</code>. TCGPlayer's bulk template requires a TCGplayer Id per row, so the TCGPlayer lot CSV is informational only — Whatnot and eBay accept lot listings natively.
-          </p>
+            Downloads a spreadsheet for eBay and Whatnot. TCGplayer does not accept a mixed lot, so that file is only a checklist.</p>
         </form>
       </div>
     </div>

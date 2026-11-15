@@ -50,7 +50,10 @@ def test_name_and_number_over_total_find_the_card_and_its_set():
     assert cc.resolve("Geodude", "23", total=128)["card"]["set_code"] == "old128"
 
 
-def test_a_slip_in_the_name_is_forgiven_when_the_number_agrees():
+def test_a_printed_code_does_not_borrow_a_card_from_another_set_of_the_same_size():
+    # 30C and the older set are both 128 cards. Geodude #23 is only in the older one.
+    r = cc.resolve("Geodude", "23", total=128, printed_code="30C")
+    assert r["status"] == "unverified"
     r = cc.resolve("Goldengo", "108", total=128)
     assert r["status"] == "verified" and r["card"]["name"] == "Gholdengo"
 

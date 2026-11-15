@@ -258,10 +258,9 @@ $("#deck-detail").addEventListener("click", async (e) => {
       const dry = await postJson(`/api/decks/${encodeURIComponent(d.ref)}/price-missing`, { dry_run: true });
       const { ok } = await askConfirm({
         title: `Look up prices for ${dry.to_price} cards?`,
-        html: `<p>This runs ${dry.to_price} price lookups (pokemontcg.io and eBay sold listings) in the background
-               and adds the cards to the shared price catalog.${dry.over_cap
+        html: `<p>Looks up ${dry.to_price} missing cards on TCGplayer and recent eBay sales, then saves those prices.${dry.over_cap
                  ? ` ${dry.over_cap} more are over the per-click limit; run it again afterwards.` : ""}</p>
-               <p class="muted">It takes a few seconds per card.</p>`,
+               <p class="muted">A few seconds per card.</p>`,
         confirm: "Look up prices",
       });
       if (!ok) return;

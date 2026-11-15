@@ -98,7 +98,8 @@ tr:hover { background: #f3f4f6; }
 tr.flag:hover { background: #ffe9ea; }
 
 td.thumb img { width: 60px; height: 84px; object-fit: cover; border-radius: 4px; display: block; }
-td.price { font-variant-numeric: tabular-nums; }
+td.empty { text-align: center; padding: 28px 12px; color: var(--muted); }
+.price-note { grid-column: 1 / -1; color: var(--row-flag-text); }
 td.actions { white-space: nowrap; }
 td.actions button { padding: 3px 8px; font-size: 12px; }
 
@@ -206,10 +207,21 @@ td.actions { display: table-cell; margin-top: 0; }
 @media (max-width: 700px) {
   .panel { padding: 12px; }
   .toolbar { flex-direction: column; align-items: stretch; }
-  .toolbar-right button, .publish-row button { flex: 1 1 auto; }
+  .toolbar-right { display: grid; grid-template-columns: 1fr 1fr; }
+  #process-btn, #library-btn { grid-column: 1 / -1; }
   .publish-row strong { flex-basis: 100%; }
   .table-wrap { -webkit-overflow-scrolling: touch; }
-  .table-wrap table { min-width: 720px; }
+  .table-wrap table { min-width: 0; }
+  #cards-table th:nth-child(5), #cards-table td:nth-child(5),
+  #cards-table th:nth-child(6), #cards-table td:nth-child(6),
+  #cards-table th:nth-child(7), #cards-table td:nth-child(7) { display: none; }
+  header { flex-direction: column; align-items: stretch; gap: 8px; }
+  .topnav { margin-right: 0; overflow-x: auto; }
+  .stats { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .stats span { margin-left: 0; }
+  .job-bar { flex-wrap: wrap; }
+  .prices-grid { grid-template-columns: 1fr 1fr; }
+  #sales-unmatched { overflow-x: auto; }
   .modal { padding: 8px; align-items: flex-start; overflow-y: auto; }
   .modal-card { width: 100%; max-width: 100%; max-height: none; }
   .modal-body { flex-direction: column; padding: 12px; }

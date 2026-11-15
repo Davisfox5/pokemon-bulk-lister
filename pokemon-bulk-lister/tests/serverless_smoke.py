@@ -178,7 +178,7 @@ assert client.post("/api/scan/process").status_code == 409            # one job 
 assert client.post("/api/pricing/run-all").status_code == 409
 status, polls = run_to_end("/api/pricing/status")
 assert polls >= 4, polls                                               # identify x2, switch, price, finish
-assert f"identified {total}/{total}" in status["message"] and f"priced {total} card(s)" in status["message"], status
+assert f"Named {total} of {total}" in status["message"] and f"Priced {total} cards" in status["message"], status
 assert "IMG_1.jpg" in seen_files                                       # the page photo, for the 9-card call
 after = cards()
 assert all(c["name"] and c["final_price"] == 1.25 for c in after) and len(priced) == total
@@ -188,7 +188,7 @@ assert {c["name"] for c in after} >= {"Card 00", "Single Card"}
 calls = len(seen_files)
 client.post("/api/scan/process")
 status, _ = run_to_end("/api/pricing/status")
-assert status["message"] == "nothing to identify; nothing to price" and len(seen_files) == calls, status
+assert status["message"] == "Nothing new to name; Nothing new to price" and len(seen_files) == calls, status
 
 # A slice that died mid-run (lease never released) is picked up once the lease runs out.
 client.post("/api/pricing/run-all", json={})
