@@ -90,6 +90,7 @@ def _event_dict(ev: LibraryEvent) -> dict:
         "set_code": cc.set_code,
         "card_number": cc.card_number,
         "is_holo": cc.is_holo,
+        "printing": cc.printing,
         "condition": ev.condition,
         "quantity": ev.quantity,
         "unit_price": ev.unit_price,
@@ -290,6 +291,7 @@ def add_card():
             "card_number": (body.get("card_number") or "").strip() or None,
             "rarity": (body.get("rarity") or "").strip() or None,
             "is_holo": bool(body.get("is_holo")),
+            "printing": body.get("printing"),
         })
         item = InventoryItem(
             user_id=uid, catalog_card_id=cc.id, quantity=quantity,
@@ -325,7 +327,7 @@ def catalog_search():
                 .order_by(CatalogCard.name).limit(20).all())
         cards = [{
             "name": c.name, "set_name": c.set_name, "set_code": c.set_code,
-            "card_number": c.card_number, "rarity": c.rarity, "is_holo": c.is_holo,
+            "card_number": c.card_number, "rarity": c.rarity, "is_holo": c.is_holo, "printing": c.printing,
             "price": c.final_price,
         } for c in rows]
     finally:

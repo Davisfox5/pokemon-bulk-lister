@@ -138,7 +138,11 @@ class TcgCatalog:
         base = CONDITIONS.get(str(card.get("condition_guess") or "NM").upper())
         if not name or not number or not card_set or base is None:
             return None
-        wanted = f"{base} holofoil" if card.get("is_holo") else base
+        from lib.printing import of
+        finish = of(card)
+        if finish == "unknown":
+            return None
+        wanted = base + {"normal": "", "holofoil": " holofoil", "reverseHolofoil": " reverse holofoil"}[finish]
         rows = [r for r in self._index.get((name, number), [])
                 if r["set"] == card_set and r["condition"] == wanted]
         return rows[0]["id"] if len(rows) == 1 else None

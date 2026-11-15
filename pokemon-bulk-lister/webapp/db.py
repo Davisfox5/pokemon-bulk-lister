@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS cards (
     row                     INTEGER,
     col                     INTEGER,
 
+    printing                TEXT,
+
     -- identification (filled by you / Claude vision)
     name                    TEXT,
     set_name                TEXT,
@@ -123,7 +125,7 @@ CREATE INDEX IF NOT EXISTS idx_cards_name         ON cards(name);
 CARD_FIELDS = (
     "id", "grid_id", "crop_path", "row", "col",
     "name", "set_name", "set_code", "card_number", "rarity",
-    "is_holo", "condition_guess", "id_confidence",
+    "is_holo", "printing", "condition_guess", "id_confidence",
     "tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
     "ebay_median_30d", "ebay_max_30d", "ebay_sold_count_30d",
     "terapeak_median_usd", "terapeak_sold_count_365d",
@@ -143,6 +145,7 @@ _MIGRATIONS = (
     ("ebay_listing_status", "TEXT"),
     ("listed_at", "TEXT"),
     ("owner_id", "INTEGER"),
+    ("printing", "TEXT"),
 )
 _GRID_MIGRATIONS = (
     ("owner_id", "INTEGER"),
@@ -152,7 +155,7 @@ _OWNER_INDEX = "CREATE INDEX IF NOT EXISTS idx_cards_owner ON cards(owner_id)"
 
 EDITABLE_ID_FIELDS = (
     "name", "set_name", "set_code", "card_number", "rarity",
-    "is_holo", "condition_guess", "id_confidence",
+    "is_holo", "printing", "condition_guess", "id_confidence",
 )
 
 
@@ -343,7 +346,7 @@ def insert_card_stub(
         """,
         (grid_id, crop_path, row, col, owner()),
     )
-    if cur.lastrowid:
+    if cur.rowcount:
         return int(cur.lastrowid)
     existing = conn.execute(
         "SELECT id FROM cards WHERE crop_path = ?", (crop_path,)
@@ -461,10 +464,16 @@ def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any],
             if k in CARD_FIELDS and k not in ("id", "crop_path", "created_at", "owner_id")}
     if not safe:
         return get_card(conn, card_id, any_owner)
+    if "printing" in safe or "is_holo" in safe:
+        from lib.printing import normalize
+        finish = normalize(safe.get("printing"), safe.get("is_holo", current.get("is_holo")))
+        safe.update(printing=finish, is_holo=finish == "holofoil")
     # Prices and product links belong to a particular printing and condition.
     # Invalidate them for every edit path, including AI retries and bulk edits.
-    identity = ("name", "set_name", "set_code", "card_number", "is_holo", "condition_guess")
-    if any(k in safe and safe[k] != current.get(k) for k in identity):
+    identity = ("name", "set_name", "set_code", "card_number", "is_holo", "printing", "condition_guess")
+    from lib.printing import of as card_printing
+    previous = {**current, "printing": card_printing(current)}
+    if any(k in safe and safe[k] != previous.get(k) for k in identity):
         for field in ("tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
                       "ebay_median_30d", "ebay_max_30d", "terapeak_median_usd", "final_price",
                       "tcgplayer_product_id", "tcgplayer_url", "cardmarket_url", "pricing_notes"):
@@ -472,7 +481,8 @@ def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any],
         for field in ("ebay_sold_count_30d", "terapeak_sold_count_365d", "pricing_confidence", "outlier_flag"):
             safe.setdefault(field, 0)
     # Pricing agreement cannot make a doubtful identification safe to list.
-    if (safe.get("name", current.get("name")) and
+    if (safe.get("printing", current.get("printing")) == "unknown" or
+            safe.get("name", current.get("name")) and
             float(safe.get("id_confidence", current.get("id_confidence")) or 0) <= 0.6):
         safe["needs_review"] = 1
     # Coerce booleans.
@@ -541,7 +551,7 @@ def maybe_import_legacy_json(
             k: entry.get(k)
             for k in (
                 "name", "set_name", "set_code", "card_number", "rarity",
-                "is_holo", "condition_guess",
+                "is_holo", "printing", "condition_guess",
                 "tcgplayer_market", "cardmarket_trend_eur",
                 "ebay_median_30d", "ebay_max_30d", "ebay_sold_count_30d",
                 "terapeak_median_usd", "terapeak_sold_count_365d",

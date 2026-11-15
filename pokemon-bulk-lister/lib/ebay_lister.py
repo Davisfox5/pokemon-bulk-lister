@@ -62,7 +62,9 @@ def card_title(card: dict) -> str:
         parts.append(f"#{card['card_number']}")
     if card.get("set_name"):
         parts.append(card["set_name"])
-    if card.get("is_holo"):
+    if card.get("printing") == "reverseHolofoil":
+        parts.append("Reverse Holo")
+    elif card.get("is_holo"):
         parts.append("Holo")
     parts.append("Pokemon TCG")
     return " ".join(p for p in parts if p)[:80]
@@ -78,7 +80,9 @@ def card_description(card: dict) -> str:
         bits.append(f"(#{card['card_number']})")
     if card.get("rarity"):
         bits.append(f"— {card['rarity']}")
-    if card.get("is_holo"):
+    if card.get("printing") == "reverseHolofoil":
+        bits.append("Reverse Holo")
+    elif card.get("is_holo"):
         bits.append("Holo")
     bits.append(f"in {_condition_full(card.get('condition_guess', 'NM'))} condition.")
     bits.append("English. Ships in a hard case.")
@@ -251,7 +255,9 @@ class EbayLister:
             aspects["Card Number"] = [str(card["card_number"])]
         if card.get("rarity"):
             aspects["Rarity"] = [card["rarity"]]
-        if card.get("is_holo"):
+        if card.get("printing") == "reverseHolofoil":
+            aspects["Features"] = ["Reverse Holo"]
+        elif card.get("is_holo"):
             aspects["Features"] = ["Holo"]
 
         image_urls = [card["image_url"]] if card.get("image_url") else []

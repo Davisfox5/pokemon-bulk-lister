@@ -838,3 +838,17 @@ The scraper writes screenshots + HTML to `output/cache/terapeak_debug/` whenever
 - Direct *API* push for TCGPlayer & Whatnot — no public seller listing API, so
   those remain CSV-based (optionally auto-submitted via headless browser, see
   "Publishing listings"). eBay does publish directly via its Sell API.
+
+### Card finish and spreadsheet estimates
+
+Choose the finish in the card editor: non-holo, holo or reverse holo. If the
+photo does not show it clearly, leave it as **Not checked**. Prices and TCGplayer
+export IDs must match the selected finish; the app does not substitute another
+finish's price. Unsupported editions remain for review.
+
+A market-value column in your spreadsheet is your private estimate, not a market
+price shared with other accounts. It appears with its source and a review warning
+until a live price is found. Market history excludes private estimates. Earlier
+versions placed these estimates in the shared catalog; those explicitly marked
+as spreadsheet values are now preserved separately and removed from market
+valuations. Re-import your original sheet to restore them to your own library.

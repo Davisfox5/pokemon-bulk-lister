@@ -111,3 +111,18 @@ def test_pricing_does_not_clear_a_doubtful_identification(tmp_path):
         db.update_card(conn, cid, {"name": "Pikachu", "id_confidence": 0.3})
         card = db.update_card(conn, cid, {"final_price": 20, "pricing_confidence": 0.95, "needs_review": False})
         assert card["needs_review"] == 1
+
+
+def test_reverse_finish_is_persisted_and_changing_it_invalidates_old_prices(tmp_path):
+    path = str(tmp_path / 'finish.sqlite')
+    db.init_db(path)
+    with db.connect(path) as conn:
+        gid = db.get_or_create_grid(conn, 'page', 'input/grids/page.jpg')
+        cid = db.insert_card_stub(conn, gid, 'output/crops/card.jpg', 0, 0)
+        db.update_card(conn, cid, dict(name='Pikachu', is_holo=False, id_confidence=0.97, final_price=1))
+        # Merely materializing a legacy non-holo finish does not discard its quote.
+        assert db.update_card(conn, cid, dict(printing='normal'))['final_price'] == 1
+        changed = db.update_card(conn, cid, dict(printing='reverseHolofoil'))
+        assert changed['printing'] == 'reverseHolofoil' and not changed['is_holo']
+        assert changed['final_price'] is None
+        assert db.update_card(conn, cid, dict(printing='unknown'))['needs_review']

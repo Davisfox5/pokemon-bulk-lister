@@ -35,7 +35,7 @@ from flask import Blueprint, abort, jsonify, redirect, render_template, request
 from sqlalchemy.exc import IntegrityError
 
 from webapp.auth import current_user_id, is_operator, login_required, verified_required
-from webapp.catalog import price_provenance
+from webapp.catalog import price_provenance, item_valuation
 from webapp.models import (
     CatalogCard,
     InventoryItem,
@@ -130,7 +130,7 @@ def list_for_sale(item_id: int):
             return jsonify({"error": "already listed", "listing_id": existing.id}), 409
 
         if body.get("price") in (None, ""):
-            price = _parse_price(item.catalog_card.final_price)
+            price = _parse_price(item_valuation(item)[0])
             if price is None:
                 return jsonify({"error": "no market price known for this card, enter a price"}), 400
         else:
@@ -184,12 +184,13 @@ def bulk_list_for_sale():
                "skipped_already_listed": 0, "skipped_flagged": 0}
         for item in items:
             cc = item.catalog_card
-            price = _parse_price(cc.final_price)
+            value, provenance = item_valuation(item)
+            price = _parse_price(value)
             if item.id in listed_ids:
                 out["skipped_already_listed"] += 1
             elif price is None:
                 out["skipped_no_price"] += 1
-            elif price_provenance(cc)["flagged"] and not include_flagged:
+            elif provenance["flagged"] and not include_flagged:
                 out["skipped_flagged"] += 1
             else:
                 if not dry_run:
@@ -285,7 +286,7 @@ def browse():
                        .filter_by(status="pending_payment").all()}
         payload = []
         for listing, cc, item, seller in rows:
-            market = cc.final_price
+            market = cc.final_price if price_provenance(cc)["priced_at"] else None
             vs_market = (
                 round((listing.price - market) / market * 100, 1)
                 if market else None
@@ -299,6 +300,7 @@ def browse():
                 "card_number": cc.card_number,
                 "rarity": cc.rarity,
                 "is_holo": cc.is_holo,
+                "printing": cc.printing,
                 "condition": item.condition,
                 "image_url": item.image_url or cc.image_url,
                 "crop_path": item.source_crop_path,

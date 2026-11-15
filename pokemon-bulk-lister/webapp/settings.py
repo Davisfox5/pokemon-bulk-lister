@@ -244,6 +244,7 @@ def ebay_list_item():
             "card_number": cc.card_number,
             "rarity": cc.rarity,
             "is_holo": cc.is_holo,
+            "printing": cc.printing,
             "condition_guess": item.condition or "NM",
             "crop_path": item.source_crop_path or "",
             "image_url": item.image_url or cc.image_url,

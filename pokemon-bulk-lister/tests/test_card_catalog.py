@@ -50,7 +50,10 @@ def test_name_and_number_over_total_find_the_card_and_its_set():
     assert cc.resolve("Geodude", "23", total=128)["card"]["set_code"] == "old128"
 
 
-def test_a_slip_in_the_name_is_forgiven_when_the_number_agrees():
+def test_a_printed_code_does_not_borrow_a_card_from_another_set_of_the_same_size():
+    # 30C and the older set are both 128 cards. Geodude #23 is only in the older one.
+    r = cc.resolve("Geodude", "23", total=128, printed_code="30C")
+    assert r["status"] == "unverified"
     r = cc.resolve("Goldengo", "108", total=128)
     assert r["status"] == "verified" and r["card"]["name"] == "Gholdengo"
 
@@ -172,7 +175,10 @@ def test_a_japanese_card_is_verified_against_an_english_twin_set(monkeypatch):
     found = card_catalog.resolve_japanese("ロケット団のニドラン♂", number="061", printed_code="sv10")
     assert found["card"]["name"] == "Team Rocket's Nidoran♂"
     monkeypatch.setattr(card_catalog, "set_cards", lambda set_id: [
+        {"id": "full", "name": "Cottonee", "number": "186", "rarity": "Illustration Rare"},
         {"id": "rsv10pt5-4", "name": "Cottonee", "number": "4", "rarity": "Common"}])
+    found = card_catalog.resolve_japanese("モンメン", number="012", printed_code="sv11W")
+    assert found["card"]["rarity"] == "Common"
     # A name the English set does not have is still named, not verified.
     found = card_catalog.resolve_japanese("ダゲキ", number="046", printed_code="sv11W")
     assert found["status"] == "probable" and found["card"]["name"] == "Sawk"

@@ -57,6 +57,7 @@ _CARD_PROPS = {
     "number_total": {"type": "string", "description": "The number after the slash in the printed collector number, e.g. '191' from '057/191'. Empty string if there is no slash or it is unreadable."},
     "set_code_printed": {"type": "string", "description": "The short set code printed next to the collector number at the bottom of the card, e.g. 'SVI', 'MEW', '30C'. Empty string if none is printed or it is unreadable. Read it, do not infer it."},
     "rarity": {"type": "string", "description": "e.g. 'Common', 'Rare Holo', 'Double Rare'. Empty string if unknown."},
+    "printing": {"type": "string", "enum": ["normal", "holofoil", "reverseHolofoil", "unknown"], "description": "Visible finish. Holofoil has shiny artwork; reverse holo has a shiny card body around the artwork. Use unknown when glare or the photo makes this unclear."},
     "is_holo": {"type": "boolean", "description": "True if the card has a holographic treatment"},
     "confidence": {"type": "number", "description": "0.0-1.0 confidence in this identification overall"},
 }
@@ -177,10 +178,10 @@ def identify_page(image_path: str, rows: int = 3, cols: int = 3, model: Optional
     with 0-indexed row/col matching the splitter's grid positions."""
     image_b64 = _encode_image(image_path, PAGE_MAX_EDGE)
     prompt = (
-        f"This photo shows a binder page holding Pokémon cards in a {rows}x{cols} grid "
-        f"(up to {rows * cols} pockets; some may be empty). Identify each card that is "
-        "present. Use 0-indexed row (top to bottom) and col (left to right). "
-        "Skip empty pockets entirely."
+        f"This image is a grid of Pokémon cards, {rows} rows by {cols} columns. "
+        "It may be a binder page or a sheet of upright card photos. "
+        "Identify each card that is there. Use 0-indexed row (top to bottom) and "
+        "col (left to right). Skip empty cells."
     )
     result = _vision_request(image_b64, prompt, _PAGE_SCHEMA, max_tokens=4096, model=model)
     return result.get("cards", [])

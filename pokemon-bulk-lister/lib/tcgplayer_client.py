@@ -97,9 +97,11 @@ class TCGPlayerClient:
             return None
 
         if card_number:
+            want = _same_number(card_number)
             for c in cards:
-                if str(c.get("number", "")).lstrip("0") == str(card_number).lstrip("0"):
+                if _same_number(c.get("number")) == want:
                     return c
+            return None
         if set_code and not card_number:
             # Several printings of one name in a set: the ordinary one has
             # the lowest number, the full-art ones come after the printed total.
@@ -110,7 +112,7 @@ class TCGPlayerClient:
             return min(exact or cards, key=order)
         return cards[0]
 
-    def market_price(self, card: dict, prefer_holo: bool = False) -> Optional[float]:
+    def market_price(self, card: dict, prefer_holo: bool = False, printing: Optional[str] = None) -> Optional[float]:
         """Pull TCGPlayer market price (USD) from the card payload.
 
         pokemontcg.io exposes TCGPlayer prices under
@@ -121,23 +123,13 @@ class TCGPlayerClient:
         if not prices:
             return None
 
-        priority = (
-            ["holofoil", "reverseHolofoil", "normal", "1stEditionHolofoil", "unlimitedHolofoil"]
-            if prefer_holo
-            else ["normal", "holofoil", "reverseHolofoil", "1stEdition", "unlimited"]
-        )
+        from lib.printing import normalize
+        finish = normalize(printing, prefer_holo)
+        variant = prices.get(finish) or {}
+        value = variant.get("market") if isinstance(variant, dict) else None
+        return float(value) if value is not None and value > 0 else None
 
-        for variant in priority:
-            v = prices.get(variant)
-            if v and isinstance(v, dict) and v.get("market"):
-                return float(v["market"])
-
-        for variant_data in prices.values():
-            if isinstance(variant_data, dict) and variant_data.get("market"):
-                return float(variant_data["market"])
-        return None
-
-    def cardmarket_trend_eur(self, card: dict, prefer_holo: bool = False) -> Optional[float]:
+    def cardmarket_trend_eur(self, card: dict, prefer_holo: bool = False, printing: Optional[str] = None) -> Optional[float]:
         """Pull Cardmarket trend price (EUR) from the card payload.
 
         pokemontcg.io exposes Cardmarket prices under
@@ -149,16 +141,20 @@ class TCGPlayerClient:
         if not prices:
             return None
 
-        if prefer_holo:
-            for key in ("reverseHoloTrend", "trendPrice", "reverseHoloSell", "averageSellPrice"):
-                v = prices.get(key)
-                if v:
-                    return float(v)
-        else:
-            for key in ("trendPrice", "averageSellPrice", "reverseHoloTrend", "reverseHoloSell"):
-                v = prices.get(key)
-                if v:
-                    return float(v)
+        from lib.printing import normalize
+        finish = normalize(printing, prefer_holo)
+        keys = ("reverseHoloTrend", "reverseHoloSell") if finish == "reverseHolofoil" else ("trendPrice", "averageSellPrice")
+        if finish == "unknown":
+            return None
+        # When the product explicitly lists its available finishes, do not
+        # call the ordinary product's trend a holo/non-holo price it lacks.
+        variants = ((card or {}).get("tcgplayer") or {}).get("prices") or {}
+        if finish != "reverseHolofoil" and variants and finish not in variants:
+            return None
+        for key in keys:
+            value = prices.get(key)
+            if value is not None and value > 0:
+                return float(value)
         return None
 
     def lookup_price(
@@ -168,12 +164,13 @@ class TCGPlayerClient:
         set_code: Optional[str] = None,
         card_number: Optional[str] = None,
         is_holo: bool = False,
+        printing: Optional[str] = None,
     ) -> tuple[Optional[float], Optional[dict]]:
         """Backward-compatible: returns (tcgplayer_market_usd, card)."""
         card = self.find_card(name=name, set_name=set_name, set_code=set_code, card_number=card_number)
         if not card:
             return None, None
-        return self.market_price(card, prefer_holo=is_holo), card
+        return self.market_price(card, prefer_holo=is_holo, printing=printing), card
 
     def lookup_prices(
         self,
@@ -182,6 +179,7 @@ class TCGPlayerClient:
         set_code: Optional[str] = None,
         card_number: Optional[str] = None,
         is_holo: bool = False,
+        printing: Optional[str] = None,
     ) -> dict:
         """One pokemontcg.io call -> both TCGPlayer (USD) and Cardmarket (EUR) prices.
 
@@ -200,9 +198,15 @@ class TCGPlayerClient:
             return {"card": None, "tcgplayer_market_usd": None, "cardmarket_trend_eur": None}
         return {
             "card": card,
-            "tcgplayer_market_usd": self.market_price(card, prefer_holo=is_holo),
-            "cardmarket_trend_eur": self.cardmarket_trend_eur(card, prefer_holo=is_holo),
+            "tcgplayer_market_usd": self.market_price(card, prefer_holo=is_holo, printing=printing),
+            "cardmarket_trend_eur": self.cardmarket_trend_eur(card, prefer_holo=is_holo, printing=printing),
         }
+
+
+def _same_number(text) -> str:
+    """'023', 'TG05' and 'tg5' are the same collector number."""
+    from lib.card_catalog import _number
+    return _number(None if text is None else str(text))
 
 
 def _escape(value: str) -> str:

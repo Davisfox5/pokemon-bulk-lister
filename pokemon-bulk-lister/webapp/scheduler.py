@@ -69,6 +69,7 @@ def _card_dict(cc: CatalogCard) -> dict:
         "set_code": cc.set_code,
         "card_number": cc.card_number,
         "is_holo": cc.is_holo,
+        "printing": cc.printing,
     }
 
 
@@ -100,10 +101,10 @@ def refresh_cards(card_ids: Optional[list[int]] = None, batch_size: Optional[int
                 except Exception as exc:
                     print(f"[scheduler] pricing {cc.name}: {exc}", file=sys.stderr)
                     continue
-                if patch.get("final_price") is None and cc.final_price is not None:
-                    # Nothing found this time. Keep the price on file (it may
-                    # be the owner's own, from their spreadsheet) instead of
-                    # replacing it with nothing.
+                if (patch.get("final_price") is None and cc.final_price is not None
+                        and not patch.get("printing_unavailable")):
+                    # An unavailable source need not erase a market quote.
+                    # A known finish mismatch does invalidate the old quote.
                     continue
                 record_price(s, cc, patch)
                 s.commit()

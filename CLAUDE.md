@@ -14,6 +14,15 @@ Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also 
 
 It also runs on Vercel (`app.py`, `vercel.json`), where there is no lasting disk and no process between requests. `webapp/runtime.py` is the switch (`SERVERLESS`): both data layers use Postgres (`webapp/db.py` has a psycopg backend behind the same functions), photos go to Vercel Blob (`runtime.save_file` / `ensure_local`), eBay tokens and job progress are rows in `app_state`, and bench jobs run in slices driven by the status endpoints (`_pump` in `webapp/app.py`) instead of threads. New bench code must not assume a file it wrote is still on disk in a later request (call `runtime.ensure_local`), must not keep job state only in memory, and must not start a thread it expects to outlive the request. `TEST_DATABASE_URL=postgresql://... pytest -q` runs the suite on Postgres; `tests/test_serverless.py` runs the bench the way Vercel does.
 
+Finish and private estimates: the bench has nullable `printing` (legacy null
+means normal/holo according to `is_holo`). `lib/printing.py` normalizes normal,
+holofoil, reverseHolofoil and unknown. `CatalogPrinting` stores explicit finish
+metadata in a new table; legacy normal/holo variant keys remain valid. Never
+substitute another finish's price. `InventoryValuation` holds owner-specific
+spreadsheet estimates; they must never enter `CatalogCard` market prices or
+`PriceSnapshot`. Use `catalog.item_valuation` for an owner's effective valuation.
+Startup quarantines older shared spreadsheet values without assigning an owner.
+
 ## Model routing (dev)
 
 Cost-aware, top-down routing for Claude Code subagents (`.claude/agents/`). The highest tier (fable) is the default for judgment-heavy work and delegates DOWN to cheaper tiers for mechanical work. No agent ever self-assesses its own capability and escalates upward; every escalation trigger is external (a fixed path rule, a failing test).

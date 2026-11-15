@@ -56,7 +56,7 @@ function ago(iso) {
 
 const shortDate = (iso) => (iso ? new Date(iso).toLocaleDateString() : "—");
 
-const SOURCE_LABELS = { tcgplayer: "TCG", cardmarket: "CM", ebay_30d: "eBay" };
+const SOURCE_LABELS = { tcgplayer: "TCGplayer", cardmarket: "Cardmarket", ebay_30d: "eBay" };
 const SOURCE_NAMES = {
   tcgplayer: "TCGplayer market", cardmarket: "Cardmarket trend (USD)", ebay_30d: "eBay sold median, 30 days",
 };
@@ -80,7 +80,7 @@ function provenanceHtml(p) {
   const line = [short.length ? short.join(" · ") : own ? "from your spreadsheet" : "no source prices",
     `${conf} confidence`, ago(p.priced_at)].join(" · ");
   const why = p.flagged
-    ? `<span class="flag-note">needs review${p.outlier ? ": sources disagree" : ""}${p.notes ? " · " + esc(p.notes) : ""}</span>`
+    ? `<span class="flag-note">${esc(p.notes || (p.outlier ? "Price sources disagree. Check this printing." : "Check this price before listing."))}</span>`
     : "";
   return `<span class="prov" title="${esc(title)}">${line}</span>${why}`;
 }
@@ -93,7 +93,7 @@ function thumbHtml(row, cls = "inv-thumb") {
 
 function cardLine(row) {
   const set = row.set_name || (row.set_code ? String(row.set_code).toUpperCase() : "");
-  return `<div class="inv-name">${esc(row.name)}${row.is_holo ? ' <span class="holo">holo</span>' : ""}</div>
+  return `<div class="inv-name">${esc(row.name)}${row.printing === "reverseHolofoil" ? ' <span class="holo">reverse holo</span>' : row.is_holo ? ' <span class="holo">holo</span>' : row.printing === "unknown" ? ' <span class="flag-note">Finish not checked</span>' : ""}</div>
     <div class="inv-set">${esc(set)}${row.card_number ? " #" + esc(row.card_number) : ""}</div>`;
 }
 

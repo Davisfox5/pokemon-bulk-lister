@@ -74,7 +74,7 @@ live accuracy or throughput claim. No paid identification requests were made.
 
 ## Validation and limits
 
-Local validation: 264 passed, one skipped (the Postgres-only run).
+Local validation: 281 passed, one skipped (the Postgres-only run).
 Chromium checks passed at both widths with no JavaScript errors.
 
 Run `pytest -q` and `python -m compileall -q lib webapp scripts app.py` from the app
@@ -106,3 +106,47 @@ Further work needs separate evidence:
 - Real eBay, Stripe, Google Drive and seller-portal behavior requires service
   credentials and dedicated integration checks. Local browser checks and mocked
   service tests do not establish production service correctness.
+
+## Completing the later draft-branch changes
+
+Reconciled the three draft commits through `e7c325c` with this review. Preserved
+thread-local API clients, consistent data paths, safe SQLite duplicate-insert
+handling, clearer wording and the improvements to Japanese identification.
+The stronger printed-set and ambiguous-match checks and bounded unresolved-card
+sheets remain in place.
+
+Finish is now explicit: non-holo, holo, reverse holo or not checked. It survives
+scan edits, identification, spreadsheet and marketplace listing imports, catalog
+identity, scheduled pricing, library display, TCGplayer ID matching and listing
+exports. Holo and reverse-holo are separate catalog variants. A price for another
+finish or edition is not substituted. Generic eBay/Terapeak comparisons and the
+name-only Cardmarket fallback are not used to price holo/reverse-holo cards when
+the comparison does not identify the finish. This can leave more cards unpriced;
+those need an exact source or manual review. Unsupported edition/finish labels
+are kept as unknown rather than quoted as a different printing.
+
+Owner-supplied spreadsheet values now live in `inventory_valuations`, tied to an
+inventory item. They are flagged estimates, used only in that owner's library
+valuation when no live catalog price exists. They never populate shared market
+prices, shared price history or another owner's holdings. Explicitly opting into
+listing a flagged estimate is still supported; buyers see the seller's asking
+price, without the private spreadsheet value appearing as a market comparison.
+Live price lookup still runs for cards that only have private estimates.
+
+Old shared values explicitly tagged `From your spreadsheet` cannot be reliably
+attributed to an owner. Startup quarantines those values and their source-free
+history in `app_state` under `quarantined-sheet-price:<catalog id>`, then clears
+them from the shared catalog and market history. It does not assign them to
+another account. Re-importing the original spreadsheet restores the owner's
+estimate. Startup cleanup is idempotent and has regression coverage.
+
+Schema: new SQLAlchemy tables `catalog_printings` and `inventory_valuations`;
+existing SQLAlchemy columns are unchanged. The bench adds a nullable `printing`
+column through its existing SQLite/Postgres migration mechanism. Legacy normal
+and holo catalog keys are preserved. New reverse/unknown keys are distinct.
+
+Library, Decks and Marketplace retain the actual warning reason, including
+Japanese/English price differences, number mismatches and imported estimates.
+Warning text is escaped; confidence and provenance remain visible. Scan keeps
+its separate identity and price confidence. Mobile source comparison remains
+available on demand.

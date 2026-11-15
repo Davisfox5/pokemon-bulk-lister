@@ -68,7 +68,7 @@ class User(Base):
 
 
 class CatalogCard(Base):
-    """Canonical card variant. Prices attach here, never to inventory."""
+    """Canonical card variant and shared market prices. Owner estimates live on inventory."""
 
     __tablename__ = "catalog_cards"
 
@@ -101,6 +101,18 @@ class CatalogCard(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     history: Mapped[list["PriceSnapshot"]] = relationship(back_populates="card")
+    finish: Mapped[Optional["CatalogPrinting"]] = relationship(cascade="all, delete-orphan", uselist=False, lazy="joined")
+
+    @property
+    def printing(self) -> str:
+        return self.finish.printing if self.finish else ("holofoil" if self.is_holo else "normal")
+
+
+class CatalogPrinting(Base):
+    """Finish metadata without altering existing catalog table columns."""
+    __tablename__ = "catalog_printings"
+    catalog_card_id: Mapped[int] = mapped_column(ForeignKey("catalog_cards.id", ondelete="CASCADE"), primary_key=True)
+    printing: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
 class PriceSnapshot(Base):
@@ -143,6 +155,16 @@ class InventoryItem(Base):
 
     user: Mapped[User] = relationship(back_populates="inventory")
     catalog_card: Mapped[CatalogCard] = relationship()
+    imported_value: Mapped[Optional["InventoryValuation"]] = relationship(cascade="all, delete-orphan", uselist=False, lazy="joined")
+
+
+class InventoryValuation(Base):
+    """An owner's spreadsheet estimate, never a shared market price."""
+    __tablename__ = "inventory_valuations"
+    inventory_item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), primary_key=True)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 Index("idx_inventory_user", InventoryItem.user_id)
@@ -637,6 +659,37 @@ def init_models(url: Optional[str] = None) -> None:
             Base.metadata.create_all(conn)
         _ensure_indexes(_engine)
     _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+    _quarantine_shared_spreadsheet_prices()
+
+
+def _quarantine_shared_spreadsheet_prices() -> None:
+    """Old estimates have no reliable owner. Preserve them for recovery,
+    but remove them from market valuations and portfolio price history.
+    Owners recover their estimates by re-importing the original sheet.
+    """
+    import json
+    from sqlalchemy import text
+
+    with _engine.begin() as connection:
+        if connection.dialect.name == "postgresql":
+            connection.execute(text("SELECT pg_advisory_xact_lock(7203114906)"))
+        with Session(bind=connection) as session:
+            cards = session.query(CatalogCard).filter(CatalogCard.pricing_notes.like("From your spreadsheet%")).all()
+            for cc in cards:
+                snapshots = session.query(PriceSnapshot).filter(
+                    PriceSnapshot.catalog_card_id == cc.id,
+                    PriceSnapshot.tcgplayer_market.is_(None),
+                    PriceSnapshot.cardmarket_trend_usd.is_(None),
+                    PriceSnapshot.ebay_median_30d.is_(None),
+                    PriceSnapshot.pricing_confidence <= 0.5).all()
+                saved = {"price": cc.final_price, "notes": cc.pricing_notes,
+                         "history": [{"price": h.final_price, "at": h.priced_at.isoformat()} for h in snapshots]}
+                session.merge(AppState(key=f"quarantined-sheet-price:{cc.id}", value=json.dumps(saved)))
+                for snapshot in snapshots:
+                    session.delete(snapshot)
+                cc.final_price, cc.last_priced_at, cc.pricing_confidence = None, None, 0.0
+                cc.pricing_notes = "Unattributed spreadsheet estimate removed. Re-import your sheet to restore your own estimate."
+            session.flush()
 
 
 def _ensure_indexes(engine) -> None:
@@ -727,13 +780,17 @@ ENRICH_FIELDS = ("tcgplayer_product_id", "tcgplayer_url", "cardmarket_url", "ima
 
 def get_or_create_catalog_card(session: Session, card: dict) -> CatalogCard:
     """Find-or-create the canonical variant for a bench-card-shaped dict."""
+    from lib.printing import of
+    printing = of(card)
     key = variant_key(
         card.get("name") or "",
         card.get("set_code"),
         card.get("set_name"),
         card.get("card_number"),
-        bool(card.get("is_holo")),
+        printing == "holofoil",
     )
+    if printing not in ("normal", "holofoil"):
+        key += "|" + printing
     cc = session.query(CatalogCard).filter_by(variant_key=key).one_or_none()
     if cc is None:
         cc = CatalogCard(
@@ -743,8 +800,9 @@ def get_or_create_catalog_card(session: Session, card: dict) -> CatalogCard:
             set_code=card.get("set_code"),
             card_number=card.get("card_number"),
             rarity=card.get("rarity"),
-            is_holo=bool(card.get("is_holo")),
+            is_holo=printing == "holofoil",
         )
+        cc.finish = CatalogPrinting(printing=printing)
         session.add(cc)
         session.flush()
     for f in ENRICH_FIELDS:

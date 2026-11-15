@@ -61,7 +61,9 @@ def _title(card: dict) -> str:
         parts.append(f"#{number}")
     if set_name:
         parts.append(set_name)
-    if card.get("is_holo"):
+    if card.get("printing") == "reverseHolofoil":
+        parts.append("Reverse Holo")
+    elif card.get("is_holo"):
         parts.append("Holo")
     parts.append("Pokemon TCG")
     return " ".join(p for p in parts if p)
@@ -170,7 +172,7 @@ def ebay_rows(cards: list[dict]) -> list[dict]:
                 "C:Set": c.get("set_name", ""),
                 "C:Card Number": c.get("card_number", ""),
                 "C:Rarity": c.get("rarity", ""),
-                "C:Features": "Holo" if c.get("is_holo") else "",
+                "C:Features": "Reverse Holo" if c.get("printing") == "reverseHolofoil" else "Holo" if c.get("is_holo") else "",
                 "C:Language": "English",
                 "C:Country/Region of Manufacture": "United States",
                 "Shipping type": "Calculated",
@@ -343,7 +345,9 @@ def _description(c: dict) -> str:
         bits.append(f"(#{c['card_number']})")
     if c.get("rarity"):
         bits.append(str(c["rarity"]))
-    if c.get("is_holo"):
+    if c.get("printing") == "reverseHolofoil":
+        bits.append("Reverse Holo")
+    elif c.get("is_holo"):
         bits.append("Holo")
     bits.append(f"in {_condition_full(c.get('condition_guess', 'NM'))} condition.")
     if c.get("is_bulk"):

@@ -40,6 +40,7 @@ from typing import Optional
 from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 
+from lib.printing import normalize as normalize_printing, of as card_printing
 from lib.tcgplayer_client import TCGPlayerClient
 from lib.tcgplayer_catalog import _header, _norm, _norm_number, _norm_set
 from webapp.auth import current_user_id, is_operator, login_required
@@ -47,10 +48,11 @@ from webapp.models import (
     CatalogCard,
     ExternalListing,
     InventoryItem,
+    InventoryValuation,
     get_or_create_catalog_card,
     get_session,
     log_event,
-    record_price,
+    utcnow,
 )
 
 listings_bp = Blueprint("listings", __name__)
@@ -166,9 +168,8 @@ def parse_tcgplayer_listings(text: str) -> tuple[list[dict], dict]:
             line["card"] = {
                 "name": name, "set_name": set_name, "card_number": number,
                 "rarity": (raw.get(cols["rarity"]) or "").strip() or None if cols["rarity"] else None,
-                # The catalog knows two finishes. A reverse holo is priced
-                # with the plain card and says so in its note.
-                "is_holo": "holofoil" in printing and "reverse" not in printing,
+                "is_holo": normalize_printing(printing) == "holofoil",
+                "printing": normalize_printing(printing),
             }
             line["note"] = printing.title() if printing and printing != "holofoil" else None
         lines.append(line)
@@ -332,7 +333,8 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
             "sheet_price": market, "sheet_price_source": cell(raw, "price_source")[:200] or None,
             "card": {"name": name, "set_name": plain_set or None,
                      "set_code": cell(raw, "set_code").lower() or None, "card_number": number or None,
-                     "rarity": rarity[:80] or None, "is_holo": holo},
+                     "rarity": rarity[:80] or None, "is_holo": holo,
+                     "printing": normalize_printing(printing, holo) if printing else ("reverseHolofoil" if "reverse" in finish else normalize_printing(None, holo))},
         })
     return lines, info
 
@@ -401,7 +403,6 @@ def lookup_cards(number: str, total: int) -> list[dict]:
     pokemontcg.io. Tests replace this."""
     key = (number, total)
     if key not in _lookup_cache:
-        from lib.tcgplayer_client import TCGPlayerClient
 
         data = TCGPlayerClient()._get("/cards", {   # noqa: SLF001
             "q": f"number:{number} set.printedTotal:{total}", "pageSize": 50,
@@ -448,6 +449,16 @@ def title_condition(title: str) -> str:
     return hit.group(1) if hit else "NM"
 
 
+def title_is_holo(title: str) -> bool:
+    """Holofoil and holographic count. Reverse and non-holo do not."""
+    words = _norm(title).split()
+    if "nonholo" in words or ("non" in words and any(w.startswith("holo") for w in words)):
+        return False
+    if any(w.startswith("reverse") for w in words):
+        return False
+    return any(w.startswith("holo") for w in words)
+
+
 def match_title(s, title: str, budget: _Budget) -> tuple[Optional[dict], str]:
     """(card, "") when the title names exactly one card, else (None, why)."""
     if _LOT.search(title):
@@ -458,7 +469,8 @@ def match_title(s, title: str, budget: _Budget) -> tuple[Optional[dict], str]:
     number = hit.group(1).lstrip("0") or "0"
     total = int(hit.group(2))
     title_norm = f" {_norm(title)} "
-    holo = " holo " in title_norm and " non holo " not in title_norm and " reverse holo " not in title_norm
+    holo = title_is_holo(title)
+    reverse = any(w.startswith("reverse") for w in _norm(title).split())
 
     # Cards the catalog already has, when the title also names their set.
     local = [c for c in s.query(CatalogCard).filter(CatalogCard.card_number.isnot(None)).all()
@@ -466,11 +478,13 @@ def match_title(s, title: str, budget: _Budget) -> tuple[Optional[dict], str]:
              and _norm_set(c.set_name) and f" {_norm_set(c.set_name)} " in title_norm]
     local = _named_in(title_norm, local, lambda c: c.name)
     if len({(c.name, c.set_code or c.set_name) for c in local}) == 1:
-        finishes = [c for c in local if bool(c.is_holo) == holo] or local
+        finishes = [c for c in local if c.printing == ("reverseHolofoil" if reverse else normalize_printing(None, holo))]
+        if not reverse and not holo and not any(w.startswith("non") for w in _norm(title).split()):
+            finishes = local
         if len(finishes) == 1:
             c = finishes[0]
             return {"name": c.name, "set_name": c.set_name, "set_code": c.set_code,
-                    "card_number": c.card_number, "rarity": c.rarity, "is_holo": bool(c.is_holo)}, ""
+                    "card_number": c.card_number, "rarity": c.rarity, "is_holo": bool(c.is_holo), "printing": c.printing}, ""
 
     if not budget.spend(number, total):
         return None, "not looked up yet; use Try matching again"
@@ -485,7 +499,8 @@ def match_title(s, title: str, budget: _Budget) -> tuple[Optional[dict], str]:
     if len(fits) > 1:
         return None, f"{len(fits)} different cards fit this title"
     card = dict(fits[0])
-    card["is_holo"] = holo or (card.get("rarity") or "").lower().startswith("rare holo")
+    card["is_holo"] = not reverse and (holo or (card.get("rarity") or "").lower().startswith("rare holo"))
+    card["printing"] = "reverseHolofoil" if reverse else normalize_printing(None, card["is_holo"])
     return card, ""
 
 
@@ -501,7 +516,7 @@ def _catalog_card(s, card: dict) -> CatalogCard:
     same = [r for r in rows
             if _norm_number(r.card_number) == _norm_number(card.get("card_number"))
             and _norm_set(r.set_name) == _norm_set(card.get("set_name"))
-            and bool(r.is_holo) == bool(card.get("is_holo"))]
+            and r.printing == card_printing(card)]
     if len(same) == 1:
         if card.get("image_url") and not same[0].image_url:
             same[0].image_url = card["image_url"]
@@ -525,17 +540,19 @@ def _place(s, row: ExternalListing, card: dict, condition: str, note: Optional[s
     return item
 
 
-def _use_sheet_price(s, cc: CatalogCard, line: dict) -> bool:
-    """A card with no price takes the market price its owner's sheet gives,
-    marked as such. A live price found later replaces it."""
+def _use_sheet_price(s, item: InventoryItem, line: dict) -> bool:
+    """Keep the importing owner's estimate on this inventory item only."""
     price = line.get("sheet_price")
-    if price is None or cc.final_price is not None:
+    if price is None:
         return False
     source = line.get("sheet_price_source")
-    record_price(s, cc, {
-        "final_price": price, "pricing_confidence": 0.5,
-        "pricing_notes": "From your spreadsheet" + (f" ({source})" if source else ""),
-    })
+    saved = item.imported_value
+    if saved and saved.price == price and saved.source == source:
+        return False
+    if saved is None:
+        item.imported_value = InventoryValuation(price=price, source=source)
+    else:
+        saved.price, saved.source, saved.updated_at = price, source, utcnow()
     return True
 
 
@@ -561,7 +578,7 @@ def _repair_from_sheet(s, row: ExternalListing, line: dict) -> bool:
     if not line.get("condition_assumed") and item.condition != line["condition"]:
         item.condition = row.condition = line["condition"]
         changed = True
-    if _use_sheet_price(s, cc, line):
+    if _use_sheet_price(s, item, line):
         changed = True
     row.title = (line.get("title") or row.title or "")[:500]
     return changed
@@ -665,7 +682,7 @@ def import_lines(uid: int, source: str, lines: list[dict]) -> dict:
             if _GRADED.search(row.title or ""):
                 note = "graded; see the listing title"
             item = _place(s, row, card, condition or "NM", note, cost=line.get("cost"))
-            _use_sheet_price(s, s.get(CatalogCard, item.catalog_card_id), line)
+            _use_sheet_price(s, item, line)
             if row.sku:
                 skus[row.sku] = item.id
             out["added"] += 1
@@ -866,6 +883,7 @@ def assign(row_id: int):
             "set_code": (body.get("set_code") or "").strip().lower() or None,
             "card_number": (body.get("card_number") or "").strip() or None,
             "is_holo": bool(body.get("is_holo")),
+            "printing": body.get("printing"),
         }, condition)
         s.commit()
         return jsonify({"id": row.id, "inventory_item_id": item.id, "name": name, "quantity": row.quantity})

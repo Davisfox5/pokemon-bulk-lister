@@ -371,7 +371,7 @@ def test_a_sheet_read_badly_before_is_repaired_by_reading_it_again(site, monkeyp
     # A live lookup that finds nothing does not erase the sheet's price; one that finds a price replaces it.
     monkeypatch.setattr(scheduler, "_price_fn", lambda card: (
         {"final_price": 1.1, "pricing_confidence": 0.9, "pricing_notes": None} if card["name"] == "Pikachu" else {}))
-    assert me.post("/api/portfolio/price-step", json={"mode": "new"}).get_json()["tried"] == 0   # both have a price
+    assert me.post("/api/portfolio/price-step", json={"mode": "new"}).get_json()["tried"] == 2   # private estimates still need market prices
     me.post("/api/portfolio/price-step", json={"mode": "all"})
     have = {i["name"]: i for i in _have(me)}
     assert (have["Pikachu"]["price"], have["Jirachi ex"]["price"]) == (1.1, 41.2)
@@ -416,3 +416,43 @@ def test_new_cards_are_priced_in_steps_and_the_rest_of_the_library_is_left_alone
     r = me.post("/api/portfolio/price-step", json={"mode": "all"}).get_json()
     assert (r["tried"], r["remaining"]) == (2, 3)
     assert site.test_client().post("/api/portfolio/price-step", json={}).status_code == 401
+
+
+def test_spreadsheet_estimates_stay_private_even_when_another_owner_arrives_later(site):
+    from webapp import portfolio
+    site.register_blueprint(portfolio.portfolio_bp)
+    first, second = _user(site, 'first@example.com'), _user(site, 'second@example.com')
+    sheet = 'Name,Set,Number,Market Price\nPikachu,Test,23,999\n'
+    _upload(first, 'cards', sheet)
+    mine = _have(first)[0]
+    assert mine['price'] == 999 and mine['provenance']['flagged'] and mine['provenance']['estimate']
+    # Another owner added after the sheet must not inherit its price.
+    _add(second, name='Pikachu', set_name='Test', set_code=None, card_number='23')
+    assert _have(second)[0]['price'] is None
+    _upload(second, 'cards', sheet.replace('999', '18'))
+    assert _have(first)[0]['price'] == 999
+    assert sorted(i['price'] or 0 for i in _have(second)) == [0, 18]
+    assert first.get('/api/portfolio/summary').get_json()['totals']['value'] == 999
+    assert second.get('/api/portfolio/summary').get_json()['totals']['value'] == 18
+    session = models.get_session()
+    try:
+        assert session.query(models.CatalogCard).one().final_price is None
+        assert session.query(models.PriceSnapshot).count() == 0
+    finally:
+        session.close()
+    # The owner can opt into listing an estimate, but it is not market data.
+    preview = first.post('/api/inventory/list-for-sale', json={'item_ids': [mine['id']], 'dry_run': True}).get_json()
+    assert preview['skipped_flagged'] == 1 and preview['to_list'] == 0
+    listed = first.post('/api/inventory/list-for-sale', json={'item_ids': [mine['id']], 'include_flagged': True}).get_json()
+    assert listed['listed'] == 1
+    listing = second.get('/api/market/listings').get_json()['listings'][0]
+    assert listing['market_price'] is None and listing['provenance']['priced_at'] is None
+    assert 'spreadsheet' not in str(listing).lower()
+
+
+def test_reverse_holo_import_never_reuses_a_normal_catalog_card(site):
+    me = _user(site, 'finish@example.com')
+    _upload(me, 'cards', 'Name,Set,Number,Printing\nPikachu,Test,23,Normal\nPikachu,Test,23,Reverse Holo\n')
+    cards = _have(me)
+    assert len({i['catalog_card_id'] for i in cards}) == 2
+    assert {i['printing'] for i in cards} == {'normal', 'reverseHolofoil'}

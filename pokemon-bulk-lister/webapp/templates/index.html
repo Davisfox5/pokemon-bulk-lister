@@ -170,8 +170,11 @@
               <option value="DMG">Damaged (DMG)</option>
             </select>
           </label>
-          <label class="checkbox"><input type="checkbox" name="is_holo" /> Holo</label>
-          <label>ID confidence <input type="number" step="0.05" min="0" max="1" name="id_confidence" /></label>
+          <input type="checkbox" name="is_holo" hidden />
+          <label>Finish (check against the photo)
+            <select name="printing"><option value="unknown">Not checked</option><option value="normal">Non-holo</option><option value="holofoil">Holo</option><option value="reverseHolofoil">Reverse holo</option></select>
+          </label>
+          <input type="hidden" name="id_confidence" />
           <div class="prices-grid" id="modal-prices"></div>
           <div class="actions">
             <button type="submit">Save</button>
@@ -193,8 +196,7 @@
         <button id="conn-close" aria-label="Close">×</button>
       </header>
       <div class="modal-body conn-body">
-        <p class="muted small">Keys live in the <code>.env</code> file next to the app, never in this page.
-          After editing <code>.env</code>, restart the app.</p>
+        <p class="muted small">Some connections are set up by whoever runs this site. If a step below needs a key, ask them.</p>
         <div id="conn-list">Loading…</div>
       </div>
     </div>
@@ -249,8 +251,8 @@
           <label>Quantity (number of identical lots)
             <input type="number" min="1" step="1" name="quantity" value="1" />
           </label>
-          <label>Slug (used as folder name + SKU)
-            <input name="slug" placeholder="auto" />
+          <label>Lot name
+            <input name="slug" placeholder="Leave blank to name it for you" />
           </label>
           <label>Extra note for description (optional)
             <input name="note" placeholder="e.g. Smoke-free home, ships next business day." />
@@ -259,12 +261,11 @@
             <div><span class="muted">Lot price preview:</span> <strong id="bundle-price-preview">$0.00</strong></div>
           </div>
           <div class="actions">
-            <button type="submit" class="primary">Export lot CSVs</button>
+            <button type="submit" class="primary">Download lot spreadsheets</button>
             <span id="bundle-status" class="muted small"></span>
           </div>
           <p class="muted small">
-            One row per CSV is written to <code>output/csvs/lots/&lt;slug&gt;/</code>. TCGPlayer's bulk template requires a TCGplayer Id per row, so the TCGPlayer lot CSV is informational only — Whatnot and eBay accept lot listings natively.
-          </p>
+            Downloads a spreadsheet for eBay and Whatnot. TCGplayer does not accept a mixed lot, so that file is only a checklist.</p>
         </form>
       </div>
     </div>

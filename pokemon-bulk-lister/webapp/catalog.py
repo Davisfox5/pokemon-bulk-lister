@@ -31,8 +31,10 @@ from webapp.models import (
     utcnow,
 )
 
+from webapp.runtime import DATA_ROOT
+
 ROOT = Path(__file__).resolve().parent.parent
-BENCH_DB_PATH = str(ROOT / os.getenv("OUTPUT_DIR", "output") / "db.sqlite")
+BENCH_DB_PATH = str(DATA_ROOT / os.getenv("OUTPUT_DIR", "output") / "db.sqlite")
 
 # Prices under this confidence get the "needs a human look" treatment.
 LOW_CONFIDENCE = float(os.getenv("LOW_CONFIDENCE", "0.5"))
@@ -119,6 +121,9 @@ def promote():
 def price_provenance(cc: CatalogCard) -> dict:
     """Where a catalog price came from and how far to trust it. Every screen
     that shows a price shows this next to it."""
+    if (cc.pricing_notes or "").startswith("From your spreadsheet"):
+        return {"sources": {}, "confidence": 0, "priced_at": None, "outlier": False,
+                "notes": "No shared market price yet", "flagged": True}
     sources = {
         "tcgplayer": cc.tcgplayer_market,
         "cardmarket": cc.cardmarket_trend_usd,
@@ -139,12 +144,31 @@ def price_provenance(cc: CatalogCard) -> dict:
     }
 
 
+def item_valuation(item: InventoryItem) -> tuple:
+    """Live catalog price first; an estimate belongs only to its owner."""
+    cc = item.catalog_card
+    provenance = price_provenance(cc)
+    price = cc.final_price
+    legacy = (cc.pricing_notes or "").startswith("From your spreadsheet")
+    if legacy:
+        price = None  # Old shared estimates have no reliable owner attribution.
+        provenance = {**provenance, "priced_at": None, "sources": {}, "notes": None, "flagged": False}
+    saved = item.imported_value
+    if price is None and saved:
+        price = saved.price
+        provenance = {"sources": {}, "confidence": 0.4, "outlier": False, "flagged": True,
+                      "priced_at": saved.updated_at.isoformat() + "Z",
+                      "notes": "From your spreadsheet" + (f" ({saved.source})" if saved.source else ""),
+                      "estimate": True}
+    return price, provenance
+
+
 def _item_dict(s, item: InventoryItem) -> dict:
     cc = item.catalog_card
-    price = cc.final_price
+    price, provenance = item_valuation(item)
     week_ago = price_at(s, cc.id, utcnow() - timedelta(days=7))
     change_7d = None
-    if price is not None and week_ago:
+    if price is not None and week_ago and not provenance.get("estimate"):
         change_7d = round((price - week_ago) / week_ago * 100, 1)
     return {
         "id": item.id,
@@ -155,6 +179,7 @@ def _item_dict(s, item: InventoryItem) -> dict:
         "card_number": cc.card_number,
         "rarity": cc.rarity,
         "is_holo": cc.is_holo,
+        "printing": cc.printing,
         "quantity": item.quantity,
         "condition": item.condition,
         "acquired_price": item.acquired_price,
@@ -163,11 +188,11 @@ def _item_dict(s, item: InventoryItem) -> dict:
         "crop_path": item.source_crop_path,
         "price": price,
         "value": round(price * item.quantity, 2) if price is not None else None,
-        "pricing_confidence": cc.pricing_confidence,
-        "last_priced_at": cc.last_priced_at.isoformat() + "Z" if cc.last_priced_at else None,
+        "pricing_confidence": provenance["confidence"],
+        "last_priced_at": provenance["priced_at"],
         "change_7d_pct": change_7d,
         "tcgplayer_url": cc.tcgplayer_url,
-        "provenance": price_provenance(cc),
+        "provenance": provenance,
     }
 
 

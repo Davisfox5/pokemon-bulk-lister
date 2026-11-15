@@ -38,7 +38,9 @@ def enrich_one(
     set_name = entry.get("set_name") or None
     set_code = entry.get("set_code") or None
     card_number = entry.get("card_number") or None
-    is_holo = bool(entry.get("is_holo"))
+    from lib.printing import of as card_printing
+    printing = card_printing(entry)
+    is_holo = printing == "holofoil"
 
     # One pokemontcg.io call -> TCGPlayer (USD) + Cardmarket (EUR).
     tcg_price: Optional[float] = None
@@ -51,6 +53,7 @@ def enrich_one(
             set_code=set_code,
             card_number=card_number,
             is_holo=is_holo,
+            printing=printing,
         )
         tcg_price = prices["tcgplayer_market_usd"]
         cm_eur = prices["cardmarket_trend_eur"]
@@ -63,14 +66,15 @@ def enrich_one(
     ebay_stats: dict[str, Any] = {"median": None, "max": None, "count": 0}
     try:
         query = ebay.build_query(name=name, set_name=set_name, card_number=card_number)
-        ebay_stats = ebay.sold_stats(query=query, days=30, condition="NEW")
+        if printing == "normal":
+            ebay_stats = ebay.sold_stats(query=query, days=30, condition="NEW")
     except EbayAuthError as exc:
         print(f"  [ebay auth] {exc}", file=sys.stderr)
     except Exception as exc:
         print(f"  [ebay error] {name}: {exc}", file=sys.stderr)
 
     terapeak_stats: dict[str, Any] = {"median": None, "count": 0}
-    if terapeak is not None:
+    if terapeak is not None and printing == "normal":
         try:
             tp_query = " ".join(p for p in [name, set_name, card_number, "pokemon"] if p)
             terapeak_stats = terapeak.search(tp_query, days=365)

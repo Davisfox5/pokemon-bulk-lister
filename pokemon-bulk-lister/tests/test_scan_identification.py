@@ -135,4 +135,4 @@ def test_pricing_keeps_identity_and_printing_disagreements_visible(bench, monkey
     patch = bench._price_card(dict(name='Pikachu', set_code='test', card_number='23', id_confidence=confidence))
     assert patch['needs_review'] and patch['pricing_confidence'] <= 0.2
     assert '⚠' in patch['pricing_notes']
-    assert ('collector number' if drop_number else 'identification needs review') in patch['pricing_notes']
+    assert ('card number was not used' if drop_number else 'identification needs review') in patch['pricing_notes']

@@ -71,3 +71,10 @@ def test_publish_requires_price(lister):
 def test_publish_requires_image(lister):
     with pytest.raises(EbayListingError, match="image_url"):
         lister.publish_card({"crop_path": "x.jpg", "final_price": 5}, dry_run=True)
+
+
+def test_reverse_holo_finish_is_preserved_in_listing_text_and_features(card, lister):
+    card.update(is_holo=False, printing='reverseHolofoil')
+    assert 'Reverse Holo' in ebay_lister.card_title(card)
+    assert 'Reverse Holo' in ebay_lister.card_description(card)
+    assert lister._inventory_item_payload(card)['product']['aspects']['Features'] == ['Reverse Holo']
