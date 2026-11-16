@@ -82,6 +82,12 @@ function priceBasis(card) {
   return basis + `<span class="src">Price confidence: ${Math.round((card.pricing_confidence || 0) * 100)}%</span>` + why;
 }
 
+// A photo's own storage address when the server gave one: loading it
+// through this app costs a function call and a database read per photo.
+function photoSrc(card) {
+  return card.photo_url || `/${card.crop_path}`;
+}
+
 function renderRow(card) {
   const flagClass = card.needs_review ? "flag" : "";
   const setBits = [card.set_name, card.card_number ? `#${card.card_number}` : "", card.rarity]
@@ -95,7 +101,7 @@ function renderRow(card) {
   return `
     <tr class="${flagClass}" data-id="${card.id}">
       <td class="select"><input type="checkbox" data-act="select" aria-label="Select ${escapeHtml(card.name || 'unidentified card')}" ${checked} /></td>
-      <td class="thumb"><img src="/${escapeHtml(card.crop_path)}" alt="Photo of ${escapeHtml(card.name || 'unidentified card')}" loading="lazy" /></td>
+      <td class="thumb"><img src="${escapeHtml(photoSrc(card))}" alt="Photo of ${escapeHtml(card.name || 'unidentified card')}" loading="lazy" /></td>
       <td>
         <strong>${escapeHtml(card.name) || "<span class='muted'>No name yet</span>"}</strong>
         ${card.printing === "reverseHolofoil" ? "<span class='muted'> · reverse holo</span>" : card.is_holo ? "<span class='muted'> · holo</span>" : card.printing === "unknown" ? "<span class='flag-text'> · finish not checked</span>" : ""}
@@ -592,7 +598,7 @@ function openEdit(id) {
   state.editing = id;
   editorOpener = document.activeElement;
   $("#modal-title").textContent = `Edit · ${card.name || "(unidentified)"}`;
-  $("#modal-img").src = `/${card.crop_path}`;
+  $("#modal-img").src = photoSrc(card);
   const form = $("#edit-form");
   form.id.value = card.id;
   form.name.value = card.name || "";
@@ -761,7 +767,7 @@ async function chooseCard(id) {
   const card = state.cards.find(c => c.id === id);
   if (!card) return;
   choosing = { id, choices: [] };
-  $("#choose-img").src = `/${card.crop_path}`;
+  $("#choose-img").src = photoSrc(card);
   $("#choose-img").alt = `Photo of ${card.name || "the card"}`;
   $("#choose-read").textContent = "";
   $("#choose-list").innerHTML = "";

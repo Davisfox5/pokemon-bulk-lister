@@ -295,6 +295,7 @@ def api_list_cards():
     sold = _sold_stems(strict=False)   # display only
     for row in rows:
         row["sold"] = Path(row["crop_path"]).stem in sold or row.get("ebay_listing_status") == "sold"
+    runtime.add_photo_urls(rows)
     return jsonify({"cards": rows, "stats": stats})
 
 

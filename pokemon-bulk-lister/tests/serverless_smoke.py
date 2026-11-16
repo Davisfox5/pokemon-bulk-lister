@@ -411,6 +411,10 @@ assert r.status_code == 200 and r.get_json()["grids"] == [{"filename": "three.jp
 mine = ann.get("/api/cards", headers=public).get_json()["cards"]
 assert sorted((c["row"], c["col"]) for c in mine if "three_" in c["crop_path"]) == [(0, 0), (0, 1), (0, 2)]
 assert "output/pages/three.jpg" in blob.files          # the sheet page-level identification reads
+# Each card comes with its photo's storage address, so the page does not ask
+# this app (a function call and a database read) for every photo.
+three_cards = [c for c in mine if "three_" in c["crop_path"]]
+assert all(c["photo_url"].startswith("https://") and c["photo_url"].endswith(c["crop_path"]) for c in three_cards), three_cards
 
 # ---------------------------------------------------------------- cards scanned before accounts existed go to an account
 with db.connect(appmod.DB_PATH) as conn:

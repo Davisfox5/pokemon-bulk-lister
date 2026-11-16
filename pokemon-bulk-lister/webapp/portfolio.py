@@ -56,6 +56,8 @@ def summary():
                  .filter(InventoryItem.user_id == uid, InventoryItem.quantity > 0)
                  .join(CatalogCard).all())
         rows = [_item_dict(s, i) for i in items]
+        from webapp import runtime
+        runtime.add_photo_urls(rows)
         from webapp.listing_import import listed_on
         elsewhere = listed_on(s, [i.id for i in items])
         for row in rows:

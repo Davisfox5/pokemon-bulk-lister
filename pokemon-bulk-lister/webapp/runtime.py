@@ -188,6 +188,31 @@ def file_url(rel: str) -> Optional[str]:
         s.close()
 
 
+def add_photo_urls(rows: list) -> list:
+    """Give each row with a crop_path the photo's own storage address
+    (photo_url), with one lookup for the whole list. The page then loads
+    photos straight from storage: asking this app for each one costs a
+    function call and a database read per photo. Rows stay as they are when
+    files live on local disk."""
+    if not blob_enabled():
+        return rows
+    paths = {str(row.get("crop_path")) for row in rows if row.get("crop_path")}
+    if not paths:
+        return rows
+    from webapp.models import StoredFile, get_session
+
+    s = get_session()
+    try:
+        urls = dict(s.query(StoredFile.path, StoredFile.url).filter(StoredFile.path.in_(sorted(paths))).all())
+    finally:
+        s.close()
+    for row in rows:
+        url = urls.get(str(row.get("crop_path") or ""))
+        if url:
+            row["photo_url"] = url
+    return rows
+
+
 def ensure_local(path: Path) -> bool:
     """Make sure a stored file is on this instance's disk. True if it is."""
     path = Path(path)

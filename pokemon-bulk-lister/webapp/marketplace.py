@@ -315,6 +315,8 @@ def browse():
             })
     finally:
         s.close()
+    from webapp import runtime
+    runtime.add_photo_urls(payload)
     return jsonify({
         "listings": payload,
         "fee_pct": PLATFORM_FEE_PCT,

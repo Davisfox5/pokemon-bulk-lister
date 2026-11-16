@@ -87,6 +87,7 @@ function provenanceHtml(p) {
 
 function thumbHtml(row, cls = "inv-thumb") {
   if (row.image_url) return `<img class="${cls}" src="${esc(row.image_url)}" alt="" loading="lazy">`;
+  if (row.photo_url) return `<img class="${cls}" src="${esc(row.photo_url)}" alt="" loading="lazy">`;
   if (row.crop_path) return `<img class="${cls}" src="/${esc(row.crop_path)}" alt="" loading="lazy">`;
   return `<div class="${cls} ph"></div>`;
 }

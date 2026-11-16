@@ -208,6 +208,8 @@ def list_inventory():
             .all()
         )
         payload = [_item_dict(s, i) for i in items]
+        from webapp import runtime
+        runtime.add_photo_urls(payload)
         from webapp.listing_import import listed_on
         elsewhere = listed_on(s, [i.id for i in items])
         for row in payload:
