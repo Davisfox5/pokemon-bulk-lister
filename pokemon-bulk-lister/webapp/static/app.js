@@ -130,6 +130,11 @@ function visibleCards() {
   return state.cards.filter(c => !q || [c.name, c.set_name, c.set_code, c.card_number].some(v => String(v || '').toLocaleLowerCase().includes(q)));
 }
 
+// Rows are kept on the page and only the ones that changed are redrawn.
+// Rebuilding the whole table makes the browser load every photo again, which
+// shows as the photos flashing each time a name or price arrives.
+const drawnRows = new Map();   // card id -> the row's HTML as last drawn
+
 function renderCards() {
   const body = $("#cards-body");
   const cards = visibleCards();
@@ -141,11 +146,43 @@ function renderCards() {
   if (!cards.length) {
     const filtered = state.search || state.needsReview || state.unidentified;
     body.innerHTML = `<tr><td colspan="10" class="muted empty-state"><strong>${filtered ? 'No cards match these filters' : 'Your cards will appear here'}</strong>${filtered ? 'Clear the search or filters to see more cards.' : 'Add a photo above to get started. You can review and correct every card before listing.'}</td></tr>`;
+    drawnRows.clear();
     syncSelectAllCheckbox();
     updateBundleButton();
     return;
   }
-  body.innerHTML = cards.map(renderRow).join("");
+  body.querySelectorAll("tr:not([data-id])").forEach(tr => tr.remove());     // the "no cards" row
+  const onPage = new Map(Array.from(body.querySelectorAll("tr[data-id]"), tr => [Number(tr.dataset.id), tr]));
+  const kept = new Set();
+  let before = null;
+  for (const card of cards) {
+    const html = renderRow(card).trim();
+    let tr = onPage.get(card.id);
+    if (!tr || drawnRows.get(card.id) !== html) {
+      const holder = document.createElement("tbody");
+      holder.innerHTML = html;
+      const fresh = holder.firstElementChild;
+      if (tr) {
+        // The same photo: keep the element already showing it.
+        const shown = tr.querySelector("td.thumb img");
+        const wanted = fresh.querySelector("td.thumb img");
+        if (shown && wanted && shown.getAttribute("src") === wanted.getAttribute("src")) {
+          shown.alt = wanted.alt;
+          wanted.replaceWith(shown);
+        }
+        tr.replaceWith(fresh);
+      }
+      tr = fresh;
+      drawnRows.set(card.id, html);
+    }
+    const place = before ? before.nextElementSibling : body.firstElementChild;
+    if (tr !== place) body.insertBefore(tr, place);
+    before = tr;
+    kept.add(card.id);
+  }
+  for (const [id, tr] of onPage) {
+    if (!kept.has(id)) { tr.remove(); drawnRows.delete(id); }
+  }
   syncSelectAllCheckbox();
   updateBundleButton();
 }
