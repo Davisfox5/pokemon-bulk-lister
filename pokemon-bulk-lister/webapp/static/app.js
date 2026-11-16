@@ -15,6 +15,8 @@ const state = {
   jobRunning: false,
   pricing: new Set(),      // card ids being priced right now
   priceTried: new Set(),   // ids this page already tried, so a failure is not retried in a loop
+  libraryTried: new Set(), // ids this page already sent to the library
+  libraryOff: false,       // not signed in, or the server refused: stop trying
 };
 
 // ---------------------------------------------------------------- network
@@ -106,6 +108,7 @@ function renderRow(card) {
         <strong>${escapeHtml(card.name) || "<span class='muted'>No name yet</span>"}</strong>
         ${card.printing === "reverseHolofoil" ? "<span class='muted'> · reverse holo</span>" : card.is_holo ? "<span class='muted'> · holo</span>" : card.printing === "unknown" ? "<span class='flag-text'> · finish not checked</span>" : ""}
         ${card.sold ? "<span class='sold-tag' title='Sold. It is left out of publishing and exports.'>sold</span>" : ""}
+        ${card.in_library ? "<span class='muted small' title='This card is in your library.'> · in library</span>" : ""}
         <div class="muted small">${escapeHtml(card.condition_guess || "")}</div>
       </td>
       <td class="muted small">${escapeHtml(setBits)}</td>
@@ -255,6 +258,39 @@ async function loadCards() {
     renderCards();
   }
   priceWaitingCards();
+  addPricedToLibrary();
+}
+
+// A scanned card goes into the library by itself once it has a name the
+// catalog confirmed and a price. One that still says "Check ID" waits for a
+// person: Choose settles it, or "Add to library" adds it as it is.
+let libraryBusy = false;
+async function addPricedToLibrary() {
+  if (libraryBusy || state.libraryOff) return;
+  const ready = state.cards.filter(c => c.name && c.final_price != null && c.id_confidence > 0.6
+    && !c.in_library && !c.sold && !state.libraryTried.has(c.id));
+  if (!ready.length) return;
+  libraryBusy = true;
+  ready.forEach(c => state.libraryTried.add(c.id));
+  try {
+    let added = 0;
+    for (let i = 0; i < ready.length; i += 50) {      // a few at a time keeps each request short
+      const part = ready.slice(i, i + 50);
+      const res = await api("/api/inventory/promote", {
+        method: "POST", body: JSON.stringify({ card_ids: part.map(c => c.id), auto: true }) });
+      added += res.promoted || 0;
+      part.forEach(c => { c.in_library = true; });
+      redrawCards();
+    }
+    if (added) {
+      $("#upload-status").innerHTML = `Added ${plural(added, "priced card")} to your library. `
+        + `<a href="/portfolio">Open library</a>`;
+    }
+  } catch (err) {
+    if (err.status === 401 || err.status === 403) state.libraryOff = true;   // not signed in here
+  } finally {
+    libraryBusy = false;
+  }
 }
 
 function redrawCards() {

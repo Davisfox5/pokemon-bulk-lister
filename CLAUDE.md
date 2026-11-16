@@ -134,6 +134,11 @@ runtime routing audit. This section covers what the tool calls when it runs.
   wakes the database), so do not add a polling interval. A named card with no price and no pricing note is priced in the
   background by the page (`priceWaitingCards`); changing which card it is clears
   both (`db.update_card`), which is how an edit gets priced again.
+- A scanned card goes into the signed-in account's library by itself once it
+  has a price and a confirmed name (`addPricedToLibrary` in `app.js` posts
+  `/api/inventory/promote` with `auto: true`; `catalog.AUTO_ADD_ABOVE` is the
+  identification confidence it must be above). A card still marked "Check ID"
+  is held for a person. `/api/cards` marks rows already added (`in_library`).
 - A price is for the card's finish (`lib/printing.py`). Old sets list theirs as
   `unlimited`; a card printed in one ordinary finish takes that one; a reverse
   holo or 1st Edition price never stands in for another card
