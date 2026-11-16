@@ -301,3 +301,121 @@ details.sales-panel { display: block; }
   #choose-modal .modal-body { flex-direction: column; }
   #choose-modal .modal-body img { max-width: 120px; max-height: 170px; }
 }
+
+/* Scan layout: the upload area gives way to the collection after import. */
+body.scan-page { padding: 0 0 48px; }
+.scan-page .app-main { max-width: 1320px; padding: 28px 28px 40px; }
+.scan-page .scan-intro { padding: 0; margin: 4px 0 24px; }
+.scan-page .scan-intro h1 { margin: 0; }
+.scan-page .scan-intro p { margin: 8px 0 0; }
+.scan-page .page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.scan-page .upload-panel { padding: 0; overflow: hidden; }
+.upload-panel > summary { padding: 14px 20px; cursor: pointer; font-weight: 600; }
+.upload-plus { color: var(--accent); font-size: 20px; vertical-align: -1px; margin-right: 4px; }
+.upload-summary-hint { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 12px; }
+.upload-content { padding: 6px 20px 18px; }
+.scan-page .dropzone { padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.scan-page .dropzone strong { font-size: 19px; letter-spacing: -0.4px; }
+.upload-art { width: 112px; height: 100px; margin-bottom: 4px; }
+.upload-file-cta { color: var(--accent); font-weight: 650; margin-top: 6px; padding: 8px 16px; border-radius: 8px; background: var(--ok-bg); }
+.scan-page .upload-options { justify-content: center; gap: 10px; margin-top: 16px; }
+.photo-tips { margin-left: 8px; font-size: 12px; }
+.photo-tips > summary { cursor: pointer; color: var(--muted); padding: 10px 0; }
+.photo-tips[open] { flex-basis: 100%; margin-left: 0; text-align: center; }
+.photo-tips p { margin: 0 0 10px; }
+.scan-page.is-empty .upload-panel { max-width: 720px; margin: 0 auto 26px; }
+.scan-page.is-empty .upload-panel > summary { display: none; }
+.scan-page.is-empty .upload-content { padding-top: 24px; }
+.scan-page.is-empty :is(#scan-toolbar, .cards-panel) { display: none; }
+.scan-status:empty { display: none; }
+.scan-status { padding: 10px 14px; margin: 12px 0; background: var(--ok-bg); border-radius: 8px; overflow-wrap: anywhere; }
+.scan-page .toolbar { border: 0; box-shadow: none; padding: 0; background: transparent; margin: 24px 0 16px; gap: 12px; }
+.scan-page .toolbar-left { flex: 1; gap: 12px; }
+.scan-page .toolbar-right { display: flex; gap: 8px; }
+.scan-page .search-label { min-width: 200px; flex: 1; max-width: 340px; }
+.scan-page .search-label input { width: 100%; }
+.filter-chip { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; cursor: pointer; font-size: 13px; }
+.filter-chip:has(input:checked) { color: var(--row-flag-text); }
+#review-count:not(:empty) { padding: 1px 6px; border-radius: 5px; background: var(--row-flag); color: var(--row-flag-text); font-size: 11px; }
+.scan-page :is(.filter-menu, .more-tools, .row-menu, .editor-tools) { position: relative; }
+.scan-page :is(.filter-menu, .more-tools, .row-menu, .editor-tools) > summary { cursor: pointer; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-weight: 500; font-size: 13px; background: var(--surface-1); }
+.scan-page :is(.filter-menu-body, .more-tools-body, .row-menu > div) { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 14px; }
+.scan-page .toolbar :is(.filter-menu-body, .more-tools-body), .scan-page .row-menu > div { position: absolute; top: calc(100% + 6px); right: 0; min-width: 210px; z-index: 6; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 30px #203b3220; }
+.scan-page .filter-menu-body label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.scan-page .filter-menu-body label:has(select) { flex-direction: column; align-items: stretch; }
+.scan-page .more-tools[open] { flex-basis: auto; }
+.scan-page .cards-panel { padding: 0; overflow: visible; }
+.scan-page .cards-heading { padding: 18px 20px; margin: 0; gap: 12px; flex-direction: row; flex-wrap: wrap; align-items: center; }
+.scan-page .cards-heading h2 { margin-right: auto; }
+.scan-page .cards-heading .stats { font-size: 12px; }
+.scan-page #visible-count { margin-left: 6px; padding: 2px 7px; background: var(--button-bg); border-radius: 6px; font-size: 12px; }
+.scan-page .table-wrap { border-radius: 0 0 14px 14px; }
+.scan-page td.thumb img { width: 66px; height: 92px; object-fit: contain; box-shadow: 0 2px 6px #203b321a; }
+.scan-page #cards-table td { padding: 14px 12px; vertical-align: middle; }
+.scan-page #cards-table th { padding: 10px 12px; font-size: 11px; }
+.scan-page td.actions { min-width: 150px; white-space: normal; }
+.scan-page td.actions > button { margin: 0 4px 6px 0; }
+.scan-page .row-menu { display: inline-block; }
+.scan-page .row-menu > summary { padding: 5px 8px; font-size: 12px; }
+.scan-page .row-menu > div { position: static; box-shadow: none; padding: 8px 0 0; border: 0; min-width: 130px; }
+.scan-page .id-status { font-size: 11px; }
+.scan-page .match-details { font-size: 11px; color: var(--muted); margin-top: 7px; max-width: 170px; }
+.scan-page .match-details > summary { cursor: pointer; }
+.scan-selection { position: sticky; top: 8px; z-index: 8; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; background: var(--surface-1); border: 1px solid var(--accent); border-radius: 12px; padding: 10px 14px; margin: 12px 0; box-shadow: 0 4px 16px #203b3212; }
+.scan-selection strong { margin-right: auto; font-size: 13px; }
+.scan-page details.publish-panel { display: block; }
+.scan-page :is(.publish-panel, .sales-panel) > summary { cursor: pointer; padding: 4px 0; font-size: 13px; font-weight: 600; }
+.scan-page .publish-panel > summary span { margin-left: 12px; font-weight: 400; }
+.scan-page .publish-row { margin-top: 14px; }
+.scan-page .modal-card header { flex-direction: row; }
+.scan-page .modal-body { gap: 24px; }
+.scan-page #edit-form { gap: 10px; min-width: 0; }
+.scan-page #edit-form label { gap: 4px; }
+.scan-page #edit-form > p { margin: 0; }
+.scan-page .manual-details > summary { color: var(--muted); cursor: pointer; font-size: 12px; padding: 6px 0; }
+.scan-page .manual-details label { margin: 8px 0; }
+.scan-page .modal-body .actions { border-top: 1px solid var(--border); padding-top: 14px; }
+.scan-page .empty-state { padding: 40px 20px; }
+.scan-page .empty-state button { margin-top: 10px; }
+@media (max-width: 700px) {
+  .scan-page .app-main { padding: 20px 14px 24px; }
+  .scan-page .scan-intro { flex-direction: row; align-items: center; gap: 12px; margin: 0 0 18px; flex-wrap: wrap; }
+  .scan-page .page-actions { gap: 6px; }
+  .scan-page .page-actions button { font-size: 12px; padding: 8px 10px; }
+  .scan-page .upload-summary-hint { display: none; }
+  .scan-page .upload-content { padding: 8px 12px 14px; }
+  .scan-page .upload-panel > summary { padding: 12px 16px; }
+  .scan-page .dropzone { padding: 22px 12px; }
+  .scan-page .dropzone strong { font-size: 17px; }
+  .scan-page .photo-tips { flex-basis: 100%; margin-left: 0; text-align: center; }
+  .scan-page .toolbar { display: flex; flex-direction: row; align-items: center; gap: 10px; margin: 16px 0 12px; }
+  .scan-page .toolbar-left { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
+  .scan-page .search-label { min-width: 0; flex-basis: 100%; max-width: none; }
+  .scan-page .toolbar-right { align-self: flex-end; flex-wrap: wrap; }
+  .scan-page .toolbar :is(.filter-menu-body, .more-tools-body) { max-width: calc(100vw - 36px); }
+  .scan-page .filter-menu-body { right: auto !important; left: 0; }
+  .scan-page .cards-heading { padding: 14px; gap: 8px; }
+  .scan-page .cards-heading .stats { display: none; }
+  .scan-page #cards-table.compact-prices tr[data-id] { grid-template-columns: 20px 72px minmax(0, 1fr); padding: 16px 12px; gap: 6px 10px; }
+  .scan-page #cards-table.compact-prices td { padding: 0; }
+  .scan-page #cards-table.compact-prices td.thumb img { width: 72px; height: 101px; }
+  .scan-page #cards-table.compact-prices td:nth-child(8)::before { content: none; }
+  .scan-page #cards-table.compact-prices td:nth-child(10) { padding-top: 8px; }
+  .scan-page td.actions > button { margin-bottom: 0; }
+  .scan-page td.actions button, .scan-page .row-menu > summary { min-height: 44px; padding: 8px 12px; }
+  .scan-page .match-details { max-width: none; }
+  .scan-page .scan-selection { top: 4px; gap: 6px; padding: 8px; }
+  .scan-page .scan-selection button { padding: 7px 10px; }
+  .scan-page .modal { align-items: center; }
+  .scan-page .modal-card { max-height: calc(100dvh - 24px); }
+  .scan-page .modal-card header { position: sticky; top: 0; background: var(--surface-1); z-index: 2; }
+  .scan-page .modal-body { gap: 16px; }
+  .scan-page .modal-body > img { max-height: 160px; width: auto; }
+  .scan-page #edit-form { flex: 1 0 auto; }
+  .scan-page #edit-form .actions { position: sticky; bottom: -12px; background: var(--surface-1); padding: 12px 0; }
+}
+
+@media (max-width: 700px) {
+  .scan-page .toolbar-left { flex: 1 1 100%; }
+  .scan-page .toolbar-right { margin-left: auto; }
+}

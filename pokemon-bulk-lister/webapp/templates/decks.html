@@ -3,33 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Decks · Card Portfolio</title>
+  <title>Decks · Pokémon bulk lister</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design.css') }}">
 </head>
-<body>
-  <header class="topbar">
-    <div class="topbar-left">
-      <span class="brand">Pokémon bulk lister</span>
-      <nav aria-label="Main navigation">
-        <a href="/">Scan</a>
-        <a href="/portfolio">Library</a>
-        <a href="/decks" class="active" aria-current="page">Decks</a>
-        <a href="/market">Marketplace</a>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      <button id="btn-import" class="btn btn-primary">Import a decklist</button>
-      <a href="/logout" class="btn btn-ghost">Log out</a>
-    </div>
-  </header>
+<body class="decks-page">
+  {% include '_navigation.html' %}
 
-  <main class="wrap wide">
-    <div class="page-intro"><h1>Find your next deck</h1><p class="muted">See which decks your collection can build and which cards are missing.</p></div>
+  <main class="wrap wide" id="main-content">
+    <div class="page-intro">
+      <div><h1>Find your next deck</h1><p class="muted">Build with the cards you own.</p></div>
+      <div class="page-actions"><button id="btn-import" class="btn btn-primary">Import decklist</button></div>
+    </div>
     <div class="deck-layout">
-      <!-- Deck lists -->
-      <section class="panel">
+      <section class="panel deck-list-panel" aria-labelledby="deck-list-title">
         <div class="panel-head">
-          <h2>Decks you can build</h2>
+          <h2 id="deck-list-title">Explore decks</h2>
           <select id="deck-sort" aria-label="Sort decks">
             <option value="closest">Closest to complete</option>
             <option value="popular">Most played</option>
@@ -41,30 +30,31 @@
         <ul id="saved-list" class="deck-list"><li class="muted">Loading…</li></ul>
 
         <div class="list-head">
-          <h3>Popular right now</h3>
-          <button id="btn-refresh-popular" class="btn btn-ghost" title="Pull the latest tournament lists from Limitless">Refresh</button>
+          <h3>Popular</h3>
+          <button id="btn-refresh-popular" class="btn btn-ghost" title="Get the latest tournament lists from Limitless">Refresh</button>
         </div>
         <ul id="popular-list" class="deck-list"></ul>
-        <p id="popular-source" class="source-note"></p>
+        <details class="source-details">
+          <summary>About these decks</summary>
+          <p id="popular-source" class="source-note"></p>
+        </details>
       </section>
 
-      <!-- Selected deck -->
-      <section class="panel" id="deck-detail">
-        <p class="muted">Pick a deck to see which cards you have and which you need.</p>
+      <section class="panel" id="deck-detail" aria-label="Selected deck">
+        <div class="deck-empty"><span class="empty-card-mark" aria-hidden="true">▱</span><h2>Start with a deck</h2><p class="muted">Choose a list to see what you have and what’s missing.</p></div>
       </section>
     </div>
   </main>
 
-  <dialog id="import-dialog" class="wide">
+  <dialog id="import-dialog" class="wide" aria-labelledby="deck-import-title">
     <form method="dialog" id="import-form">
-      <h2>Import a decklist</h2>
-      <p class="muted">Paste a list exported from Pokémon TCG Live, Limitless or any site that uses the same
-        format: one card per line, count first, then name, set code and number.</p>
+      <h2 id="deck-import-title">Import decklist</h2>
+      <p class="muted">Paste a list from Pokémon TCG Live or Limitless.</p>
       <label>Deck name
         <input name="name" placeholder="Dragapult ex" maxlength="200">
       </label>
       <label>Decklist
-        <textarea name="text" required placeholder="Pokémon: 12
+        <textarea name="text" required aria-describedby="deck-format-hint" placeholder="Pokémon: 12
 4 Dragapult ex TWM 130
 ...
 Trainer: 36
@@ -73,9 +63,10 @@ Trainer: 36
 Energy: 12
 6 Fire Energy MEE 10"></textarea>
       </label>
+      <p id="deck-format-hint" class="muted small">One card per line: 4 Dragapult ex TWM 130</p>
       <div class="dialog-row">
         <button type="button" class="btn" data-close-dialog>Cancel</button>
-        <button type="submit" class="btn btn-primary">Import</button>
+        <button type="submit" class="btn btn-primary">Import deck</button>
       </div>
     </form>
   </dialog>

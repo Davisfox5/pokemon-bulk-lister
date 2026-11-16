@@ -61,28 +61,31 @@ const SOURCE_NAMES = {
   tcgplayer: "TCGplayer market", cardmarket: "Cardmarket trend (USD)", ebay_30d: "eBay sold median, 30 days",
 };
 
-/* Where a price came from and how far to trust it. Every price on these
-   pages gets one of these under it: one compact line, full names on hover. */
+/* Keep the basis visible; comparisons and numeric confidence are available
+   by keyboard or touch instead of depending on a hover tooltip. */
 function provenanceHtml(p) {
-  if (!p || !p.priced_at) return '<span class="prov">no price yet</span>';
+  if (!p) return '<span class="prov price-source-line">No price yet</span>';
   const keys = Object.keys(SOURCE_LABELS).filter((k) => p.sources && p.sources[k] != null);
-  const short = keys.map((k) => `${SOURCE_LABELS[k]} ${fmtUsd(p.sources[k])}`);
-  const long = keys.map((k) => `${SOURCE_NAMES[k]}: ${fmtUsd(p.sources[k])}`);
   const conf = `${Math.round((p.confidence ?? 0) * 100)}%`;
-  const title = [
-    ...(long.length ? long : ["No source prices on file"]),
-    `Price confidence ${conf}`,
-    `Priced ${new Date(p.priced_at).toLocaleString()}`,
-    p.notes || "",
-  ].filter(Boolean).join("\n");
-  // A price the owner's own spreadsheet gave, until a live one is found.
   const own = /^From your spreadsheet/.test(p.notes || "");
-  const line = [short.length ? short.join(" · ") : own ? "from your spreadsheet" : "no source prices",
-    `${conf} confidence`, ago(p.priced_at)].join(" · ");
-  const why = p.flagged
-    ? `<span class="flag-note">${esc(p.notes || (p.outlier ? "Price sources disagree. Check this printing." : "Check this price before listing."))}</span>`
-    : "";
-  return `<span class="prov" title="${esc(title)}">${line}</span>${why}`;
+  const basis = keys.length ? keys.map(k => SOURCE_LABELS[k]).join(" + ")
+    : own ? "Your spreadsheet" : p.priced_at ? "No source prices" : "No price yet";
+  const line = [basis, ago(p.priced_at)].filter(Boolean).join(" · ");
+  // Preserve the actual reason: a generic "Check" would hide a Japanese
+  // proxy, a missing number or a different finish behind the same badge.
+  const note = p.notes || (p.outlier ? "Price sources disagree. Check this printing." : "Check this price before listing.");
+  const warning = own ? "Spreadsheet estimate — check price." : note;
+  const why = p.flagged ? `<span class="flag-note">${esc(warning)}</span>` : "";
+  if (!p.priced_at && !p.notes && !keys.length) return `<span class="prov price-source-line">${esc(line)}</span>${why}`;
+  return `<span class="prov price-source-line">${esc(line)}</span>${why}
+    <details class="price-details">
+      <summary>Price details</summary>
+      <div class="price-detail-body">
+        ${keys.map(k => `<div><span>${SOURCE_NAMES[k]}</span><strong>${fmtUsd(p.sources[k])}</strong></div>`).join("")}
+        <p>${conf} confidence${p.priced_at ? ` · ${esc(new Date(p.priced_at).toLocaleString())}` : ""}</p>
+        ${p.notes ? `<p>${esc(p.notes)}</p>` : ""}
+      </div>
+    </details>`;
 }
 
 function thumbHtml(row, cls = "inv-thumb") {

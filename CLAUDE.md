@@ -64,33 +64,35 @@ Stack: Flask with Jinja templates in `webapp/templates/`, vanilla CSS and JS in
 `webapp/static/`. No framework, no build step, no UI library. Keep it that way.
 This is a working tool for one operator, not a product surface.
 
-### Tokens (from webapp/static/style.css `:root`)
-- Background `#fafafa`, panels white, foreground `#1a1a1a`, muted `#6b7280`
-- Border `#e2e2e2`, radius 8px on panels
-- Accent `#2563eb`, hover `#1e40af`, button surface `#f3f4f6`
-- Flagged row `--row-flag #fff5f5` with `--row-flag-text #b00020`. This pair means
-  "needs a human look" and is the only red in the system. Do not reuse it for
-  decoration.
-- System font stack, 14px base, `h1` 20px, `h2` 16px
-- Numbers use `font-variant-numeric: tabular-nums` so columns line up
-
-### Layout
-- `header` with title left, stats right, one border-bottom rule
-- `.panel` is the primary container. `.muted` and `.small` for secondary text.
-- `.dropzone` for file input. `.hidden` toggles visibility.
-- Screens: `index.html` (scan: intake, pricing, publish), `portfolio.html` (library:
-  have / sold / purchased), `decks.html` (deck building), `market.html` (marketplace),
-  plus `login.html` and `register.html`. All four share one nav: Scan, Library, Decks,
-  Marketplace.
-- `index.html` uses `style.css`. The other screens use `portfolio.css` and the helpers
-  in `static/common.js` (`provenanceHtml` for price provenance, `askConfirm` for
-  confirmations, `toast` for status). Use those rather than `alert()` or `prompt()`.
+### Theme and layout
+- Shared colors, typography, controls, and responsive navigation live in
+  `webapp/static/design.css`, loaded after each page's structural stylesheet.
+  Use its tokens rather than adding hardcoded colors. It includes a matching
+  dark palette and reduced-motion support.
+- Light palette: ivory `#f5f3ed`, paper `#fffefa`, forest ink `#203b32`,
+  emerald accent `#21644b`, and restrained gold `#dfbd6c` in the brand mark.
+  Red/clay surfaces are reserved for actionable review warnings.
+- System fonts, 14px body, responsive 28–36px page titles. Prices and counts use
+  tabular numerals; card photos carry the visual weight.
+- `_navigation.html` is shared by Scan, Library, Decks, and Marketplace. It has
+  visible labels, current-page state, and a skip link to `#main-content`.
+- `index.html` uses `style.css`; collection screens use `portfolio.css` plus
+  `static/common.js`. All pages, including authentication, load `design.css`.
+- Scan collapses its upload area once cards exist. Selection actions appear
+  only while cards are selected. Preserve both empty and populated layouts.
+- Library keeps cards ahead of secondary dashboards. Price details and less
+  frequent tools use native disclosures; keep their summary controls accessible.
+- On narrow screens, Decks switches between the list and the selected deck,
+  with Back, deep links, and browser history. Desktop retains the split view.
+- Source and actionable uncertainty remain visible beside each price; numeric
+  confidence and full comparisons live in keyboard/touch-accessible details.
+  Use `provenanceHtml`, `askConfirm`, and `toast` on collection screens.
 
 ### Rules
 - Density over polish. This screen gets used for hundreds of rows at a time, so
   favor compact tables, sticky headers, and keyboard flow over whitespace.
 - Every price or valuation shows where it came from and how confident it is.
-  A number with no provenance is a bug.
+  A number with no provenance is a bug. Do not replace specific warnings with a generic success badge.
 - Outlier and low-confidence rows are visually distinct at a glance, using the
   flag tokens above, and are sortable to the top.
 - Anything that spends money or publishes a listing confirms first and says what
