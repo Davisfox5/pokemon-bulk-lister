@@ -296,6 +296,11 @@ def api_list_cards():
     for row in rows:
         row["sold"] = Path(row["crop_path"]).stem in sold or row.get("ebay_listing_status") == "sold"
     runtime.add_photo_urls(rows)
+    from webapp.auth import current_user_id
+    from webapp.catalog import in_library_crops
+    added = in_library_crops(current_user_id(), [row["crop_path"] for row in rows])
+    for row in rows:
+        row["in_library"] = row["crop_path"] in added
     return jsonify({"cards": rows, "stats": stats})
 
 

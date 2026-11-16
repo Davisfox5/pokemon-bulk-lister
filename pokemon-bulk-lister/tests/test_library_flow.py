@@ -243,6 +243,30 @@ def test_promote_from_bench_logs_added_and_does_not_reimport_sold_cards(app):
     assert (again["promoted"], again["skipped_duplicates"]) == (0, 1)
 
 
+def test_priced_scans_are_added_by_themselves_once_the_card_is_confirmed(app):
+    with bench_db.connect(app.bench_path) as conn:
+        gid = bench_db.get_or_create_grid(conn, "auto", "input/grids/auto.jpg")
+        ids = [bench_db.insert_card_stub(conn, gid, f"output/crops/auto_r0c{i}.jpg", 0, i) for i in range(3)]
+        bench_db.update_card(conn, ids[0], {"name": "Pikachu", "set_code": "sv1", "card_number": "63", "id_confidence": 0.97})
+        bench_db.update_card(conn, ids[0], {"final_price": 1.25, "pricing_confidence": 0.8})
+        bench_db.update_card(conn, ids[1], {"name": "Eevee", "set_code": "sv1", "card_number": "70", "id_confidence": 0.3})
+        bench_db.update_card(conn, ids[1], {"final_price": 0.5, "pricing_confidence": 0.8})        # name not confirmed
+        bench_db.update_card(conn, ids[2], {"name": "Snorlax", "set_code": "sv1", "card_number": "80", "id_confidence": 0.97})  # no price
+    c = _user(app, "auto@example.com")
+    res = c.post("/api/inventory/promote", json={"card_ids": ids, "auto": True}).get_json()
+    assert (res["promoted"], res["held_for_a_look"]) == (1, 2)
+    assert [i["name"] for i in c.get("/api/inventory").get_json()["items"]] == ["Pikachu"]
+    crops = [f"output/crops/auto_r0c{i}.jpg" for i in range(3)]
+    s = models.get_session()
+    uid = s.query(models.User).filter_by(email="auto@example.com").one().id
+    s.close()
+    assert catalog.in_library_crops(uid, crops) == {crops[0]}          # what the Scan page marks "in library"
+    assert catalog.in_library_crops(None, crops) == set()
+    # Asked again, nothing is added twice. A person can still add the doubtful one.
+    assert c.post("/api/inventory/promote", json={"card_ids": ids, "auto": True}).get_json()["promoted"] == 0
+    assert c.post("/api/inventory/promote", json={"card_ids": [ids[1]]}).get_json()["promoted"] == 1
+
+
 def _sell(seller, buyer, item_id, price=5):
     lid = seller.post(f"/api/inventory/{item_id}/list-for-sale", json={"price": price}).get_json()["listing_id"]
     oid = buyer.post(f"/api/market/listings/{lid}/buy").get_json()["order_id"]

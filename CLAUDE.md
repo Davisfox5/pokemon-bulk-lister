@@ -1,5 +1,20 @@
 # CLAUDE.md
 
+## User instruction: keep the approved design
+
+The user approved the ivory/forest redesign on 16 November 2026 and explicitly
+asked Claude not to revert it. Preserve `design.css`, shared navigation, compact
+workflows, responsive layouts, and accessibility described below unless the user
+asks for a new visual direction. Keep functional improvements, including stable
+Scan photos and automatic library saving. A deployment of this branch before it
+contained the redesign caused a regression; do not repeat that stale release.
+
+Follow [AGENTS.md](AGENTS.md) for releases: integrate and push to
+`claude/dreamy-archimedes-7c38oi`, run
+`python pokemon-bulk-lister/scripts/prepare_release.py`, then deploy from the
+printed staging root. The preflight requires the latest shared commit and the
+approved design together. Do not deploy directly from an old or dirty checkout.
+
 Repo: **pokemon-bulk-lister** — Python 3.11 Flask 3 web app (`pokemon-bulk-lister/webapp/`) plus a 7-step CLI pipeline (`pokemon-bulk-lister/scripts/`) that turns binder-page photos into priced bulk card listings for TCGPlayer, Whatnot, and eBay. Business logic in `pokemon-bulk-lister/lib/`; SQLite state in `webapp/db.py`; tests in `pokemon-bulk-lister/tests/`.
 
 Two data layers share one SQLite file. The scan bench (`webapp/db.py`, raw sqlite3, `cards` table) is one unauthenticated bench on localhost; under a public host each signed-in account has its own (`owner_id`, set per request by `db.set_owner`, so use the `db` helpers instead of raw SQL on `cards`/`grids`, and wrap anything run on another thread in `_as_owner`). The multi-user layer (`webapp/models.py`, SQLAlchemy) holds users, the shared price catalog, inventory, the `library_events` ledger (every add, purchase and sale), decks and the marketplace. `models.py` has no column migrations (`create_all` only adds tables), so add tables there, not columns. An index on an existing table goes in `models._ensure_indexes`, which runs on every launch.
@@ -14,7 +29,7 @@ Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also 
 
 It also runs on Vercel (`app.py`, `vercel.json`), where there is no lasting disk and no process between requests. `webapp/runtime.py` is the switch (`SERVERLESS`): both data layers use Postgres (`webapp/db.py` has a psycopg backend behind the same functions), photos go to Vercel Blob (`runtime.save_file` / `ensure_local`), eBay tokens and job progress are rows in `app_state`, and bench jobs run in slices driven by the status endpoints (`_pump` in `webapp/app.py`) instead of threads. New bench code must not assume a file it wrote is still on disk in a later request (call `runtime.ensure_local`), must not keep job state only in memory, and must not start a thread it expects to outlive the request. `TEST_DATABASE_URL=postgresql://... pytest -q` runs the suite on Postgres; `tests/test_serverless.py` runs the bench the way Vercel does.
 
-Keeping the hosted bill down: builds are most of this project's Vercel usage, so the project skips preview builds (its Ignored Build Step is `[ "$VERCEL_ENV" != "production" ]`) and a release is one build, `vercel deploy --prod` from the repository root (not a preview promoted afterwards, which builds twice). Lists that carry a `crop_path` also carry `photo_url` (`runtime.add_photo_urls`, one lookup per list) so the page loads photos straight from storage; `/crops/<file>` still works but costs a function call and a database read per photo. Pages do not poll (see below): every request wakes the database, which is billed by the time it is awake.
+Keeping the hosted bill down: builds are most of this project's Vercel usage, so the project skips preview builds (its Ignored Build Step is `[ "$VERCEL_ENV" != "production" ]`) and a release is one build, `vercel deploy --prod` from the clean staging repository root produced by `scripts/prepare_release.py` (not a preview promoted afterwards, which builds twice). Lists that carry a `crop_path` also carry `photo_url` (`runtime.add_photo_urls`, one lookup per list) so the page loads photos straight from storage; `/crops/<file>` still works but costs a function call and a database read per photo. Pages do not poll (see below): every request wakes the database, which is billed by the time it is awake.
 
 Finish and private estimates: the bench has nullable `printing` (legacy null
 means normal/holo according to `is_holo`). `lib/printing.py` normalizes normal,
@@ -136,6 +151,11 @@ runtime routing audit. This section covers what the tool calls when it runs.
   wakes the database), so do not add a polling interval. A named card with no price and no pricing note is priced in the
   background by the page (`priceWaitingCards`); changing which card it is clears
   both (`db.update_card`), which is how an edit gets priced again.
+- A scanned card goes into the signed-in account's library by itself once it
+  has a price and a confirmed name (`addPricedToLibrary` in `app.js` posts
+  `/api/inventory/promote` with `auto: true`; `catalog.AUTO_ADD_ABOVE` is the
+  identification confidence it must be above). A card still marked "Check ID"
+  is held for a person. `/api/cards` marks rows already added (`in_library`).
 - A price is for the card's finish (`lib/printing.py`). Old sets list theirs as
   `unlimited`; a card printed in one ordinary finish takes that one; a reverse
   holo or 1st Edition price never stands in for another card

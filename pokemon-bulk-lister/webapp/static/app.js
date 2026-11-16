@@ -15,6 +15,8 @@ const state = {
   jobRunning: false,
   pricing: new Set(),      // card ids being priced right now
   priceTried: new Set(),   // ids this page already tried, so a failure is not retried in a loop
+  libraryTried: new Set(), // ids this page already sent to the library
+  libraryOff: false,       // not signed in, or the server refused: stop trying
 };
 
 // ---------------------------------------------------------------- network
@@ -126,6 +128,7 @@ function renderRow(card) {
         <strong>${escapeHtml(card.name) || "<span class='muted'>No name yet</span>"}</strong>
         ${card.printing === "reverseHolofoil" ? "<span class='muted'> · reverse holo</span>" : card.is_holo ? "<span class='muted'> · holo</span>" : card.printing === "unknown" ? "<span class='flag-text'> · finish not checked</span>" : ""}
         ${card.sold ? "<span class='sold-tag' title='Sold. It is left out of publishing and exports.'>sold</span>" : ""}
+        ${card.in_library ? "<span class='muted small' title='This card is in your library.'> · in library</span>" : ""}
         <div class="muted small">${escapeHtml(card.condition_guess || "")}</div>
       </td>
       <td class="muted small">${escapeHtml(setBits)}</td>
@@ -152,6 +155,11 @@ function visibleCards() {
   return state.cards.filter(c => !q || [c.name, c.set_name, c.set_code, c.card_number].some(v => String(v || '').toLocaleLowerCase().includes(q)));
 }
 
+// Rows are kept on the page and only the ones that changed are redrawn.
+// Rebuilding the whole table makes the browser load every photo again, which
+// shows as the photos flashing each time a name or price arrives.
+const drawnRows = new Map();   // card id -> the row's HTML as last drawn
+
 function renderCards() {
   const body = $("#cards-body");
   const openDetails = Array.from(body.querySelectorAll('tr[data-id] details[open]'))
@@ -165,11 +173,46 @@ function renderCards() {
   if (!cards.length) {
     const filtered = state.search || state.needsReview || state.unidentified;
     body.innerHTML = `<tr><td colspan="10" class="muted empty-state"><strong>${filtered ? 'No cards match these filters' : 'Your cards will appear here'}</strong>${filtered ? '<button type="button" data-act="clear-filters">Clear filters</button>' : 'Add a photo to get started.'}</td></tr>`;
+    drawnRows.clear();
     syncSelectAllCheckbox();
     updateBundleButton();
     return;
   }
-  body.innerHTML = cards.map(renderRow).join("");
+  body.querySelectorAll("tr:not([data-id])").forEach(tr => tr.remove());     // the "no cards" row
+  const onPage = new Map(Array.from(body.querySelectorAll("tr[data-id]"), tr => [Number(tr.dataset.id), tr]));
+  const kept = new Set();
+  let before = null;
+  for (const card of cards) {
+    const html = renderRow(card).trim();
+    let tr = onPage.get(card.id);
+    if (!tr || drawnRows.get(card.id) !== html) {
+      const holder = document.createElement("tbody");
+      holder.innerHTML = html;
+      const fresh = holder.firstElementChild;
+      if (tr) {
+        // The same photo: keep the element already showing it.
+        const shown = tr.querySelector("td.thumb img");
+        const wanted = fresh.querySelector("td.thumb img");
+        if (shown && wanted && shown.getAttribute("src") === wanted.getAttribute("src")) {
+          shown.alt = wanted.alt;
+          wanted.replaceWith(shown);
+        }
+        tr.replaceWith(fresh);
+      }
+      tr = fresh;
+      drawnRows.set(card.id, html);
+    }
+    // Native clicks change the live checkbox property without changing its
+    // cached HTML. Clearing selection must also update rows we retain.
+    tr.querySelector('input[data-act="select"]').checked = state.selected.has(card.id);
+    const place = before ? before.nextElementSibling : body.firstElementChild;
+    if (tr !== place) body.insertBefore(tr, place);
+    before = tr;
+    kept.add(card.id);
+  }
+  for (const [id, tr] of onPage) {
+    if (!kept.has(id)) { tr.remove(); drawnRows.delete(id); }
+  }
   for (const [id, kind] of openDetails) {
     const detail = body.querySelector(`tr[data-id="${id}"] details[data-detail="${kind}"]`);
     if (detail) detail.open = true;
@@ -195,7 +238,7 @@ function updateBundleButton() {
   $("#bundle-btn").disabled = n < 2;
   $("#delete-btn").disabled = n < 1;
   const pool = n ? selectedCards() : state.cards;
-  const ready = pool.filter(c => c.name && c.final_price != null).length;
+  const ready = pool.filter(c => c.name && c.final_price != null && !c.in_library && !c.sold).length;
   const library = $("#library-btn");
   library.textContent = ready ? `Add ${ready} to library` : "Add to library";
   library.classList.toggle("hidden", !ready);
@@ -246,6 +289,43 @@ async function loadCards() {
     renderCards();
   }
   priceWaitingCards();
+  addPricedToLibrary();
+}
+
+// A scanned card goes into the library by itself once it has a name the
+// catalog confirmed and a price. One that still says "Check ID" waits for a
+// person: Choose settles it, or "Add to library" adds it as it is.
+let libraryBusy = false;
+async function addPricedToLibrary() {
+  if (libraryBusy || state.libraryOff) return;
+  const ready = state.cards.filter(c => c.name && c.final_price != null && c.id_confidence > 0.6
+    && !c.in_library && !c.sold && !state.libraryTried.has(c.id));
+  if (!ready.length) return;
+  libraryBusy = true;
+  try {
+    let added = 0;
+    for (let i = 0; i < ready.length; i += 50) {      // a few at a time keeps each request short
+      const part = ready.slice(i, i + 50);
+      part.forEach(c => state.libraryTried.add(c.id));
+      const res = await api("/api/inventory/promote", {
+        method: "POST", body: JSON.stringify({ card_ids: part.map(c => c.id), auto: true }) });
+      added += res.promoted || 0;
+      // Eligibility can change while the request is in flight. Use the server's
+      // membership flags, including cards it held for a person to check.
+      await loadCards();
+    }
+    if (added) {
+      $("#upload-status").innerHTML = `Added ${plural(added, "priced card")} to your library. `
+        + `<a href="/portfolio">Open library</a>`;
+    }
+  } catch (err) {
+    if (err.status === 401 || err.status === 403) state.libraryOff = true;   // not signed in here
+  } finally {
+    libraryBusy = false;
+    // Pricing can finish for another card while a batch is being added. Drain
+    // that work now; libraryTried prevents retries from turning into polling.
+    addPricedToLibrary();
+  }
 }
 
 function redrawCards() {
@@ -546,7 +626,7 @@ async function addToLibrary() {
     return;
   }
   const picked = selectedCards();
-  const pool = picked.length ? picked : state.cards;
+  const pool = (picked.length ? picked : state.cards).filter(c => !c.in_library && !c.sold);
   const ready = pool.filter(c => c.name && c.final_price != null);
   const flagged = ready.filter(c => c.needs_review).length;
   const left = pool.length - ready.length;
@@ -570,6 +650,7 @@ async function addToLibrary() {
   // with a filter on, the table shows only part of the bench.
   const body = { card_ids: ready.map(c => c.id) };
   const res = await api("/api/inventory/promote", { method: "POST", body: JSON.stringify(body) });
+  await loadCards();
   $("#upload-status").innerHTML =
     `Added ${plural(res.promoted, "card")} to your library` +
     (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already there)` : "") +
@@ -687,6 +768,7 @@ async function saveEdit({ priceAfter = false } = {}) {
   };
   try {
     await api(`/api/cards/${state.editing}`, { method: "PATCH", body: JSON.stringify(patch) });
+    state.libraryTried.delete(state.editing);
     if (priceAfter) {
       activeBtn.textContent = "Pricing…";
       const updated = await api(`/api/cards/${state.editing}/price`, { method: "POST" });
@@ -726,6 +808,7 @@ async function aiIdentify() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ force_ai: forceAi }),
     });
+    state.libraryTried.delete(state.editing);
     const form = $("#edit-form");
     form.name.value = updated.name || "";
     form.set_name.value = updated.set_name || "";
@@ -846,6 +929,7 @@ function setupChoose() {
     $("#choose-status").textContent = "Reading the photo again…";
     try {
       const updated = await api(`/api/cards/${id}/identify`, { method: "POST", body: JSON.stringify({ force_ai: true }) });
+      state.libraryTried.delete(id);
       const i = state.cards.findIndex(c => c.id === id);
       if (i >= 0) state.cards[i] = { ...state.cards[i], ...updated };
       redrawCards();
@@ -875,6 +959,7 @@ function setupChoose() {
                       card_number: card.card_number || "", id_confidence: 0.97, needs_review: false };
       if (card.rarity) patch.rarity = card.rarity;
       await api(`/api/cards/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+      state.libraryTried.delete(id);
       if (choosing?.request === request) closeChoose();
       state.priceTried.delete(id);
       await loadCards();                          // the new card is priced by itself

@@ -39,15 +39,23 @@ BENCH_DB_PATH = str(DATA_ROOT / os.getenv("OUTPUT_DIR", "output") / "db.sqlite")
 # Prices under this confidence get the "needs a human look" treatment.
 LOW_CONFIDENCE = float(os.getenv("LOW_CONFIDENCE", "0.5"))
 
+# A scanned card is added to the library by itself only above this
+# identification confidence (the catalog confirmed it, or a person did).
+AUTO_ADD_ABOVE = 0.6
+
 catalog_bp = Blueprint("catalog", __name__)
 
 
 @catalog_bp.route("/api/inventory/promote", methods=["POST"])
 @login_required
 def promote():
-    """Body: {"card_ids": [..]} or {"all_priced": true}."""
+    """Body: {"card_ids": [..]} or {"all_priced": true}. With "auto": true
+    (the Scan page adding cards by itself as they are priced) a card whose
+    name the catalog has not confirmed is held back: a person adds it, or
+    settles which card it is first."""
     body = request.get_json(silent=True) or {}
     uid = current_user_id()
+    auto = body.get("auto") is True
 
     with bench_db.connect(BENCH_DB_PATH) as conn:
         if body.get("all_priced"):
@@ -65,11 +73,14 @@ def promote():
         return jsonify({"error": "no matching bench cards"}), 400
 
     s = get_session()
-    promoted, skipped_unidentified, skipped_dup = 0, 0, 0
+    promoted, skipped_unidentified, skipped_dup, held = 0, 0, 0, 0
     try:
         for card in bench_cards:
             if not card.get("name"):
                 skipped_unidentified += 1
+                continue
+            if auto and (card.get("final_price") is None or float(card.get("id_confidence") or 0) <= AUTO_ADD_ABOVE):
+                held += 1
                 continue
             cc = get_or_create_catalog_card(s, card)
             # Seed catalog pricing from the bench only if the catalog has no
@@ -115,7 +126,26 @@ def promote():
         "promoted": promoted,
         "skipped_unidentified": skipped_unidentified,
         "skipped_duplicates": skipped_dup,
+        "held_for_a_look": held,
     })
+
+
+def in_library_crops(uid: int, crops: list) -> set:
+    """Which of these scan photos this account has already added to its
+    library (now or ever: a card since sold still counts)."""
+    crops = [c for c in crops if c]
+    if not uid or not crops:
+        return set()
+    s = get_session()
+    try:
+        held = s.query(InventoryItem.source_crop_path).filter(
+            InventoryItem.user_id == uid, InventoryItem.source_crop_path.in_(crops)).all()
+        logged = s.query(LibraryEvent.crop_path).filter(
+            LibraryEvent.user_id == uid, LibraryEvent.kind == "added", LibraryEvent.channel == "scan",
+            LibraryEvent.crop_path.in_(crops)).all()
+    finally:
+        s.close()
+    return {row[0] for row in held} | {row[0] for row in logged}
 
 
 def price_provenance(cc: CatalogCard) -> dict:

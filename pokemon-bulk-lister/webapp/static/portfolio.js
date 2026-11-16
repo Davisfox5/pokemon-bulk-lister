@@ -844,13 +844,9 @@ async function loadScannedChoice() {
   btn.classList.add("hidden");
   try {
     const data = await api("/api/cards");
-    // The ledger also remembers scans that have since been sold or removed.
-    if (!lib.events.activity) await loadLedger();
-    const imported = new Set([
-      ...lib.items.map(it => it.crop_path),
-      ...lib.events.activity.filter(e => e.kind === "added" && e.channel === "scan").map(e => e.crop_path),
-    ].filter(Boolean));
-    scannedCardIds = data.cards.filter(c => c.name && c.final_price != null && !imported.has(c.crop_path)).map(c => c.id);
+    // The server checks the complete owner-scoped history, including scans
+    // sold or removed since import; the activity panel only loads recent events.
+    scannedCardIds = data.cards.filter(c => c.name && c.final_price != null && !c.in_library && !c.sold).map(c => c.id);
     btn.textContent = `Add ${scannedCardIds.length} scanned card${scannedCardIds.length === 1 ? "" : "s"}`;
     btn.classList.toggle("hidden", scannedCardIds.length === 0);
     btn.disabled = scannedCardIds.length === 0;
