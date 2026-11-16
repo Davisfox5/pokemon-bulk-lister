@@ -7,9 +7,10 @@ async function load() {
   const data = await api("/api/market/listings");
   mk.listings = data.listings;
   mk.payments = data.payments;
+  $("#market-payment").textContent = data.payments === "stripe" ? "Pay by card" : "Pay the seller directly";
   $("#market-meta").textContent =
-    `seller pays a ${data.fee_pct}% platform fee · payments: ${
-      data.payments === "stripe" ? "card (Stripe)" : "settled directly with the seller"}`;
+    `Sellers pay a ${data.fee_pct}% platform fee. ${
+      data.payments === "stripe" ? "Card payments are handled by Stripe." : "Arrange payment directly with the seller. Cards enter your library after the seller confirms payment."}`;
 
   const setSel = $("#mk-set");
   const current = setSel.value;
@@ -45,13 +46,17 @@ function visible() {
 function render() {
   const grid = $("#market-grid");
   const rows = visible();
-  $("#mk-count").textContent = mk.listings.length ? `${rows.length} of ${mk.listings.length} listings` : "";
+  const filterCount = [$("#mk-set").value, $("#mk-cond").value, $("#mk-below").checked, $("#mk-hide-mine").checked].filter(Boolean).length;
+  $("#mk-filter-count").textContent = filterCount ? String(filterCount) : "";
+  $("#mk-count").textContent = mk.listings.length
+    ? rows.length === mk.listings.length ? `${rows.length} listing${rows.length === 1 ? "" : "s"}` : `${rows.length} of ${mk.listings.length} listings`
+    : "";
   if (!mk.listings.length) {
-    grid.innerHTML = '<p class="muted">Nothing is for sale right now. List a card from your <a href="/portfolio">library</a>.</p>';
+    grid.innerHTML = '<div class="market-empty"><span class="empty-card-mark" aria-hidden="true">▱</span><h2>No cards listed yet</h2><a class="btn" href="/portfolio">Choose from your library</a></div>';
     return;
   }
   if (!rows.length) {
-    grid.innerHTML = '<p class="muted">No listings match these filters.</p>';
+    grid.innerHTML = '<div class="market-empty"><h2>No matching cards</h2><p class="muted">Try a different search or clear your filters.</p><button type="button" class="btn" data-clear-market>Clear search &amp; filters</button></div>';
     return;
   }
   grid.innerHTML = rows.map((l) => {
@@ -61,12 +66,12 @@ function render() {
       ? '<span class="muted">your listing</span>'
       : l.pending
         ? '<span class="pill">sale pending</span>'
-        : `<button class="btn btn-primary mc-buy" data-id="${l.listing_id}">Buy</button>`;
+        : `<button class="btn btn-primary mc-buy" data-id="${l.listing_id}">Buy card</button>`;
     return `<article class="market-card ${l.provenance.flagged ? "flag" : ""}">
       ${thumbHtml(l, "mc-img")}
       <div class="mc-body">
         ${cardLine(l)}
-        <div class="inv-set">${esc(l.condition)}${l.rarity ? " · " + esc(l.rarity) : ""}</div>
+        <div class="inv-set">${esc(conditionName(l.condition))}${l.rarity ? " · " + esc(l.rarity) : ""}</div>
         <div class="mc-price"><strong>${fmtUsd(l.price)}</strong>${vs}</div>
         <div>${l.market_price != null ? `<span class="prov">market ${fmtUsd(l.market_price)}</span>` : ""}${provenanceHtml(l.provenance)}</div>
         <div class="mc-foot"><span class="inv-set">seller ${esc(l.seller)} · ${ago(l.listed_at)}</span>${action}</div>
@@ -76,6 +81,7 @@ function render() {
 }
 
 $("#market-grid").addEventListener("click", async (e) => {
+  if (e.target.closest("[data-clear-market]")) { clearFilters(true); return; }
   const btn = e.target.closest(".mc-buy");
   if (!btn) return;
   const listing = mk.listings.find((l) => l.listing_id === Number(btn.dataset.id));
@@ -89,6 +95,22 @@ $("#market-grid").addEventListener("click", async (e) => {
     btn.disabled = false;
   }
 });
+
+function conditionName(value) {
+  return ({ NM: "Near mint", LP: "Lightly played", MP: "Moderately played", HP: "Heavily played", DMG: "Damaged" })[value] || value;
+}
+
+function clearFilters(clearSearch = false) {
+  $("#mk-set").value = "";
+  $("#mk-cond").value = "";
+  $("#mk-below").checked = false;
+  $("#mk-hide-mine").checked = false;
+  if (clearSearch) $("#mk-search").value = "";
+  render();
+  if (clearSearch) $("#mk-search").focus();
+}
+
+$("#mk-clear").addEventListener("click", () => clearFilters());
 
 ["#mk-search", "#mk-set", "#mk-cond", "#mk-sort", "#mk-below", "#mk-hide-mine"].forEach((sel) =>
   $(sel).addEventListener("input", render));

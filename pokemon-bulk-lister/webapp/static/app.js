@@ -39,14 +39,22 @@ async function api(path, opts = {}) {
 
 // ---------------------------------------------------------------- render
 function renderStats(stats) {
-  $("#stats").innerHTML = `
-    <span><strong>${stats.total ?? 0}</strong> cards</span>
-    <span><strong>${stats.identified ?? 0}</strong> named</span>
-    <span><strong>${stats.priced ?? 0}</strong> priced</span>
-    <span><strong>${stats.flagged ?? 0}</strong> need a look</span>
-    <span><strong>${stats.ebay_listed ?? 0}</strong> on eBay</span>
-    <span>est. value: <strong>$${(stats.total_value ?? 0).toFixed(2)}</strong></span>
-  `;
+  const total = stats.total || 0;
+  const hadCards = document.body.classList.contains("has-cards");
+  document.body.classList.toggle("has-cards", total > 0);
+  document.body.classList.toggle("is-empty", total === 0);
+  if (!hadCards && total) $("#upload-panel").open = false;
+  if (!total) $("#upload-panel").open = true;
+  $("#scan-title").textContent = total ? "Review cards" : "Scan cards";
+  $("#scan-subtitle").classList.toggle("hidden", total > 0);
+  $("#stats").innerHTML = stats.priced
+    ? `<span>Estimated value <strong>${fmt(stats.total_value || 0)}</strong></span>` : "";
+  const flagged = stats.flagged || 0;
+  $("#review-count").textContent = flagged ? flagged : "";
+  const review = $("#review-next-btn");
+  review.textContent = `Review ${flagged} card${flagged === 1 ? "" : "s"}`;
+  review.classList.toggle("hidden", !flagged);
+  $("#process-btn").classList.toggle("hidden", !total || (stats.identified >= total && stats.priced >= total));
 }
 
 function reviewWhy(notes) {
@@ -74,14 +82,26 @@ function bestEbay(card) {
 // What the final price rests on, and why a flagged row was flagged. A price
 // with no visible basis is a bug.
 function priceBasis(card) {
-  if (card.final_price == null) return "";
-  const n = [card.tcgplayer_market, card.cardmarket_trend_usd, card.ebay_median_30d, card.terapeak_median_usd]
-    .filter(v => v != null && v > 0).length;
-  const basis = `<span class="src">${n} source${n === 1 ? "" : "s"}</span>`;
-  const why = card.needs_review
-    ? `<span class="src why" title="${escapeHtml(card.pricing_notes || "")}">${escapeHtml(reviewWhy(card.pricing_notes))}</span>`
-    : "";
-  return basis + `<span class="src">Price confidence: ${Math.round((card.pricing_confidence || 0) * 100)}%</span>` + why;
+  const sources = [
+    ["TCGplayer", card.tcgplayer_market], ["Cardmarket", card.cardmarket_trend_usd],
+    ["eBay", bestEbay(card).value],
+  ].filter(([, value]) => value != null && value > 0);
+  const notes = reviewWhy(card.pricing_notes);
+  let issue = "Check price";
+  if (/Japanese/i.test(notes)) issue = "Japanese card · English price";
+  else if (/finish.*(unknown|check|uncertain)|printing.*unknown/i.test(notes)) issue = "Check finish";
+  else if (/number/i.test(notes)) issue = "Check card number";
+  else if (/disagree|outlier/i.test(notes)) issue = "Prices disagree";
+  else if (/identity|identif/i.test(notes)) issue = "Check card match";
+  if (card.final_price == null && !card.pricing_notes) return '<span class="src">Not priced yet</span>';
+  const basis = sources.length ? sources.map(([name]) => name).join(" · ") : "No market source";
+  return `<span class="price-source-line">${escapeHtml(basis)}</span>
+    ${card.needs_review ? `<span class="flag-note">${escapeHtml(issue)}</span>` : ""}
+    <details class="price-details" data-detail="price"><summary>Price details</summary><div class="price-detail-body">
+      ${sources.map(([name, value]) => `<span>${escapeHtml(name)} <strong>${fmt(value)}</strong></span>`).join("")}
+      <span>${Math.round((card.pricing_confidence || 0) * 100)}% price confidence</span>
+      ${card.pricing_notes || card.needs_review ? `<p>${escapeHtml(notes)}</p>` : ""}
+    </div></details>`;
 }
 
 // A photo's own storage address when the server gave one: loading it
@@ -92,7 +112,7 @@ function photoSrc(card) {
 
 function renderRow(card) {
   const flagClass = card.needs_review ? "flag" : "";
-  const setBits = [card.set_name, card.card_number ? `#${card.card_number}` : "", card.rarity]
+  const setBits = [card.set_name, card.card_number ? `#${card.card_number}` : ""]
     .filter(Boolean)
     .join(" · ");
   const ebay = bestEbay(card);
@@ -117,12 +137,14 @@ function renderRow(card) {
       <td class="price">${ebayCell}</td>
       <td class="price">${state.pricing.has(card.id) ? '<span class="pricing-now">Pricing…</span>' : `<strong>${fmt(card.final_price)}</strong>${priceBasis(card)}`}</td>
       <td><span class="id-status ${card.id_confidence <= 0.6 ? 'review' : ''}">${!card.name ? 'Not identified' : card.id_confidence <= 0.6 ? 'Check ID' : card.id_confidence >= 0.97 ? 'Catalog match' : 'Check photo'}</span>
-      <span class="src">${Math.round((card.id_confidence || 0) * 100)}% ID confidence</span></td>
+      </td>
       <td class="actions">
-        ${card.name && card.id_confidence <= 0.6 ? '<button data-act="choose" class="primary">Choose</button>' : ""}
-        <button data-act="edit">Edit</button>
-        <button data-act="price">Price</button>
-        <button data-act="delete" title="Delete this card and its photo" aria-label="Delete">✕</button>
+        ${card.name && card.id_confidence <= 0.6 ? '<button data-act="choose" class="primary">Choose card</button>' : ""}
+        <button data-act="edit">${card.needs_review && card.id_confidence > 0.6 ? "Review" : "Edit"}</button>
+        <details class="row-menu" data-detail="actions"><summary aria-label="More actions for ${escapeHtml(card.name || 'this card')}">More</summary><div>
+          <button data-act="price">Refresh price</button>
+          <button data-act="delete">Delete card</button>
+        </div></details>
       </td>
     </tr>
   `;
@@ -140,15 +162,17 @@ const drawnRows = new Map();   // card id -> the row's HTML as last drawn
 
 function renderCards() {
   const body = $("#cards-body");
+  const openDetails = Array.from(body.querySelectorAll('tr[data-id] details[open]'))
+    .map(el => [el.closest('tr').dataset.id, el.dataset.detail]);
   const cards = visibleCards();
   const visible = new Set(cards.map(c => c.id));
   for (const id of Array.from(state.selected)) {
     if (!visible.has(id)) state.selected.delete(id);
   }
-  $("#visible-count").textContent = `(${cards.length} shown)`;
+  $("#visible-count").textContent = cards.length;
   if (!cards.length) {
     const filtered = state.search || state.needsReview || state.unidentified;
-    body.innerHTML = `<tr><td colspan="10" class="muted empty-state"><strong>${filtered ? 'No cards match these filters' : 'Your cards will appear here'}</strong>${filtered ? 'Clear the search or filters to see more cards.' : 'Add a photo above to get started. You can review and correct every card before listing.'}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="muted empty-state"><strong>${filtered ? 'No cards match these filters' : 'Your cards will appear here'}</strong>${filtered ? '<button type="button" data-act="clear-filters">Clear filters</button>' : 'Add a photo to get started.'}</td></tr>`;
     drawnRows.clear();
     syncSelectAllCheckbox();
     updateBundleButton();
@@ -178,6 +202,9 @@ function renderCards() {
       tr = fresh;
       drawnRows.set(card.id, html);
     }
+    // Native clicks change the live checkbox property without changing its
+    // cached HTML. Clearing selection must also update rows we retain.
+    tr.querySelector('input[data-act="select"]').checked = state.selected.has(card.id);
     const place = before ? before.nextElementSibling : body.firstElementChild;
     if (tr !== place) body.insertBefore(tr, place);
     before = tr;
@@ -185,6 +212,10 @@ function renderCards() {
   }
   for (const [id, tr] of onPage) {
     if (!kept.has(id)) { tr.remove(); drawnRows.delete(id); }
+  }
+  for (const [id, kind] of openDetails) {
+    const detail = body.querySelector(`tr[data-id="${id}"] details[data-detail="${kind}"]`);
+    if (detail) detail.open = true;
   }
   syncSelectAllCheckbox();
   updateBundleButton();
@@ -201,16 +232,16 @@ function syncSelectAllCheckbox() {
 }
 
 function updateBundleButton() {
-  const btn = $("#bundle-btn");
-  if (!btn) return;
   const n = state.selected.size;
-  btn.textContent = `Sell as one lot (${n})`;
-  btn.disabled = n < 2;
-  const del = $("#delete-btn");
-  if (del) {
-    del.textContent = `Delete selected (${n})`;
-    del.disabled = n < 1;
-  }
+  $("#scan-selection").classList.toggle("hidden", n === 0);
+  $("#selected-count").textContent = `${n} selected`;
+  $("#bundle-btn").disabled = n < 2;
+  $("#delete-btn").disabled = n < 1;
+  const pool = n ? selectedCards() : state.cards;
+  const ready = pool.filter(c => c.name && c.final_price != null && !c.in_library && !c.sold).length;
+  const library = $("#library-btn");
+  library.textContent = ready ? `Add ${ready} to library` : "Add to library";
+  library.classList.toggle("hidden", !ready);
 }
 
 // Remove cards (and their photos) from this page, after a yes.
@@ -271,16 +302,17 @@ async function addPricedToLibrary() {
     && !c.in_library && !c.sold && !state.libraryTried.has(c.id));
   if (!ready.length) return;
   libraryBusy = true;
-  ready.forEach(c => state.libraryTried.add(c.id));
   try {
     let added = 0;
     for (let i = 0; i < ready.length; i += 50) {      // a few at a time keeps each request short
       const part = ready.slice(i, i + 50);
+      part.forEach(c => state.libraryTried.add(c.id));
       const res = await api("/api/inventory/promote", {
         method: "POST", body: JSON.stringify({ card_ids: part.map(c => c.id), auto: true }) });
       added += res.promoted || 0;
-      part.forEach(c => { c.in_library = true; });
-      redrawCards();
+      // Eligibility can change while the request is in flight. Use the server's
+      // membership flags, including cards it held for a person to check.
+      await loadCards();
     }
     if (added) {
       $("#upload-status").innerHTML = `Added ${plural(added, "priced card")} to your library. `
@@ -290,6 +322,9 @@ async function addPricedToLibrary() {
     if (err.status === 401 || err.status === 403) state.libraryOff = true;   // not signed in here
   } finally {
     libraryBusy = false;
+    // Pricing can finish for another card while a batch is being added. Drain
+    // that work now; libraryTried prevents retries from turning into polling.
+    addPricedToLibrary();
   }
 }
 
@@ -397,6 +432,10 @@ function setupDropzone() {
         ? `Added ${data.total_crops} card(s) from ${data.grids.length} photo(s).${skipped}`
         : `No cards found in ${data.grids.length} photo(s).${skipped}`;
       await loadCards();
+      if (data.total_crops) {
+        $("#upload-panel").open = false;
+        $("#cards-heading").focus({ preventScroll: true });
+      }
       if (data.total_crops && $("#auto-process").checked) startProcess();
     } catch (err) {
       status.textContent = `Upload failed: ${err.message}`;
@@ -449,6 +488,7 @@ document.addEventListener("DOMContentLoaded", () => {
       status.textContent = `Added ${crops} card(s) from ${files.length - skipped.length} Drive photo(s).`
         + (skipped.length ? ` Skipped: ${skipped.join(", ")}.` : "");
       await loadCards();
+      if (crops) $("#upload-panel").open = false;
       if (crops && $("#auto-process").checked) startProcess();
     },
   }));
@@ -586,14 +626,14 @@ async function addToLibrary() {
     return;
   }
   const picked = selectedCards();
-  const pool = picked.length ? picked : state.cards;
+  const pool = (picked.length ? picked : state.cards).filter(c => !c.in_library && !c.sold);
   const ready = pool.filter(c => c.name && c.final_price != null);
   const flagged = ready.filter(c => c.needs_review).length;
   const left = pool.length - ready.length;
   if (!ready.length) {
     $("#upload-status").textContent = picked.length
-      ? "None of the selected cards are identified and priced yet."
-      : "No cards have a name and a price yet. Use “Identify + price new cards” first.";
+      ? "The selected cards still need a name and price."
+      : "Identify and price your cards before adding them to the library.";
     return;
   }
   const value = ready.reduce((sum, c) => sum + c.final_price, 0);
@@ -610,6 +650,7 @@ async function addToLibrary() {
   // with a filter on, the table shows only part of the bench.
   const body = { card_ids: ready.map(c => c.id) };
   const res = await api("/api/inventory/promote", { method: "POST", body: JSON.stringify(body) });
+  await loadCards();
   $("#upload-status").innerHTML =
     `Added ${plural(res.promoted, "card")} to your library` +
     (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already there)` : "") +
@@ -637,6 +678,7 @@ function setupTable() {
     }
     const btn = ev.target.closest("button");
     if (!btn) return;
+    if (btn.dataset.act === "clear-filters") { clearScanFilters(); return; }
     const tr = ev.target.closest("tr");
     const id = parseInt(tr.dataset.id, 10);
     if (btn.dataset.act === "delete") { await deleteCards([id]); return; }
@@ -651,7 +693,7 @@ function setupTable() {
       } catch (err) {
         alert(err.message);
       } finally {
-        btn.disabled = false; btn.textContent = "Price";
+        btn.disabled = false; btn.textContent = "Refresh price";
       }
     }
   });
@@ -683,6 +725,7 @@ function openEdit(id) {
   form.is_holo.checked = !!card.is_holo;
   form.printing.value = card.printing || (card.is_holo ? "holofoil" : "normal");
   form.id_confidence.value = card.id_confidence ?? 0;
+  $("#modal-confidence").textContent = `${Math.round((card.id_confidence || 0) * 100)}% identification confidence`;
 
   $("#modal-prices").innerHTML = `
     <div>TCGplayer<strong>${fmt(card.tcgplayer_market)}</strong></div>
@@ -725,6 +768,7 @@ async function saveEdit({ priceAfter = false } = {}) {
   };
   try {
     await api(`/api/cards/${state.editing}`, { method: "PATCH", body: JSON.stringify(patch) });
+    state.libraryTried.delete(state.editing);
     if (priceAfter) {
       activeBtn.textContent = "Pricing…";
       const updated = await api(`/api/cards/${state.editing}/price`, { method: "POST" });
@@ -764,6 +808,7 @@ async function aiIdentify() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ force_ai: forceAi }),
     });
+    state.libraryTried.delete(state.editing);
     const form = $("#edit-form");
     form.name.value = updated.name || "";
     form.set_name.value = updated.set_name || "";
@@ -774,6 +819,7 @@ async function aiIdentify() {
     form.is_holo.checked = !!updated.is_holo;
     form.printing.value = updated.printing || (updated.is_holo ? "holofoil" : "normal");
     form.id_confidence.value = updated.id_confidence ?? 0;
+    $("#modal-confidence").textContent = `${Math.round((updated.id_confidence || 0) * 100)}% identification confidence`;
     const idx = state.cards.findIndex(c => c.id === updated.id);
     if (idx >= 0) state.cards[idx] = updated;
     $("#modal-title").textContent = `Edit · ${updated.name || "(unidentified)"}`;
@@ -806,9 +852,12 @@ async function uploadCloudinary() {
 // For a card the catalog could not settle: the real cards it could be, or
 // "something else" (type it in, or read the photo again).
 let choosing = null;
+let chooseRequest = 0;
+let chooserOpener;
 function closeChoose() {
   $("#choose-modal").classList.add("hidden");
   choosing = null;
+  chooserOpener?.focus();
 }
 
 function drawChoices(data) {
@@ -839,22 +888,26 @@ function syncChoose() {
 async function chooseCard(id) {
   const card = state.cards.find(c => c.id === id);
   if (!card) return;
-  choosing = { id, choices: [] };
+  chooserOpener = document.activeElement;
+  const request = ++chooseRequest;
+  choosing = { id, choices: [], request };
   $("#choose-img").src = photoSrc(card);
   $("#choose-img").alt = `Photo of ${card.name || "the card"}`;
   $("#choose-read").textContent = "";
   $("#choose-list").innerHTML = "";
   $("#choose-other").classList.add("hidden");
+  $("#choose-retry").disabled = false;
   $("#choose-ok").disabled = true;
   $("#choose-status").textContent = "Looking it up…";
   $("#choose-modal").classList.remove("hidden");
   $("#choose-cancel").focus();
   try {
     const data = await api(`/api/cards/${id}/choices`);
-    if (choosing && choosing.id === id) drawChoices(data);
+    if (choosing?.request === request) drawChoices(data);
   } catch (err) {
-    $("#choose-status").textContent = `Could not look it up: ${err.message}`;
+    if (choosing?.request !== request) return;
     drawChoices({ choices: [], current: card });
+    $("#choose-status").textContent = `Could not look it up: ${err.message}`;
   }
 }
 
@@ -870,15 +923,17 @@ function setupChoose() {
   });
   $("#choose-retry").addEventListener("click", async () => {
     if (!choosing) return;
-    const id = choosing.id;
+    const { id, request } = choosing;
     const btn = $("#choose-retry");
     btn.disabled = true;
     $("#choose-status").textContent = "Reading the photo again…";
     try {
       const updated = await api(`/api/cards/${id}/identify`, { method: "POST", body: JSON.stringify({ force_ai: true }) });
+      state.libraryTried.delete(id);
       const i = state.cards.findIndex(c => c.id === id);
       if (i >= 0) state.cards[i] = { ...state.cards[i], ...updated };
       redrawCards();
+      if (choosing?.request !== request) { loadCards().catch(() => {}); return; }
       if (updated.id_confidence > 0.6) {          // the catalog confirmed the new reading
         closeChoose();
         state.priceTried.delete(id);
@@ -886,28 +941,30 @@ function setupChoose() {
         return;
       }
       const data = await api(`/api/cards/${id}/choices`);
-      if (choosing && choosing.id === id) drawChoices(data);
+      if (choosing?.request === request) drawChoices(data);
     } catch (err) {
-      $("#choose-status").textContent = `Could not read it: ${err.message}`;
+      if (choosing?.request === request) $("#choose-status").textContent = `Could not read it: ${err.message}`;
     } finally {
-      btn.disabled = false;
+      if (choosing?.request === request) btn.disabled = false;
     }
   });
   $("#choose-ok").addEventListener("click", async () => {
     const picked = document.querySelector('input[name="choose-pick"]:checked');
     const card = choosing && picked ? choosing.choices[Number(picked.value)] : null;
     if (!card) return;
-    const id = choosing.id;
+    const { id, request } = choosing;
     $("#choose-ok").disabled = true;
     try {
       const patch = { name: card.name, set_name: card.set_name || "", set_code: card.set_code || "",
                       card_number: card.card_number || "", id_confidence: 0.97, needs_review: false };
       if (card.rarity) patch.rarity = card.rarity;
       await api(`/api/cards/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
-      closeChoose();
+      state.libraryTried.delete(id);
+      if (choosing?.request === request) closeChoose();
       state.priceTried.delete(id);
       await loadCards();                          // the new card is priced by itself
     } catch (err) {
+      if (choosing?.request !== request) return;
       $("#choose-status").textContent = `Could not save: ${err.message}`;
       $("#choose-ok").disabled = false;
     }
@@ -1031,7 +1088,23 @@ function setupBundleModal() {
 }
 
 // ---------------------------------------------------------------- toolbar
+function clearScanFilters() {
+  state.search = ""; state.needsReview = false; state.unidentified = false;
+  $("#card-search").value = "";
+  $("#filter-review").checked = false;
+  $("#filter-unid").checked = false;
+  cardsShown = "";
+  loadCards();
+}
 function setupToolbar() {
+  $("#clear-selection-btn").addEventListener("click", () => { state.selected.clear(); renderCards(); });
+  $("#review-next-btn").addEventListener("click", async () => {
+    state.needsReview = true; state.unidentified = false; state.search = "";
+    $("#filter-review").checked = true; $("#filter-unid").checked = false; $("#card-search").value = "";
+    cardsShown = "";
+    await loadCards();
+    $("#cards-heading").focus();
+  });
   $("#card-search").addEventListener("input", e => { state.search = e.target.value; renderCards(); });
   $("#show-comparisons").addEventListener("change", e => {
     $("#cards-table").classList.toggle("compact-prices", !e.target.checked);
@@ -1073,7 +1146,7 @@ function setupToolbar() {
       title: `Re-price ${plural(n, "card")}?`,
       html: `<p>This looks up every identified card again, including the ones already priced, and
         replaces their prices.${useTerapeak === "1" ? " A year of eBay sales adds about 5 seconds per card." : ""}</p>
-        <p class="muted">To price only new cards, use “Identify + price new cards”.</p>`,
+        <p class="muted">Use “Identify &amp; price” for new cards only.</p>`,
       confirm: "Re-price all",
     });
     if (!ok) return;
@@ -1093,7 +1166,7 @@ function setupToolbar() {
     const el = $("#terapeak-status");
     if (s.logged_in) {
       el.textContent = "signed in";
-      el.style.color = "#15803d";
+      el.style.color = "var(--up)";
     } else {
       el.textContent = "you’ll sign in once";
     }
@@ -1197,7 +1270,7 @@ function setupPublish() {
       const ready = s[site] && s[site].ready;
       if (el) {
         el.textContent = ready ? "(ready)" : "(setup needed)";
-        el.style.color = ready ? "#15803d" : "#b45309";
+        el.style.color = ready ? "var(--up)" : "var(--attention)";
         buttons[site].title = ready ? "" : (s[site] && s[site].reason) || "";
       }
     }
@@ -1665,11 +1738,18 @@ async function pollPublishJob() {
 // ---------------------------------------------------------------- init
 function setupKeyboard() {
   document.addEventListener("keydown", ev => {
-    const modal = ["#confirm-modal", "#conn-modal", "#bundle-modal", "#modal"]
+    const modal = ["#confirm-modal", "#choose-modal", "#conn-modal", "#bundle-modal", "#modal"]
       .map(s => $(s)).find(el => !el.classList.contains("hidden"));
     if (ev.key === "Tab" && modal) {
-      const focusable = Array.from(modal.querySelectorAll('button, input:not([type=hidden]), select, textarea, a[href], [tabindex="0"]'))
-        .filter(el => !el.disabled && el.getClientRects().length);
+      const focusable = Array.from(modal.querySelectorAll('button, input:not([type=hidden]), select, textarea, a[href], summary, [tabindex="0"]'))
+        .filter(el => {
+          if (el.disabled || !el.getClientRects().length) return false;
+          // Closed details can still report layout rectangles in Chromium.
+          for (let parent = el.parentElement; parent && parent !== modal; parent = parent.parentElement) {
+            if (parent.tagName === "DETAILS" && !parent.open && !parent.querySelector("summary")?.contains(el)) return false;
+          }
+          return true;
+        });
       const first = focusable[0], last = focusable[focusable.length - 1];
       if (ev.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
         ev.preventDefault(); last?.focus();

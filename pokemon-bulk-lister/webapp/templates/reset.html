@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>New password · Card Portfolio</title>
+  <title>New password · Pokémon bulk lister</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design.css') }}">
 </head>
 <body class="auth-page">
   <main class="auth-card">
+    <a class="auth-brand" href="/">Pokémon <span>bulk lister</span></a>
     <h1>Choose a new password</h1>
     <p class="auth-sub">Any other browser logged in to this account is signed out.</p>
     {% if error %}<p class="auth-error">{{ error }}</p>{% endif %}

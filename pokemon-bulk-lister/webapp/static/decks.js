@@ -3,7 +3,9 @@
    Helpers come from common.js. */
 "use strict";
 
-const dk = { lists: null, ref: null, detail: null, missingOnly: false, pollTimer: null };
+const dk = { lists: null, ref: null, detail: null, missingOnly: false, pollTimer: null, lastRef: null };
+const deckPhone = window.matchMedia("(max-width: 980px)");
+const backButton = '<button type="button" class="btn btn-ghost deck-back" data-act="back">← Back to decks</button>';
 
 /* ---------------- deck lists ---------------- */
 
@@ -11,8 +13,8 @@ async function loadLists() {
   const data = await api("/api/decks");
   dk.lists = data;
   $("#library-note").textContent = data.library_cards
-    ? `Matched against the ${data.library_cards} cards in your library.`
-    : "Your library is empty, so every deck shows 0 cards. Scan or add cards first.";
+    ? `${data.library_cards} cards in your library`
+    : "Add cards to your library to find your closest match.";
   renderLists();
 
   const src = data.popular_source;
@@ -35,27 +37,76 @@ function renderLists() {
   const popular = [...data.popular];
   if ($("#deck-sort").value === "closest") popular.sort(byClosest);
   $("#saved-list").innerHTML = data.saved.map((d) => deckRow(d, d.source === "popular" ? "saved from popular" : "imported"))
-    .join("") || '<li class="muted">None yet. Save a popular deck or import a list.</li>';
+    .join("") || '<li class="muted deck-list-empty">No saved decks yet.</li>';
   $("#popular-list").innerHTML = popular.map((d) =>
-    deckRow(d, `${d.share_pct}% of decks entered (${d.decks_entered})`)).join("");
+    deckRow(d, `${d.share_pct}% played`)).join("");
 }
 
 function deckRow(d, meta) {
   const maybe = d.maybe ? ` · ${d.maybe} to check` : "";
-  return `<li data-ref="${esc(d.ref)}" class="${d.ref === dk.ref ? "active" : ""}" tabindex="0">
+  return `<li data-ref="${esc(d.ref)}" class="${d.ref === dk.ref ? "active" : ""}" tabindex="0" role="button" aria-label="${esc(d.name)}, ${d.have} of ${d.total} cards owned" aria-pressed="${d.ref === dk.ref}">
     <span class="dl-name">${esc(d.name)}</span>
-    <span class="dl-have">${d.have}/${d.total}</span>
+    <span class="dl-have">${d.have}/${d.total} <span class="deck-chevron" aria-hidden="true">›</span></span>
     <span class="bar"><span style="width:${d.completion_pct}%"></span></span>
     <span class="dl-meta">${esc(meta)} · ${d.missing ? `${d.missing} missing` : "complete"}${maybe}</span>
   </li>`;
 }
 
-function pick(ref) {
+function pick(ref, { historyMode = "push", reveal = true, focus = true } = {}) {
+  const changed = dk.ref !== ref;
   dk.ref = ref;
-  history.replaceState(null, "", "#" + ref);
-  $$(".deck-list li").forEach((li) => li.classList.toggle("active", li.dataset.ref === ref));
-  loadDetail().catch((err) => toast(err.message, "err"));
+  dk.lastRef = ref;
+  if (historyMode === "push" && location.hash !== "#" + encodeURIComponent(ref)) {
+    history.pushState({ deckNavigation: true }, "", "#" + encodeURIComponent(ref));
+  }
+  $(".deck-layout").classList.toggle("detail-open", reveal);
+  $$(".deck-list li[data-ref]").forEach((li) => {
+    li.classList.toggle("active", li.dataset.ref === ref);
+    li.setAttribute("aria-pressed", String(li.dataset.ref === ref));
+  });
+  if (changed || !dk.detail) {
+    dk.detail = null;
+    $("#deck-detail").innerHTML = `${backButton}<p class="muted" role="status">Loading deck…</p>`;
+  }
+  if (reveal && deckPhone.matches) {
+    $("#deck-detail").scrollIntoView({ block: "start" });
+    if (focus) $("#deck-detail .deck-back")?.focus({ preventScroll: true });
+  }
+  loadDetail().then(() => {
+    if (dk.ref === ref && reveal && deckPhone.matches && focus) {
+      $("#deck-detail .deck-back")?.focus({ preventScroll: true });
+    }
+  }).catch((err) => {
+    if (dk.ref !== ref) return;
+    $("#deck-detail").innerHTML = `${backButton}<p class="muted" role="alert">Could not load this deck. Choose another deck or try again.</p>`;
+    toast(err.message, "err");
+  });
 }
+
+function showDeckList() {
+  clearDetail();
+  const selected = $$(".deck-list li[data-ref]").find((li) => li.dataset.ref === dk.lastRef);
+  if (deckPhone.matches) selected?.focus();
+}
+
+function backToDecks() {
+  if (history.state?.deckNavigation) history.back();
+  else {
+    history.replaceState(null, "", location.pathname + location.search);
+    showDeckList();
+  }
+}
+
+function hashRef() {
+  try { return decodeURIComponent(location.hash.slice(1)); }
+  catch { return ""; }
+}
+
+window.addEventListener("popstate", () => {
+  const ref = hashRef();
+  if (ref) pick(ref, { historyMode: "none" });
+  else showDeckList();
+});
 
 ["#saved-list", "#popular-list"].forEach((sel) => {
   $(sel).addEventListener("click", (e) => {
@@ -87,8 +138,14 @@ $("#btn-refresh-popular").addEventListener("click", async () => {
 /* ---------------- deck detail ---------------- */
 
 function clearDetail() {
+  clearTimeout(dk.pollTimer);
   dk.ref = null; dk.detail = null;
-  $("#deck-detail").innerHTML = '<p class="muted">Pick a deck to see which cards you have and which you need.</p>';
+  $(".deck-layout").classList.remove("detail-open");
+  $$(".deck-list li[data-ref]").forEach((li) => {
+    li.classList.remove("active");
+    li.setAttribute("aria-pressed", "false");
+  });
+  $("#deck-detail").innerHTML = '<div class="deck-empty"><span class="empty-card-mark" aria-hidden="true">▱</span><h2>Start with a deck</h2><p class="muted">Choose a list to see what you have and what’s missing.</p></div>';
 }
 
 async function loadDetail() {
@@ -132,7 +189,8 @@ function renderDetail() {
   }).join("");
 
   $("#deck-detail").innerHTML = `
-    <div class="panel-head">
+    ${backButton}
+    <div class="panel-head deck-detail-head">
       <h2>${esc(d.name)}</h2>
       <div class="head-actions">
         ${d.saved
@@ -141,39 +199,34 @@ function renderDetail() {
         <button class="btn" data-act="copy-missing" ${s.missing ? "" : "disabled"}>Copy missing list</button>
       </div>
     </div>
-    <p class="source-note">${sourceLine(d)}</p>
+    ${sourceLine(d) ? `<details class="source-details"><summary>Deck source</summary><p class="source-note">${sourceLine(d)}</p></details>` : ""}
 
-    <div class="deck-tiles">
+    <div class="deck-tiles deck-summary">
       <div class="tile ${s.missing ? "" : "done"}">
-        <div class="tile-label">You have</div>
+        <div class="tile-label">Owned</div>
         <div class="tile-value">${s.have} / ${s.total}</div>
-        <div class="tile-sub">${s.completion_pct}% of the deck</div>
+        <span class="bar" aria-hidden="true"><span style="width:${s.completion_pct}%"></span></span>
       </div>
       <div class="tile">
         <div class="tile-label">Missing</div>
         <div class="tile-value">${s.missing}</div>
-        <div class="tile-sub">${d.missing_lines_on_platform
-          ? `${d.missing_lines_on_platform} of these cards listed on the marketplace` : "none listed on the marketplace"}</div>
-      </div>
-      <div class="tile ${s.maybe ? "flag" : ""}">
-        <div class="tile-label">Check the printing</div>
-        <div class="tile-value">${s.maybe}</div>
-        <div class="tile-sub">${s.maybe ? "same name, different printing; not counted" : "nothing to check"}</div>
+        ${d.missing_lines_on_platform ? `<div class="tile-sub">${d.missing_lines_on_platform} listed here</div>` : ""}
       </div>
       <div class="tile">
-        <div class="tile-label">Estimated cost to finish</div>
+        <div class="tile-label">To finish · estimate</div>
         <div class="tile-value">${c.priced_missing ? fmtUsd(c.estimate) : "—"}</div>
         <div class="tile-sub">${costSub}</div>
       </div>
     </div>
+    ${s.maybe ? `<p class="flag-note deck-printing-note">Check ${s.maybe} different printing${s.maybe === 1 ? "" : "s"} before counting them as owned.</p>` : ""}
 
     <div class="controls">
       <label class="check"><input type="checkbox" id="missing-only" ${dk.missingOnly ? "checked" : ""}> Missing only</label>
       ${d.pricing_running
-        ? '<span class="muted">Looking up prices… this page updates as they arrive.</span>'
+        ? '<span class="muted" role="status">Looking up prices…</span>'
         : needPricing
-          ? `<button class="btn" data-act="price">Price the ${c.unpriced_missing} unpriced missing cards</button>` : ""}
-      <span class="muted">Prices: ${esc(c.source)}.</span>
+          ? `<button class="btn" data-act="price">Get prices (${c.unpriced_missing})</button>` : ""}
+      <details class="source-details"><summary>Price sources</summary><p class="source-note">${esc(c.source)}</p></details>
     </div>
 
     <div class="table-scroll">
@@ -215,13 +268,13 @@ function cardRow(card) {
       <a href="${esc(card.price && card.price.tcgplayer_url || card.links.tcgplayer)}" target="_blank" rel="noopener">TCGplayer</a>
       <a href="${esc(card.links.ebay)}" target="_blank" rel="noopener">eBay</a></div>`;
   }
-  return `<tr class="${card.maybe ? "flag" : card.missing ? "" : "covered"}">
-    <td class="num">${card.count}</td>
-    <td><div class="inv-name">${esc(card.name)}</div><div class="inv-set">${esc(setBits)}</div>${maybe}</td>
-    <td class="num">${card.have}${other}</td>
-    <td class="num ${card.missing ? "miss" : ""}">${card.missing || "—"}</td>
-    <td class="num price-cell">${price}</td>
-    <td>${get}</td>
+  return `<tr class="deck-card-row ${card.maybe ? "flag" : card.missing ? "" : "covered"}">
+    <td class="num" data-label="Need">${card.count}</td>
+    <td class="deck-card-name"><div class="inv-name">${esc(card.name)}</div><div class="inv-set">${esc(setBits)}</div>${maybe}</td>
+    <td class="num" data-label="Owned">${card.have}${other}</td>
+    <td class="num ${card.missing ? "miss" : ""}" data-label="Missing">${card.missing || "—"}</td>
+    <td class="num price-cell" data-label="Price each">${price}</td>
+    <td class="deck-card-links">${get}</td>
   </tr>`;
 }
 
@@ -231,6 +284,7 @@ $("#deck-detail").addEventListener("input", (e) => {
 
 $("#deck-detail").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-act]");
+  if (btn?.dataset.act === "back") { backToDecks(); return; }
   if (!btn || !dk.detail) return;
   const d = dk.detail;
   try {
@@ -312,12 +366,12 @@ $("#import-form").addEventListener("submit", async (e) => {
   try {
     api("/api/market/listings").then((m) => { dk.payments = m.payments; }).catch(() => {});
     await loadLists();
-    const fromHash = decodeURIComponent(location.hash.slice(1));
+    const fromHash = hashRef();
     const all = [...dk.lists.saved, ...dk.lists.popular];
-    if (fromHash && all.some((d) => d.ref === fromHash)) pick(fromHash);
-    else if (dk.lists.library_cards && all.length) {
+    if (fromHash && all.some((d) => d.ref === fromHash)) pick(fromHash, { historyMode: "none", focus: false });
+    else if (!deckPhone.matches && dk.lists.library_cards && all.length) {
       // Open on the deck the library is closest to finishing.
-      pick([...all].sort((a, b) => b.completion_pct - a.completion_pct)[0].ref);
+      pick([...all].sort((a, b) => b.completion_pct - a.completion_pct)[0].ref, { historyMode: "none", reveal: false, focus: false });
     }
   } catch (err) {
     toast(err.message, "err");

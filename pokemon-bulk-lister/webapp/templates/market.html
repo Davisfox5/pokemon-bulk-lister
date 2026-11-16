@@ -3,52 +3,61 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Marketplace · Card Portfolio</title>
+  <title>Marketplace · Pokémon bulk lister</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design.css') }}">
 </head>
-<body>
-  <header class="topbar">
-    <div class="topbar-left">
-      <span class="brand">Pokémon bulk lister</span>
-      <nav aria-label="Main navigation">
-        <a href="/">Scan</a>
-        <a href="/portfolio">Library</a>
-        <a href="/decks">Decks</a>
-        <a href="/market" class="active" aria-current="page">Marketplace</a>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      <a href="/logout" class="btn btn-ghost">Log out</a>
-    </div>
-  </header>
+<body class="market-page">
+  {% include '_navigation.html' %}
 
-  <main class="wrap wide">
-    <div class="page-intro"><h1>Browse cards for sale</h1><p class="muted">Compare listings and check the card, condition and price before buying.</p></div>
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Cards for sale</h2>
-        <span id="market-meta" class="muted"></span>
+  <main class="wrap wide" id="main-content">
+    <div class="page-intro">
+      <div><h1>Marketplace</h1><p class="muted">Find the next card for your collection.</p></div>
+      <div class="page-actions"><a class="btn" href="/portfolio">List a card</a></div>
+    </div>
+    <section class="panel market-browser" aria-label="Cards for sale">
+      <div class="market-searchbar">
+        <label class="search-field" for="mk-search">Search cards
+          <input id="mk-search" type="search" placeholder="Name, set or number">
+        </label>
+        <label class="field" for="mk-sort">Sort
+          <select id="mk-sort">
+            <option value="newest">Newest</option>
+            <option value="price_asc">Price, low to high</option>
+            <option value="price_desc">Price, high to low</option>
+            <option value="deal">Below market first</option>
+            <option value="flagged">Needs review first</option>
+          </select>
+        </label>
+        <details class="market-filters">
+          <summary>Filters <span id="mk-filter-count" class="count"></span></summary>
+          <div class="filter-fields">
+            <label class="field" for="mk-set">Set
+              <select id="mk-set"><option value="">All sets</option></select>
+            </label>
+            <label class="field" for="mk-cond">Condition
+              <select id="mk-cond">
+                <option value="">Any condition</option>
+                <option value="NM">Near mint (NM)</option>
+                <option value="LP">Lightly played (LP)</option>
+                <option value="MP">Moderately played (MP)</option>
+                <option value="HP">Heavily played (HP)</option>
+                <option value="DMG">Damaged (DMG)</option>
+              </select>
+            </label>
+            <label class="check"><input type="checkbox" id="mk-below"> At or below market</label>
+            <label class="check"><input type="checkbox" id="mk-hide-mine"> Hide my listings</label>
+            <button class="btn btn-ghost" type="button" id="mk-clear">Clear filters</button>
+          </div>
+        </details>
       </div>
-      <div class="controls">
-        <input id="mk-search" type="search" placeholder="Search name, set or number  ( / )" aria-label="Search listings">
-        <select id="mk-set" aria-label="Set"><option value="">All sets</option></select>
-        <select id="mk-cond" aria-label="Condition">
-          <option value="">Any condition</option>
-          <option>NM</option><option>LP</option><option>MP</option><option>HP</option><option>DMG</option>
-        </select>
-        <select id="mk-sort" aria-label="Sort">
-          <option value="newest">Newest</option>
-          <option value="price_asc">Price, low to high</option>
-          <option value="price_desc">Price, high to low</option>
-          <option value="deal">Furthest below market</option>
-          <option value="flagged">Market price needs review first</option>
-        </select>
-        <label class="check"><input type="checkbox" id="mk-below"> At or below market</label>
-        <label class="check"><input type="checkbox" id="mk-hide-mine"> Hide mine</label>
-        <span id="mk-count" class="muted"></span>
+      <div class="market-context">
+        <span id="mk-count" class="muted" role="status"></span>
+        <span id="market-payment" class="muted"></span>
+        <details class="source-details"><summary>Fees &amp; payment</summary><p id="market-meta" class="source-note"></p></details>
       </div>
       <div id="market-grid" class="market-grid">
-        <p class="muted">Loading…</p>
+        <p class="muted">Loading cards…</p>
       </div>
     </section>
   </main>

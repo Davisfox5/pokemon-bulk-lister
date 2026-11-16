@@ -1,5 +1,20 @@
 # CLAUDE.md
 
+## User instruction: keep the approved design
+
+The user approved the ivory/forest redesign on 16 November 2026 and explicitly
+asked Claude not to revert it. Preserve `design.css`, shared navigation, compact
+workflows, responsive layouts, and accessibility described below unless the user
+asks for a new visual direction. Keep functional improvements, including stable
+Scan photos and automatic library saving. A deployment of this branch before it
+contained the redesign caused a regression; do not repeat that stale release.
+
+Follow [AGENTS.md](AGENTS.md) for releases: integrate and push to
+`claude/dreamy-archimedes-7c38oi`, run
+`python pokemon-bulk-lister/scripts/prepare_release.py`, then deploy from the
+printed staging root. The preflight requires the latest shared commit and the
+approved design together. Do not deploy directly from an old or dirty checkout.
+
 Repo: **pokemon-bulk-lister** — Python 3.11 Flask 3 web app (`pokemon-bulk-lister/webapp/`) plus a 7-step CLI pipeline (`pokemon-bulk-lister/scripts/`) that turns binder-page photos into priced bulk card listings for TCGPlayer, Whatnot, and eBay. Business logic in `pokemon-bulk-lister/lib/`; SQLite state in `webapp/db.py`; tests in `pokemon-bulk-lister/tests/`.
 
 Two data layers share one SQLite file. The scan bench (`webapp/db.py`, raw sqlite3, `cards` table) is one unauthenticated bench on localhost; under a public host each signed-in account has its own (`owner_id`, set per request by `db.set_owner`, so use the `db` helpers instead of raw SQL on `cards`/`grids`, and wrap anything run on another thread in `_as_owner`). The multi-user layer (`webapp/models.py`, SQLAlchemy) holds users, the shared price catalog, inventory, the `library_events` ledger (every add, purchase and sale), decks and the marketplace. `models.py` has no column migrations (`create_all` only adds tables), so add tables there, not columns. An index on an existing table goes in `models._ensure_indexes`, which runs on every launch.
@@ -14,7 +29,7 @@ Test command (matches CI): `pytest -q` run from `pokemon-bulk-lister/`. CI also 
 
 It also runs on Vercel (`app.py`, `vercel.json`), where there is no lasting disk and no process between requests. `webapp/runtime.py` is the switch (`SERVERLESS`): both data layers use Postgres (`webapp/db.py` has a psycopg backend behind the same functions), photos go to Vercel Blob (`runtime.save_file` / `ensure_local`), eBay tokens and job progress are rows in `app_state`, and bench jobs run in slices driven by the status endpoints (`_pump` in `webapp/app.py`) instead of threads. New bench code must not assume a file it wrote is still on disk in a later request (call `runtime.ensure_local`), must not keep job state only in memory, and must not start a thread it expects to outlive the request. `TEST_DATABASE_URL=postgresql://... pytest -q` runs the suite on Postgres; `tests/test_serverless.py` runs the bench the way Vercel does.
 
-Keeping the hosted bill down: builds are most of this project's Vercel usage, so the project skips preview builds (its Ignored Build Step is `[ "$VERCEL_ENV" != "production" ]`) and a release is one build, `vercel deploy --prod` from the repository root (not a preview promoted afterwards, which builds twice). Lists that carry a `crop_path` also carry `photo_url` (`runtime.add_photo_urls`, one lookup per list) so the page loads photos straight from storage; `/crops/<file>` still works but costs a function call and a database read per photo. Pages do not poll (see below): every request wakes the database, which is billed by the time it is awake.
+Keeping the hosted bill down: builds are most of this project's Vercel usage, so the project skips preview builds (its Ignored Build Step is `[ "$VERCEL_ENV" != "production" ]`) and a release is one build, `vercel deploy --prod` from the clean staging repository root produced by `scripts/prepare_release.py` (not a preview promoted afterwards, which builds twice). Lists that carry a `crop_path` also carry `photo_url` (`runtime.add_photo_urls`, one lookup per list) so the page loads photos straight from storage; `/crops/<file>` still works but costs a function call and a database read per photo. Pages do not poll (see below): every request wakes the database, which is billed by the time it is awake.
 
 Finish and private estimates: the bench has nullable `printing` (legacy null
 means normal/holo according to `is_holo`). `lib/printing.py` normalizes normal,
@@ -64,33 +79,35 @@ Stack: Flask with Jinja templates in `webapp/templates/`, vanilla CSS and JS in
 `webapp/static/`. No framework, no build step, no UI library. Keep it that way.
 This is a working tool for one operator, not a product surface.
 
-### Tokens (from webapp/static/style.css `:root`)
-- Background `#fafafa`, panels white, foreground `#1a1a1a`, muted `#6b7280`
-- Border `#e2e2e2`, radius 8px on panels
-- Accent `#2563eb`, hover `#1e40af`, button surface `#f3f4f6`
-- Flagged row `--row-flag #fff5f5` with `--row-flag-text #b00020`. This pair means
-  "needs a human look" and is the only red in the system. Do not reuse it for
-  decoration.
-- System font stack, 14px base, `h1` 20px, `h2` 16px
-- Numbers use `font-variant-numeric: tabular-nums` so columns line up
-
-### Layout
-- `header` with title left, stats right, one border-bottom rule
-- `.panel` is the primary container. `.muted` and `.small` for secondary text.
-- `.dropzone` for file input. `.hidden` toggles visibility.
-- Screens: `index.html` (scan: intake, pricing, publish), `portfolio.html` (library:
-  have / sold / purchased), `decks.html` (deck building), `market.html` (marketplace),
-  plus `login.html` and `register.html`. All four share one nav: Scan, Library, Decks,
-  Marketplace.
-- `index.html` uses `style.css`. The other screens use `portfolio.css` and the helpers
-  in `static/common.js` (`provenanceHtml` for price provenance, `askConfirm` for
-  confirmations, `toast` for status). Use those rather than `alert()` or `prompt()`.
+### Theme and layout
+- Shared colors, typography, controls, and responsive navigation live in
+  `webapp/static/design.css`, loaded after each page's structural stylesheet.
+  Use its tokens rather than adding hardcoded colors. It includes a matching
+  dark palette and reduced-motion support.
+- Light palette: ivory `#f5f3ed`, paper `#fffefa`, forest ink `#203b32`,
+  emerald accent `#21644b`, and restrained gold `#dfbd6c` in the brand mark.
+  Red/clay surfaces are reserved for actionable review warnings.
+- System fonts, 14px body, responsive 28–36px page titles. Prices and counts use
+  tabular numerals; card photos carry the visual weight.
+- `_navigation.html` is shared by Scan, Library, Decks, and Marketplace. It has
+  visible labels, current-page state, and a skip link to `#main-content`.
+- `index.html` uses `style.css`; collection screens use `portfolio.css` plus
+  `static/common.js`. All pages, including authentication, load `design.css`.
+- Scan collapses its upload area once cards exist. Selection actions appear
+  only while cards are selected. Preserve both empty and populated layouts.
+- Library keeps cards ahead of secondary dashboards. Price details and less
+  frequent tools use native disclosures; keep their summary controls accessible.
+- On narrow screens, Decks switches between the list and the selected deck,
+  with Back, deep links, and browser history. Desktop retains the split view.
+- Source and actionable uncertainty remain visible beside each price; numeric
+  confidence and full comparisons live in keyboard/touch-accessible details.
+  Use `provenanceHtml`, `askConfirm`, and `toast` on collection screens.
 
 ### Rules
 - Density over polish. This screen gets used for hundreds of rows at a time, so
   favor compact tables, sticky headers, and keyboard flow over whitespace.
 - Every price or valuation shows where it came from and how confident it is.
-  A number with no provenance is a bug.
+  A number with no provenance is a bug. Do not replace specific warnings with a generic success badge.
 - Outlier and low-confidence rows are visually distinct at a glance, using the
   flag tokens above, and are sortable to the top.
 - Anything that spends money or publishes a listing confirms first and says what

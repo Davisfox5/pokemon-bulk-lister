@@ -19,7 +19,8 @@ async function loadSummary() {
   const t = data.totals;
   $("#t-value").textContent = fmtUsd(t.value);
   $("#t-cards").textContent = t.card_count;
-  $("#t-cards-sub").textContent = `${t.priced_count} of ${t.item_count} cards priced`;
+  $("#t-cards-sub").textContent = !t.item_count ? "Ready for your first card"
+    : t.priced_count === t.item_count ? "All cards priced" : `${t.item_count - t.priced_count} ${t.item_count - t.priced_count === 1 ? "price" : "prices"} missing`;
   $("#t-cost").textContent = fmtUsd(t.cost_basis);
   const costSub = $("#t-cost-sub");
   if (t.cost_basis && t.value != null) {
@@ -32,9 +33,9 @@ async function loadSummary() {
   }
   $("#alerts-unread").textContent = t.unread_alerts ? `(${t.unread_alerts} unread)` : "";
   const sched = data.scheduler || {};
-  $("#t-value-sub").textContent = sched.last_cycle_at
-    ? `prices checked ${ago(sched.last_cycle_at)}`
-    : "Using the latest saved prices";
+  $("#t-value-sub").textContent = data.items.some(it => it.provenance?.estimate)
+    ? "Includes your spreadsheet estimates"
+    : sched.last_cycle_at ? `Updated ${ago(sched.last_cycle_at)}` : "Latest saved prices";
 
   lib.items = data.items;
   for (const id of [...lib.selected]) if (!lib.items.some((i) => i.id === id)) lib.selected.delete(id);
@@ -118,9 +119,9 @@ function renderHave() {
   $("#lib-count").textContent = lib.items.length
     ? `${rows.length} of ${lib.items.length} cards` : "";
   if (!lib.items.length) {
-    body.innerHTML = `<tr><td colspan="9" class="empty">No cards yet. Add photos on <a href="/">Scan</a>, or import a list you already have.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="empty"><strong>Your collection starts here.</strong><p>Add photos or import a card list.</p><a class="btn" href="/">Scan photos</a></td></tr>`;
   } else if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="9" class="empty">No cards match these filters.</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" class="empty"><p>No matching cards.</p><button class="btn" data-act="clear-filters">Clear filters</button></td></tr>';
   } else {
     body.innerHTML = rows.map(haveRow).join("");
   }
@@ -134,9 +135,8 @@ function haveRow(it) {
   const listing = lib.listings[it.id];
   const sellCell = listing
     ? `<span class="listed">Listed ${fmtUsd(listing.price)}</span>
-       <button class="btn btn-ghost" data-act="reprice" title="Change the asking price">Reprice</button>
-       <button class="btn btn-ghost" data-act="unlist" title="Take the listing down">Unlist</button>`
-    : `<button class="btn btn-primary" data-act="sell" title="List on the marketplace">Sell</button>`;
+       <button class="btn btn-ghost" data-act="reprice" title="Change the asking price">Edit price</button>`
+    : `<button class="btn" data-act="sell" title="List on the marketplace">List for sale</button>`;
   return `<tr data-id="${it.id}" class="${it.provenance.flagged ? "flag" : ""}">
     <td class="sel"><input type="checkbox" data-act="select" ${lib.selected.has(it.id) ? "checked" : ""}
         ${listing ? "disabled" : ""} aria-label="Select ${esc(it.name)}"></td>
@@ -154,10 +154,15 @@ function haveRow(it) {
     <td>
       <div class="row-actions">
         ${sellCell}
-        <button class="btn btn-ghost" data-act="sold" title="Record a sale made somewhere else">Mark sold</button>
-        ${ebayStatus.authorized
-          ? '<button class="btn btn-ghost" data-act="ebay" title="List on your eBay account">eBay</button>' : ""}
-        <button class="btn btn-ghost" data-act="remove" title="Remove from library (not a sale)" aria-label="Remove">✕</button>
+        <details class="row-more">
+          <summary class="btn btn-ghost" aria-label="More actions for ${esc(it.name)}">More</summary>
+          <div class="menu-actions">
+            ${listing ? '<button class="btn btn-ghost" data-act="unlist">Unlist</button>' : ""}
+            <button class="btn btn-ghost" data-act="sold">Record sale</button>
+            ${ebayStatus.authorized ? '<button class="btn btn-ghost" data-act="ebay">List on eBay</button>' : ""}
+            <button class="btn btn-ghost" data-act="remove">Remove from library</button>
+          </div>
+        </details>
       </div>
     </td>
   </tr>`;
@@ -286,11 +291,24 @@ const itemById = (id) => lib.items.find((i) => i.id === Number(id));
 
 $("#inv-body").addEventListener("click", async (e) => {
   const el = e.target.closest("[data-act]");
+  if (el?.dataset.act === "clear-filters") {
+    $("#lib-search").value = "";
+    $("#lib-flagged").checked = false;
+    $("#lib-unlisted").checked = false;
+    renderLibrary();
+    $("#lib-search").focus();
+    return;
+  }
   const row = e.target.closest("tr[data-id]");
   if (!el || !row) return;
   const item = itemById(row.dataset.id);
   if (!item) return;
   const act = el.dataset.act;
+  const menu = el.closest("details.row-more");
+  if (menu) {
+    menu.open = false;
+    menu.querySelector("summary").focus();
+  }
   try {
     if (act === "select") {
       if (el.checked) lib.selected.add(item.id); else lib.selected.delete(item.id);
@@ -487,6 +505,15 @@ const ADD_INTRO = $("#add-intro").innerHTML;
 function openAddDialog(target = null) {
   const form = $("#add-form");
   form.reset();
+  suggestions = [];
+  chosenSuggestionName = null;
+  suggestRequest++;
+  clearTimeout(suggestTimer);
+  $("#add-suggestions").innerHTML = "";
+  $("#add-match").textContent = "";
+  $("#add-card-details").open = false;
+  $("#add-purchase-details").open = false;
+  $("#add-purchase-details").classList.toggle("hidden", !!target);
   assignTarget = target;
   $("#add-title").textContent = target ? "Which card is this?" : "Add a card";
   $("#add-intro").innerHTML = target
@@ -503,8 +530,12 @@ $("#btn-add").addEventListener("click", () => openAddDialog());
 
 let suggestTimer = null;
 let suggestions = [];
+let suggestRequest = 0;
+let chosenSuggestionName = null;
 $("#add-form").name.addEventListener("input", (e) => {
   const q = e.target.value.trim();
+  const request = ++suggestRequest;
+  clearTimeout(suggestTimer);
   // Picking a suggestion fills in the printing details.
   const hit = suggestions.find((c) => suggestionLabel(c) === q);
   if (hit) {
@@ -515,21 +546,35 @@ $("#add-form").name.addEventListener("input", (e) => {
     form.card_number.value = hit.card_number || "";
     form.is_holo.checked = !!hit.is_holo;
     form.printing.value = hit.printing || (hit.is_holo ? "holofoil" : "normal");
+    chosenSuggestionName = hit.name;
+    $("#add-match").textContent = suggestionLabel(hit);
+    $("#add-card-details").open = false;
     return;
   }
-  clearTimeout(suggestTimer);
+  $("#add-match").textContent = "";
+  if (chosenSuggestionName && q !== chosenSuggestionName) {
+    const form = $("#add-form");
+    for (const key of ["set_name", "set_code", "card_number"]) form[key].value = "";
+    form.printing.value = "unknown";
+    form.is_holo.checked = false;
+    chosenSuggestionName = null;
+  }
   if (q.length < 2) return;
   suggestTimer = setTimeout(async () => {
     try {
-      suggestions = (await api(`/api/catalog/search?q=${encodeURIComponent(q)}`)).cards;
+      const found = (await api(`/api/catalog/search?q=${encodeURIComponent(q)}`)).cards;
+      if (request !== suggestRequest) return;
+      suggestions = found;
       $("#add-suggestions").innerHTML = suggestions
         .map((c) => `<option value="${esc(suggestionLabel(c))}">`).join("");
     } catch { /* suggestions are optional */ }
   }, 200);
 });
-const suggestionLabel = (c) =>
-  [c.name, c.set_name || c.set_code, c.card_number ? "#" + c.card_number : "", c.is_holo ? "holo" : ""]
-    .filter(Boolean).join(" · ");
+const suggestionLabel = (c) => {
+  const finish = { normal: "Non-holo", holofoil: "Holo", reverseHolofoil: "Reverse holo", unknown: "Finish not checked" };
+  return [c.name, c.set_name || c.set_code, c.card_number ? "#" + c.card_number : "",
+    finish[c.printing || (c.is_holo ? "holofoil" : "normal")]].filter(Boolean).join(" · ");
+};
 
 $("#add-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -792,13 +837,43 @@ $("#li-unmatched").addEventListener("click", async (e) => {
 
 /* ---------------- import from the scan bench ---------------- */
 
+let scannedCardIds = [];
+async function loadScannedChoice() {
+  const btn = $("#btn-promote");
+  btn.disabled = true;
+  btn.classList.add("hidden");
+  try {
+    const data = await api("/api/cards");
+    // The server checks the complete owner-scoped history, including scans
+    // sold or removed since import; the activity panel only loads recent events.
+    scannedCardIds = data.cards.filter(c => c.name && c.final_price != null && !c.in_library && !c.sold).map(c => c.id);
+    btn.textContent = `Add ${scannedCardIds.length} scanned card${scannedCardIds.length === 1 ? "" : "s"}`;
+    btn.classList.toggle("hidden", scannedCardIds.length === 0);
+    btn.disabled = scannedCardIds.length === 0;
+  } catch {
+    // Scan may be unavailable to this account; the other add paths remain.
+    scannedCardIds = [];
+  }
+}
+
+$("#add-menu").addEventListener("toggle", () => {
+  if ($("#add-menu").open) loadScannedChoice();
+});
+$("#add-menu").addEventListener("click", e => {
+  if (!e.target.closest("button, a")) return;
+  $("#add-menu").open = false;
+  $("#add-menu > summary").focus();
+}, true);
+
 $("#btn-promote").addEventListener("click", async () => {
   const btn = $("#btn-promote");
   btn.disabled = true;
   try {
-    const res = await postJson("/api/inventory/promote", { all_priced: true });
+    const res = await postJson("/api/inventory/promote", { card_ids: scannedCardIds });
     toast(`Imported ${res.promoted} scanned card${res.promoted === 1 ? "" : "s"}` +
       (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already imported)` : "") + ".");
+    scannedCardIds = [];
+    btn.classList.add("hidden");
     refreshAll();
   } catch (err) {
     toast(err.message === "no matching bench cards"
@@ -1101,7 +1176,13 @@ async function loadMarket() {
     </li>`);
   }
   $("#market-list").innerHTML = rows.join("") ||
-    '<li class="muted">No active listings or open orders. Click “Sell” on a card, or browse the <a href="/market">marketplace</a>.</li>';
+    '<li class="muted">No open listings or orders. <a href="/market">Browse cards for sale</a>.</li>';
+  $("#orders-count").textContent = rows.length || "";
+  const orders = $("#orders-panel");
+  if (!orders.dataset.loaded) {
+    orders.open = rows.length > 0 || !!hasMoney;
+    orders.dataset.loaded = "true";
+  }
 }
 
 $("#market-list").addEventListener("click", async (e) => {
@@ -1178,6 +1259,7 @@ async function loadEbayStatus() {
 $("#btn-advanced").addEventListener("click", () => {
   const panel = $("#advanced-panel");
   panel.classList.toggle("hidden");
+  $("#btn-advanced").setAttribute("aria-expanded", !panel.classList.contains("hidden"));
   if (!panel.classList.contains("hidden")) {
     loadEbayStatus();
     panel.scrollIntoView({ behavior: "smooth", block: "start" });
