@@ -45,9 +45,11 @@
     <section class="panel" id="library">
       <div class="panel-head">
         <div class="tabs" role="tablist" aria-label="Library">
-          <button class="tab active" role="tab" data-tab="have">My cards <span id="n-have" class="count"></span></button>
+          <button class="tab active" role="tab" data-tab="have" title="Cards you still hold">Unsold <span id="n-have" class="count"></span></button>
+          <button class="tab" role="tab" data-tab="review" title="Unsold cards whose price needs review">Needs review <span id="n-review" class="count"></span></button>
           <button class="tab" role="tab" data-tab="sold">Sold <span id="n-sold" class="count"></span></button>
           <button class="tab" role="tab" data-tab="purchased">Purchased <span id="n-purchased" class="count"></span></button>
+          <button class="tab" role="tab" data-tab="insights" title="What sells, where, and how fast">Insights</button>
           <button class="tab" role="tab" data-tab="activity" title="Every card added, bought, sold or removed">Activity</button>
         </div>
         <details class="add-menu" id="add-menu">
@@ -104,6 +106,7 @@
           <tbody id="ledger-body"></tbody>
         </table>
       </div>
+      <div id="insights" class="insights hidden"></div>
     </section>
 
     <!-- Open listings and orders that need an action -->
@@ -333,7 +336,7 @@
     <p><button type="button" class="btn btn-ghost hidden" id="btn-drive-disconnect">Disconnect Google Drive</button></p>
     <input id="li-file" type="file" accept=".csv,text/csv" hidden>
     <div id="li-unmatched-wrap" class="hidden">
-      <h2 style="margin-top:14px">Needs a look <span id="li-unmatched-count" class="count"></span>
+      <h2 style="margin-top:14px">Needs review <span id="li-unmatched-count" class="count"></span>
         <button class="btn btn-ghost" id="btn-li-rematch" title="Look the remaining titles up again">Try matching again</button></h2>
       <ul class="rules-list" id="li-unmatched"></ul>
     </div>

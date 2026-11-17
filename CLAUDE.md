@@ -3,7 +3,8 @@
 ## User instruction: keep the approved design
 
 The user approved the ivory/forest redesign on 16 November 2026 and explicitly
-asked Claude not to revert it. Preserve `design.css`, shared navigation, compact
+asked Claude not to revert it. On 17 November they asked for a livelier green and
+more dynamic, card-game styling on top of it; that is the palette below. Preserve `design.css`, shared navigation, compact
 workflows, responsive layouts, and accessibility described below unless the user
 asks for a new visual direction. Keep functional improvements, including stable
 Scan photos and automatic library saving. A deployment of this branch before it
@@ -84,8 +85,13 @@ This is a working tool for one operator, not a product surface.
   `webapp/static/design.css`, loaded after each page's structural stylesheet.
   Use its tokens rather than adding hardcoded colors. It includes a matching
   dark palette and reduced-motion support.
-- Light palette: ivory `#f5f3ed`, paper `#fffefa`, forest ink `#203b32`,
-  emerald accent `#21644b`, and restrained gold `#dfbd6c` in the brand mark.
+- Light palette (brightened 17 November 2026 at the user's ask: the forest
+  green read as dingy and hard to read): ivory `#f8f6ef`, paper `#fffefa`,
+  near-black ink `#15231c`, grass-green accent `#12814a`, gold `#f5c542`.
+  The five energy colours (`--grass`, `--fire`, `--water`, `--electric`,
+  `--psychic`, together `--energy`) carry the decoration: the bar under the
+  header, the title underline and sparks, the foil sheen on card photos. Keep
+  decoration to generic shapes; no game artwork, characters or logos.
   Red/clay surfaces are reserved for actionable review warnings.
 - System fonts, 14px body, responsive 28–36px page titles. Prices and counts use
   tabular numerals; card photos carry the visual weight.
@@ -95,6 +101,9 @@ This is a working tool for one operator, not a product surface.
   `static/common.js`. All pages, including authentication, load `design.css`.
 - Scan collapses its upload area once cards exist. Selection actions appear
   only while cards are selected. Preserve both empty and populated layouts.
+- Library tabs: Unsold, Needs review, Sold, Purchased, Insights, Activity.
+  Insights is worked out in the page from the ledger already loaded (no extra
+  request). The wording is "Needs review", never "needs a look".
 - Library keeps cards ahead of secondary dashboards. Price details and less
   frequent tools use native disclosures; keep their summary controls accessible.
 - On narrow screens, Decks switches between the list and the selected deck,

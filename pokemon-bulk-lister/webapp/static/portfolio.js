@@ -40,6 +40,7 @@ async function loadSummary() {
   lib.items = data.items;
   for (const id of [...lib.selected]) if (!lib.items.some((i) => i.id === id)) lib.selected.delete(id);
   $("#n-have").textContent = t.card_count;
+  $("#n-review").textContent = lib.items.filter((it) => it.provenance.flagged).length;
   renderLibrary();
 
   const seen = new Set();
@@ -67,7 +68,7 @@ async function loadLedger() {
   $("#t-balance-sub").textContent = t.sold_cards
     ? `${t.sold_cards} sold, after ${fmtUsd(t.sold_fees)} in fees`
     : "nothing sold yet";
-  if (lib.tab !== "have") renderLibrary();
+  if (lib.tab !== "have" && lib.tab !== "review") renderLibrary();
 }
 
 /* ---------------- library tabs ---------------- */
@@ -86,7 +87,7 @@ function matches(row, q) {
 
 function visibleItems() {
   const q = $("#lib-search").value.trim().toLowerCase();
-  const flaggedOnly = $("#lib-flagged").checked;
+  const flaggedOnly = $("#lib-flagged").checked || lib.tab === "review";
   const unlistedOnly = $("#lib-unlisted").checked;
   const rows = lib.items.filter((it) =>
     matches(it, q)
@@ -105,12 +106,99 @@ function visibleItems() {
 }
 
 function renderLibrary() {
-  const have = lib.tab === "have";
+  // "Needs review" is the unsold list narrowed to prices that need review.
+  const have = lib.tab === "have" || lib.tab === "review";
+  const insights = lib.tab === "insights";
   $("#have-table").classList.toggle("hidden", !have);
   $("#have-controls").classList.toggle("hidden", !have);
-  $("#ledger-table").classList.toggle("hidden", have);
-  $("#ledger-totals").classList.toggle("hidden", have);
-  if (have) renderHave(); else renderLedger(lib.tab);
+  $("#ledger-table").classList.toggle("hidden", have || insights);
+  $("#ledger-totals").classList.toggle("hidden", have || insights);
+  $("#insights").classList.toggle("hidden", !insights);
+  $("#lib-search").classList.toggle("hidden", insights);
+  $("#lib-flagged").closest("label").classList.toggle("hidden", lib.tab === "review");
+  $("#n-review").textContent = lib.items.filter((it) => it.provenance.flagged).length;
+  if (have) renderHave(); else if (insights) renderInsights(); else renderLedger(lib.tab);
+}
+
+/* ---------------- insights ---------------- */
+
+// Everything here is worked out from the ledger and the library already on
+// the page: no extra request. A refunded sale is not a sale.
+function renderInsights() {
+  const sold = lib.events.sold.filter((e) => !e.refunded);
+  const unsold = lib.items;
+  const qty = (rows) => rows.reduce((n, r) => n + (r.quantity || 0), 0);
+  const sum = (rows, f) => rows.reduce((n, r) => n + (f(r) || 0), 0);
+  const soldCards = qty(sold);
+  const unsoldCards = qty(unsold);
+  const gross = sum(sold, (e) => e.total);
+  const net = sum(sold, (e) => e.net);
+  const gain = sold.filter((e) => e.gain != null);
+  const unsoldValue = sum(unsold, (it) => (it.price || 0) * it.quantity);
+  const listed = qty(unsold.filter((it) => lib.listings[it.id] || (it.listed_on || []).length));
+
+  // How long a card sat before it sold: from when it entered the library.
+  const entered = {};
+  lib.events.activity.filter((e) => e.kind === "added" || e.kind === "purchased").forEach((e) => {
+    const at = Date.parse(e.occurred_at);
+    if (!(e.catalog_card_id in entered) || at < entered[e.catalog_card_id]) entered[e.catalog_card_id] = at;
+  });
+  const days = sold.map((e) => (Date.parse(e.occurred_at) - entered[e.catalog_card_id]) / 86400000)
+    .filter((d) => Number.isFinite(d) && d >= 0).sort((a, b) => a - b);
+  const median = days.length ? days[Math.floor(days.length / 2)] : null;
+
+  const group = (key) => {
+    const out = {};
+    sold.forEach((e) => {
+      const k = key(e);
+      const g = out[k] || (out[k] = { key: k, cards: 0, gross: 0, net: 0, fees: 0 });
+      g.cards += e.quantity; g.gross += e.total || 0; g.net += e.net || 0; g.fees += e.fees || 0;
+    });
+    return Object.values(out);
+  };
+  const byChannel = group((e) => CHANNELS[e.channel] || e.channel || "Other").sort((a, b) => b.net - a.net);
+  const bySet = group((e) => e.set_name || "Unknown set").sort((a, b) => b.net - a.net).slice(0, 6);
+  const byMonth = group((e) => e.occurred_at.slice(0, 7)).sort((a, b) => a.key.localeCompare(b.key)).slice(-6);
+  const bands = [["Under $1", 0, 1], ["$1 to $5", 1, 5], ["$5 to $20", 5, 20], ["$20 and up", 20, Infinity]];
+  const byBand = bands.map(([label, lo, hi]) => {
+    const rows = sold.filter((e) => (e.unit_price || 0) >= lo && (e.unit_price || 0) < hi);
+    return { key: label, cards: qty(rows), gross: sum(rows, (e) => e.total), net: sum(rows, (e) => e.net) };
+  }).filter((b) => b.cards);
+
+  const tile = (label, value, sub = "") =>
+    `<div class="insight-tile"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`;
+  const table = (title, rows, first, note = "") => {
+    if (!rows.length) return "";
+    const top = Math.max(...rows.map((r) => r.net), 0.01);
+    return `<div class="insight-block"><h3>${esc(title)}</h3><table>
+      <thead><tr><th>${esc(first)}</th><th class="num">Cards</th><th class="num">Avg. price</th><th class="num">After fees</th><th></th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${esc(r.key)}</td><td class="num">${r.cards}</td>
+        <td class="num">${fmtUsd(r.cards ? r.gross / r.cards : 0)}</td><td class="num">${fmtUsd(r.net)}</td>
+        <td><div class="insight-bar"><span style="width:${Math.max(4, Math.round((r.net / top) * 100))}%"></span></div></td></tr>`).join("")}
+      </tbody></table>${note ? `<p class="insight-note">${esc(note)}</p>` : ""}</div>`;
+  };
+
+  const total = soldCards + unsoldCards;
+  const tiles = [
+    tile("Sold", String(soldCards), soldCards ? `${fmtUsd(net)} after ${fmtUsd(gross - net)} in fees` : "nothing sold yet"),
+    tile("Unsold", String(unsoldCards), `${fmtUsd(unsoldValue)} at current prices`),
+    tile("Sell-through", total ? `${Math.round((soldCards / total) * 100)}%` : "—", `${soldCards} of ${total} cards`),
+    tile("Average sale", soldCards ? fmtUsd(gross / soldCards) : "—", "per card, before fees"),
+    tile("Days to sell", median == null ? "—" : String(Math.round(median)), median == null ? "no sales to measure" : `median, over ${days.length} sale${days.length === 1 ? "" : "s"}`),
+    tile("Listed now", String(listed), `${unsoldCards - listed} unsold cards are not listed`),
+  ];
+  if (gain.length) {
+    tiles.push(tile("Profit", fmtUsd(sum(gain, (e) => e.gain)), `on ${qty(gain)} sold cards with a known cost`));
+  }
+  $("#lib-count").textContent = "";
+  $("#insights").innerHTML = `
+    <div class="insight-tiles">${tiles.join("")}</div>
+    ${soldCards ? `<div class="insight-grid">
+      ${table("Where you sell", byChannel, "Sold on")}
+      ${table("By month", byMonth, "Month")}
+      ${table("What sells: sets", bySet, "Set", "Your six best sets by money after fees.")}
+      ${table("What sells: price", byBand, "Sale price")}
+    </div>` : `<p class="muted">Sales show up here as they are recorded: from the marketplace, from eBay once it is connected, from a Whatnot sales file, or entered by hand with “Sold elsewhere”.</p>`}`;
 }
 
 function renderHave() {
@@ -176,7 +264,7 @@ function syncSelection(rows = visibleItems()) {
   all.indeterminate = picked > 0 && picked < pickable.length;
   // The bar with what can be done to the ticked cards shows only when some are.
   const n = lib.selected.size;
-  $("#bulk-bar").classList.toggle("hidden", n === 0 || lib.tab !== "have");
+  $("#bulk-bar").classList.toggle("hidden", n === 0 || (lib.tab !== "have" && lib.tab !== "review"));
   $("#bulk-count").textContent = `${n} selected`;
   $("#btn-select-all-m").textContent = all.checked ? "Select none" : "Select all";
 }
@@ -656,13 +744,13 @@ function listingPreviewHtml(site, p) {
       <li>${p.already_imported} imported before; skipped</li>
     </ul>
     ${cardListReadHtml(p)}
-    <p class="muted small">Any listing that cannot be tied to exactly one card is kept under “Needs a look”, not added.</p>`;
+    <p class="muted small">Any listing that cannot be tied to exactly one card is kept under “Needs review”, not added.</p>`;
 }
 
 function listingResultText(site, r) {
   return `${site}: added ${r.added} ${listingNoun(site, r.added)} (${r.cards} card${r.cards === 1 ? "" : "s"})`
     + (r.linked ? `, ${r.linked} already in your library` : "")
-    + (r.unmatched ? `, ${r.unmatched} need a look` : "")
+    + (r.unmatched ? `, ${r.unmatched} need review` : "")
     + (r.updated ? `, ${r.updated} brought up to date` : "")
     + (r.duplicates - (r.updated || 0) > 0 ? `, ${r.duplicates - (r.updated || 0)} unchanged` : "") + ".";
 }
@@ -806,7 +894,7 @@ $("#btn-li-rematch").addEventListener("click", async () => {
   btn.disabled = true;
   try {
     const r = await postJson("/api/listings/external/rematch");
-    toast(`Identified ${r.added} more listing${r.added === 1 ? "" : "s"}. ${r.still_unmatched} still need a look`
+    toast(`Identified ${r.added} more listing${r.added === 1 ? "" : "s"}. ${r.still_unmatched} still need review`
       + (r.waiting ? ` (${r.waiting} not looked up yet; click again)` : "") + ".");
     await loadListingImport();
     refreshAll();
@@ -1139,7 +1227,7 @@ async function loadMarket() {
   lib.listings = {};
   for (const l of data.active_listings) lib.listings[l.inventory_item_id] = l;
   for (const id of [...lib.selected]) if (lib.listings[id]) lib.selected.delete(id);
-  if (lib.tab === "have") renderHave();
+  if (lib.tab === "have" || lib.tab === "review") renderHave();
 
   const rows = [];
   for (const l of data.active_listings) {

@@ -470,3 +470,127 @@ dialog::backdrop, .modal { background: rgb(12 28 21 / 45%); backdrop-filter: blu
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ------------------------------------------------------------------------
+   Brighter palette and energy accents (17 November 2026, at the user's ask:
+   the forest green read as dingy and hard to read, and the pages as static).
+   Ivory stays. The green is a livelier grass green, the text a near-black,
+   and the five energy colours of the card game carry the decoration. Shapes
+   are generic (dots, sparks, foil sheen): no game artwork or logos.
+   ------------------------------------------------------------------------ */
+:root {
+  --page: #f8f6ef;
+  --surface-2: #eef6ec;
+  --ink: #15231c;
+  --ink-2: #3a4d44;
+  --muted: #586860;
+  --border: #dbe5d8;
+  --accent: #12814a;
+  --accent-hover: #0d6a3c;
+  --accent-soft: #dcf5e4;
+  --button-bg: #f3f8ef;
+  --upload-back: #ecf6ea;
+  --gold: #f5c542;
+  --brand-background: #12814a;
+  --up: #12814a;
+  --ok-bg: #e2f6e7;
+  --series-1: #1e9a5a;
+  --grass: #2fb463;
+  --fire: #f0653a;
+  --water: #2f8fe0;
+  --electric: #f5c542;
+  --psychic: #a35ad6;
+  --energy: linear-gradient(90deg, var(--grass), var(--electric) 28%, var(--fire) 52%, var(--psychic) 76%, var(--water));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #101a15;
+    --surface-1: #18261f;
+    --surface-2: #203329;
+    --accent: #7fe3aa;
+    --accent-hover: #a4f0c4;
+    --accent-soft: #1f4632;
+    --primary-ink: #0b2a1a;
+    --brand-background: #1a8f55;
+    --up: #7fe3aa;
+    --series-1: #7fe3aa;
+  }
+}
+
+/* A dotted, lit corner behind the top of every page, fading into plain ivory. */
+body {
+  background-color: var(--page);
+  background-image:
+    linear-gradient(to bottom, transparent, var(--page) 460px),
+    radial-gradient(640px 320px at 100% 0, rgb(245 197 66 / 20%), transparent 70%),
+    radial-gradient(560px 300px at 0 0, rgb(47 180 99 / 16%), transparent 70%),
+    radial-gradient(circle at 1px 1px, rgb(18 129 74 / 12%) 1.2px, transparent 1.6px);
+  background-size: auto, auto, auto, 18px 18px;
+  background-repeat: no-repeat, no-repeat, no-repeat, repeat;
+}
+
+/* The five energy colours run under the header. */
+.site-header { position: relative; }
+.site-header::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 3px;
+  background: var(--energy);
+}
+
+.brand-mark {
+  background: linear-gradient(135deg, #17a05c, #0d6a3c);
+  box-shadow: 0 4px 12px rgb(18 129 74 / 28%);
+}
+
+/* Page titles carry a short energy bar and a pair of sparks. */
+.page-intro h1, .scan-intro h2 { position: relative; display: inline-block; padding-right: 34px; }
+.page-intro h1::before, .scan-intro h2::before {
+  content: "";
+  position: absolute;
+  right: 0; top: -2px;
+  width: 26px; height: 26px;
+  background: no-repeat center / contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Cpath d='M9 2l2 6 6 2-6 2-2 6-2-6-6-2 6-2z' fill='%23f5c542'/%3E%3Cpath d='M20 13l1.2 3.6 3.6 1.2-3.6 1.2L20 22.6l-1.2-3.6-3.6-1.2 3.6-1.2z' fill='%232fb463'/%3E%3C/svg%3E");
+}
+.page-intro h1::after, .scan-intro h2::after {
+  content: "";
+  display: block;
+  width: 72px; height: 4px;
+  margin-top: 8px;
+  border-radius: 4px;
+  background: var(--energy);
+}
+
+button.primary, .btn-primary {
+  background: linear-gradient(180deg, #158f52, #0f7341);
+  border-color: #0f7341;
+  box-shadow: 0 2px 0 rgb(13 106 60 / 35%), 0 6px 14px rgb(18 129 74 / 18%);
+}
+button.primary:hover, .btn-primary:hover { background: linear-gradient(180deg, #12814a, #0d6a3c); }
+button.primary:disabled, .btn-primary:disabled { box-shadow: none; }
+
+.nav-link.active { box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* Card photos lift and catch the light like foil when their row is pointed at. */
+.inv-thumb, td.thumb img { transition: transform .18s ease, box-shadow .18s ease; }
+tr:hover .inv-thumb, tr:hover td.thumb img {
+  transform: translateY(-2px) rotate(-2deg) scale(1.06);
+  box-shadow: 0 8px 18px rgb(21 35 28 / 22%), 0 0 0 2px rgb(245 197 66 / 55%);
+}
+td.thumb { position: relative; overflow: hidden; }
+td.thumb::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(115deg, transparent 35%, rgb(255 255 255 / 55%) 48%, rgb(163 90 214 / 18%) 54%, transparent 66%);
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+tr:hover td.thumb::after { transform: translateX(120%); transition: transform .7s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .inv-thumb, td.thumb img, td.thumb::after { transition: none; }
+  tr:hover .inv-thumb, tr:hover td.thumb img { transform: none; }
+  tr:hover td.thumb::after { transform: translateX(-120%); }
+}

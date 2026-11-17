@@ -415,3 +415,20 @@ dialog textarea { width: 100%; min-height: 220px; font-family: ui-monospace, "SF
   #have-table .prov { white-space: normal; overflow-wrap: anywhere; }
   #have-table .flag-note { margin-left: 0; overflow-wrap: anywhere; }
 }
+
+/* Insights: what sells, where, and how fast */
+.insights { display: grid; gap: 18px; padding: 6px 0 4px; }
+.insight-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.insight-tile { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface-1); }
+.insight-tile .label { color: var(--muted); font-size: 12px; }
+.insight-tile .value { font-size: 22px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.insight-tile .sub { color: var(--muted); font-size: 12px; }
+.insight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+.insight-block h3 { margin: 0 0 8px; font-size: 14px; color: var(--ink); }
+.insight-block table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.insight-block th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.insight-block td { padding: 6px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+.insight-block th.num, .insight-block td.num { text-align: right; }
+.insight-bar { height: 8px; border-radius: 6px; background: var(--surface-2); overflow: hidden; min-width: 60px; }
+.insight-bar span { display: block; height: 100%; border-radius: 6px; background: var(--series-1); }
+.insight-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
