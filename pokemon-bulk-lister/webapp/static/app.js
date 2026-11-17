@@ -104,6 +104,48 @@ function priceBasis(card) {
     </div></details>`;
 }
 
+const onEbay = card => !!card.ebay_listing_id && card.ebay_listing_status === "listed";
+
+// Cards live on eBay that were just changed: ask, then bring those listings
+// up to date. A listing changes only after a yes.
+async function offerEbayUpdate(ids) {
+  const live = ids.filter(id => { const c = state.cards.find(x => x.id === id); return c && onEbay(c); });
+  if (!live.length) return;
+  const { ok } = await askConfirm({
+    title: `Update ${plural(live.length, "eBay listing")}?`,
+    html: `<p>${live.length === 1 ? "This card is" : `${live.length} of these cards are`} live on eBay.
+      The ${live.length === 1 ? "listing takes" : "listings take"} the card's details, notes and price as they are now.
+      Buyers see the change right away.</p>`,
+    confirm: "Update on eBay",
+  });
+  if (!ok) return;
+  let updated = 0;
+  const failed = [];
+  try {
+    for (let i = 0; i < live.length; i += 25) {
+      const res = await api("/api/publish/ebay/revise", { method: "POST", body: JSON.stringify({ ids: live.slice(i, i + 25) }) });
+      updated += res.updated || 0;
+      failed.push(...(res.failed || []));
+    }
+    $("#upload-status").textContent = `Updated ${plural(updated, "eBay listing")}`
+      + (failed.length ? `. ${failed.length} failed: ${failed[0].error}` : ".");
+  } catch (err) {
+    $("#upload-status").textContent = `Could not update eBay: ${err.message}`;
+  }
+}
+
+// What the listing will say, written from the card's details by the server.
+async function showListingPreview(id) {
+  const box = $("#modal-listing");
+  box.textContent = "";
+  try {
+    const p = await api(`/api/cards/${id}/listing`);
+    if (state.editing !== id) return;
+    box.innerHTML = `<strong>${escapeHtml(p.title)}</strong>${escapeHtml(p.description)}`
+      + `<span class="src">${p.price == null ? "No price yet" : `Lists at ${fmt(p.price)}${p.price_is_yours ? " (your price)" : " (estimate)"}`}${p.on_ebay ? " · live on eBay" : ""}</span>`;
+  } catch { /* the preview is a convenience */ }
+}
+
 // A photo's own storage address when the server gave one: loading it
 // through this app costs a function call and a database read per photo.
 function photoSrc(card) {
@@ -135,7 +177,10 @@ function renderRow(card) {
       <td class="price">${fmt(card.tcgplayer_market)}</td>
       <td class="price">${fmt(card.cardmarket_trend_usd)}</td>
       <td class="price">${ebayCell}</td>
-      <td class="price">${state.pricing.has(card.id) ? '<span class="pricing-now">Pricing…</span>' : `<strong>${fmt(card.final_price)}</strong>${priceBasis(card)}`}</td>
+      <td class="price">${state.pricing.has(card.id) ? '<span class="pricing-now">Pricing…</span>'
+        : card.list_price != null
+          ? `<strong>${fmt(card.list_price)}</strong><span class="src your-price">Your price</span><span class="src">Estimate ${fmt(card.final_price)}</span>`
+          : `<strong>${fmt(card.final_price)}</strong>${priceBasis(card)}`}${onEbay(card) ? '<span class="src">Live on eBay</span>' : ""}</td>
       <td><span class="id-status ${card.id_confidence <= 0.6 ? 'review' : ''}">${!card.name ? 'Not identified' : card.id_confidence <= 0.6 ? 'Check ID' : card.id_confidence >= 0.97 ? 'Catalog match' : 'Check photo'}</span>
       </td>
       <td class="actions">
@@ -725,6 +770,9 @@ function openEdit(id) {
   form.is_holo.checked = !!card.is_holo;
   form.printing.value = card.printing || (card.is_holo ? "holofoil" : "normal");
   form.id_confidence.value = card.id_confidence ?? 0;
+  form.list_price.value = card.list_price ?? "";
+  form.listing_notes.value = card.listing_notes || "";
+  showListingPreview(id);
   $("#modal-confidence").textContent = `${Math.round((card.id_confidence || 0) * 100)}% identification confidence`;
 
   $("#modal-prices").innerHTML = `
@@ -765,7 +813,10 @@ async function saveEdit({ priceAfter = false } = {}) {
     is_holo: form.printing.value === "holofoil",
     printing: form.printing.value,
     id_confidence: parseFloat(form.id_confidence.value) || 0,
+    list_price: form.list_price.value.trim(),
+    listing_notes: form.listing_notes.value,
   };
+  const edited = state.editing;
   try {
     await api(`/api/cards/${state.editing}`, { method: "PATCH", body: JSON.stringify(patch) });
     state.libraryTried.delete(state.editing);
@@ -784,6 +835,7 @@ async function saveEdit({ priceAfter = false } = {}) {
     }
     closeEdit();
     await loadCards();
+    await offerEbayUpdate([edited]);
   } catch (err) {
     activeBtn.textContent = originalLabel;
     alert(`Failed: ${err.message}`);
@@ -909,6 +961,51 @@ async function chooseCard(id) {
     drawChoices({ choices: [], current: card });
     $("#choose-status").textContent = `Could not look it up: ${err.message}`;
   }
+}
+
+// ---------------------------------------------------------------- one price for many
+function closeListing() { $("#listing-modal").classList.add("hidden"); }
+
+function openListing() {
+  const ids = Array.from(state.selected);
+  if (!ids.length) return;
+  const form = $("#listing-form");
+  form.reset();
+  $("#listing-title").textContent = `Set price for ${plural(ids.length, "card")}`;
+  $("#listing-what").textContent = "Each card lists at this price in place of its estimate, on eBay and in exports.";
+  $("#listing-status").textContent = "";
+  $("#listing-modal").classList.remove("hidden");
+  form.list_price.focus();
+}
+
+function setupListing() {
+  const form = $("#listing-form");
+  $("#listing-btn").addEventListener("click", openListing);
+  $("#listing-x").addEventListener("click", closeListing);
+  $("#listing-cancel").addEventListener("click", closeListing);
+  $("#listing-modal").addEventListener("click", ev => { if (ev.target.id === "listing-modal") closeListing(); });
+  form.clear_price.addEventListener("change", () => { form.list_price.disabled = form.clear_price.checked; });
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const ids = Array.from(state.selected);
+    const body = { ids };
+    if (form.clear_price.checked) body.list_price = null;
+    else if (form.list_price.value.trim()) body.list_price = form.list_price.value.trim();
+    if (form.listing_notes.value.trim()) body.listing_notes = form.listing_notes.value;
+    if (!("list_price" in body) && !("listing_notes" in body)) {
+      $("#listing-status").textContent = "Enter a price or notes first.";
+      return;
+    }
+    try {
+      const res = await api("/api/cards/listing", { method: "POST", body: JSON.stringify(body) });
+      closeListing();
+      $("#upload-status").textContent = `Updated ${plural(res.changed, "card")}.`;
+      await loadCards();
+      await offerEbayUpdate(ids);
+    } catch (err) {
+      $("#listing-status").textContent = err.message;
+    }
+  });
 }
 
 function setupChoose() {
@@ -1313,13 +1410,26 @@ function setupPublish() {
       // Flagged prices stay off eBay unless the user opts them in, the same
       // default the library's bulk list uses.
       const clean = c.count - c.flagged;
+      // Show what a listing will say: written from the card's details, the
+      // same way for every card.
+      let sample = "";
+      const first = state.cards.find(x => x.name && (x.list_price ?? x.final_price) != null && !x.sold && !onEbay(x));
+      if (first) {
+        try {
+          const p = await api(`/api/cards/${first.id}/listing`);
+          sample = `<p class="muted small">Each listing is written from the card's details and your notes. For example:</p>
+            <div class="listing-preview"><strong>${escapeHtml(p.title)}</strong>${escapeHtml(p.description)}</div>`;
+        } catch { /* the sample is a convenience */ }
+      }
       const answer = await askConfirm({
         title: c.flagged
           ? `Publish live eBay listings for ${plural(clean, "card")}?`
           : `Publish ${plural(c.count, "live eBay listing")}?`,
         html: `<p>${plural(clean, "card")} will be listed live on your eBay account at their final
           prices, ${money(c.total - c.flagged_total)} in total. Buyers can purchase them as soon as this
-          finishes. Cards already on eBay are updated, not duplicated.</p>
+          finishes. Cards already on eBay are updated, not duplicated. A price you set yourself is used
+          in place of the estimate.</p>
+          ${sample}
           ${c.to_upload ? `<p class="muted">Card photos that are not hosted yet (${c.flagged ? `${c.to_upload_unflagged}, or ${c.to_upload} with the flagged cards` : c.to_upload}) are uploaded to Cloudinary first.</p>` : ""}
           ${leftOut}
           ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "more card")} (${money(c.flagged_total)})
@@ -1760,6 +1870,7 @@ function setupKeyboard() {
     if (ev.key === "Escape") {
       if (modal?.id === "confirm-modal") $("#confirm-cancel").click();
       else if (modal?.id === "choose-modal") closeChoose();
+      else if (modal?.id === "listing-modal") closeListing();
       else if (modal?.id === "conn-modal") closeConnections();
       else if (modal?.id === "bundle-modal") closeBundle();
       else closeEdit();
@@ -1771,6 +1882,7 @@ setupDropzone();
 setupTable();
 setupModal();
 setupChoose();
+setupListing();
 setupBundleModal();
 setupToolbar();
 setupKeyboard();

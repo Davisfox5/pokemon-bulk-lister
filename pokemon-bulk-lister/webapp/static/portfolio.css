@@ -432,3 +432,6 @@ dialog textarea { width: 100%; min-height: 220px; font-family: ui-monospace, "SF
 .insight-bar { height: 8px; border-radius: 6px; background: var(--surface-2); overflow: hidden; min-width: 60px; }
 .insight-bar span { display: block; height: 100%; border-radius: 6px; background: var(--series-1); }
 .insight-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+
+.bulk-price { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.bulk-price input { width: 110px; }

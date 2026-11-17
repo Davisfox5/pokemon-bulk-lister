@@ -69,6 +69,7 @@
 
     <div id="scan-selection" class="scan-selection hidden" role="toolbar" aria-label="Selected cards">
       <strong id="selected-count"></strong>
+      <button id="listing-btn" type="button" title="Set one price and notes for every selected card">Set price</button>
       <button id="bundle-btn" disabled>Export lot</button>
       <button id="delete-btn" disabled>Delete</button>
       <button id="clear-selection-btn" type="button">Clear</button>
@@ -179,6 +180,12 @@
           <p class="muted small">Check condition and finish against your card.</p>
           <input type="hidden" name="id_confidence" />
           <div class="prices-grid" id="modal-prices"></div>
+          <fieldset class="listing-fields">
+            <legend>Listing</legend>
+            <label>Your price <input name="list_price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Uses the estimate" /></label>
+            <label>Notes for buyers <textarea name="listing_notes" rows="2" maxlength="2000" placeholder="Shipping, condition details, anything else. Added under the card's details."></textarea></label>
+            <div id="modal-listing" class="listing-preview" aria-live="polite"></div>
+          </fieldset>
           <div class="actions">
             <button type="submit" class="primary">Save changes</button>
             <details class="editor-tools"><summary>More</summary><div class="more-tools-body">
@@ -221,6 +228,29 @@
           <button id="confirm-cancel" type="button">Cancel</button>
           <button id="confirm-ok" type="button" class="primary">Confirm</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- One price and notes for every selected card -->
+  <div id="listing-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="listing-title">
+    <div class="modal-card confirm-card">
+      <header>
+        <h2 id="listing-title">Set price</h2>
+        <button id="listing-x" aria-label="Close">×</button>
+      </header>
+      <div class="modal-body confirm-body">
+        <form id="listing-form">
+          <p id="listing-what" class="muted small"></p>
+          <label>Price for each card <input name="list_price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Leave empty to keep each card's price" /></label>
+          <label class="check"><input type="checkbox" name="clear_price" /> Go back to each card's estimate</label>
+          <label>Notes for buyers <textarea name="listing_notes" rows="3" maxlength="2000" placeholder="Leave empty to keep each card's notes"></textarea></label>
+          <p id="listing-status" class="muted small"></p>
+          <div class="actions">
+            <button id="listing-cancel" type="button">Cancel</button>
+            <button type="submit" class="primary">Apply</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>

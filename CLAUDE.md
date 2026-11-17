@@ -165,6 +165,18 @@ runtime routing audit. This section covers what the tool calls when it runs.
   `/api/inventory/promote` with `auto: true`; `catalog.AUTO_ADD_ABOVE` is the
   identification confidence it must be above). A card still marked "Check ID"
   is held for a person. `/api/cards` marks rows already added (`in_library`).
+- Listing text is never written by a model. `ebay_lister.card_title` and
+  `card_description` build it from the card's facts, then the owner's own
+  `cards.listing_notes` (shipping, condition details). Nothing is stated that
+  the owner did not say or check. `GET /api/cards/<id>/listing` previews it.
+- `cards.list_price` is the owner's own price and overrides `final_price`
+  wherever a card is listed or exported (`_cards_payload`,
+  `ebay_lister.listing_price`); a card with one is not held back as flagged.
+  `POST /api/cards/listing` sets price and notes on many cards at once; the
+  Library's bulk "List for sale" takes one `price` for all the same way.
+- Editing a card that is live on eBay offers to update the listing
+  (`POST /api/publish/ebay/revise`, `EbayLister.revise_card`: the inventory item
+  and the offer are replaced in place). A listing only changes after a yes.
 - A price is for the card's finish (`lib/printing.py`). Old sets list theirs as
   `unlimited`; a card printed in one ordinary finish takes that one; a reverse
   holo or 1st Edition price never stands in for another card

@@ -313,9 +313,115 @@ def api_get_card(card_id: int):
     return jsonify(card)
 
 
+def _listing_fields(body: dict) -> dict:
+    """The owner's own listing price and notes from a request body, checked.
+    Only the keys present are returned. A blank price means "use the
+    estimate". Raises ValueError with words for the person."""
+    out: dict[str, Any] = {}
+    if "list_price" in body:
+        raw = body.get("list_price")
+        if raw in (None, ""):
+            out["list_price"] = None
+        else:
+            try:
+                price = round(float(raw), 2)
+            except (TypeError, ValueError):
+                raise ValueError("the list price must be a number")
+            if not 0 < price <= 100000:
+                raise ValueError("the list price must be more than 0")
+            out["list_price"] = price
+    if "listing_notes" in body:
+        out["listing_notes"] = (str(body.get("listing_notes") or "").strip()[:2000]) or None
+    return out
+
+
+def _listing_preview(card: dict) -> dict:
+    """What a card would be listed as: built from its facts, no model."""
+    from lib import ebay_lister
+
+    shaped = _cards_payload([card])[0]
+    return {"title": ebay_lister.card_title(shaped), "description": ebay_lister.card_description(shaped),
+            "price": shaped["final_price"], "price_is_yours": card.get("list_price") is not None,
+            "estimate": card.get("final_price"),
+            "on_ebay": bool(card.get("ebay_listing_id")) and card.get("ebay_listing_status") == "listed"}
+
+
+@app.route("/api/cards/<int:card_id>/listing")
+def api_card_listing(card_id: int):
+    with db.connect(DB_PATH) as conn:
+        card = db.get_card(conn, card_id)
+    if not card:
+        abort(404)
+    return jsonify(_listing_preview(card))
+
+
+@app.route("/api/cards/listing", methods=["POST"])
+def api_set_listing():
+    """Set the list price and/or notes on many cards at once.
+    Body: {"ids": [..], "list_price": 1.00 | null, "listing_notes": "..."}.
+    Only the keys sent are changed; a null price goes back to the estimate."""
+    body = request.get_json(silent=True) or {}
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"error": "ids (list) required"}), 400
+    try:
+        fields = _listing_fields(body)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not fields:
+        return jsonify({"error": "list_price or listing_notes required"}), 400
+    changed, live = 0, []
+    with db.connect(DB_PATH) as conn:
+        for raw in ids:
+            card = db.update_card(conn, int(raw), fields)
+            if card:
+                changed += 1
+                if card.get("ebay_listing_id") and card.get("ebay_listing_status") == "listed":
+                    live.append(card["id"])
+    return jsonify({"changed": changed, "on_ebay": live})
+
+
+@app.route("/api/publish/ebay/revise", methods=["POST"])
+def api_revise_ebay():
+    """Bring live eBay listings up to date with their cards as they are now
+    (title, description, condition, photo, price). Body: {"ids": [..]}, at
+    most 25 a call. Cards that are not live on eBay are passed over."""
+    from lib.ebay_lister import EbayLister, EbayListingError
+    from lib.ebay_oauth import EbayUserNotAuthorized
+    from webapp import connections
+
+    ids = (request.get_json(silent=True) or {}).get("ids")
+    if not isinstance(ids, list) or not ids:
+        return jsonify({"error": "ids (list) required"}), 400
+    with db.connect(DB_PATH) as conn:
+        rows = [c for c in (db.get_card(conn, int(i)) for i in ids[:25]) if c]
+    live = [c for c in rows if c.get("ebay_listing_id") and c.get("ebay_listing_status") == "listed"]
+    if not live:
+        return jsonify({"updated": 0, "failed": [], "remaining": max(0, len(ids) - 25)})
+    try:
+        lister = EbayLister(auth=connections._ebay_auth())
+    except Exception as exc:
+        return jsonify({"error": f"eBay is not connected: {exc}"}), 409
+    updated, failed = 0, []
+    for row in live:
+        card = {**_cards_payload([row])[0], "ebay_offer_id": row.get("ebay_offer_id")}
+        try:
+            lister.revise_card(card)
+            updated += 1
+        except EbayUserNotAuthorized as exc:
+            return jsonify({"error": f"eBay is not connected: {exc}", "updated": updated}), 409
+        except EbayListingError as exc:
+            failed.append({"id": row["id"], "name": row.get("name"), "error": str(exc)[:300]})
+    return jsonify({"updated": updated, "failed": failed, "remaining": max(0, len(ids) - 25)})
+
+
 @app.route("/api/cards/<int:card_id>", methods=["PATCH"])
 def api_patch_card(card_id: int):
     patch = request.get_json(silent=True) or {}
+    try:
+        patch.update(_listing_fields(patch))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     with db.connect(DB_PATH) as conn:
         card = db.update_card(conn, card_id, patch)
     if not card:
@@ -1849,7 +1955,8 @@ def _cards_payload(cards: list[dict]) -> list[dict]:
         payload.append({
             "id": c["id"],
             "crop_path": c["crop_path"],
-            "needs_review": bool(c["needs_review"]),
+            # A price a person set does not wait on a review of the estimate.
+            "needs_review": bool(c["needs_review"]) and c.get("list_price") is None,
             "name": c["name"] or "",
             "set_name": c["set_name"] or "",
             "set_code": c["set_code"] or "",
@@ -1858,8 +1965,11 @@ def _cards_payload(cards: list[dict]) -> list[dict]:
             "is_holo": bool(c["is_holo"]),
             "printing": card_printing(c),
             "condition_guess": c["condition_guess"] or "",
-            "price": c["final_price"],
-            "final_price": c["final_price"],
+            # The owner's own price, when they set one, is the listing price.
+            "price": c.get("list_price") or c["final_price"],
+            "final_price": c.get("list_price") or c["final_price"],
+            "estimate": c["final_price"],
+            "listing_notes": c.get("listing_notes") or "",
             "tcgplayer_product_id": c["tcgplayer_product_id"],
             "image_url": c["image_url"] or "",
             "confidence": c["pricing_confidence"],

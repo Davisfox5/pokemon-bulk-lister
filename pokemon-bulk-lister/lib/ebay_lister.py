@@ -70,23 +70,52 @@ def card_title(card: dict) -> str:
     return " ".join(p for p in parts if p)[:80]
 
 
-def card_description(card: dict) -> str:
-    bits: list[str] = []
-    if card.get("name"):
-        bits.append(card["name"])
-    if card.get("set_name"):
-        bits.append(f"from {card['set_name']}")
-    if card.get("card_number"):
-        bits.append(f"(#{card['card_number']})")
-    if card.get("rarity"):
-        bits.append(f"— {card['rarity']}")
+def card_language(card: dict) -> str:
+    return "Japanese" if (card.get("set_name") or "").endswith("(Japanese)") else "English"
+
+
+def card_finish(card: dict) -> str:
     if card.get("printing") == "reverseHolofoil":
-        bits.append("Reverse Holo")
-    elif card.get("is_holo"):
-        bits.append("Holo")
-    bits.append(f"in {_condition_full(card.get('condition_guess', 'NM'))} condition.")
-    bits.append("English. Ships in a hard case.")
-    return " ".join(bits)
+        return "Reverse Holo"
+    if card.get("printing") == "unknown":
+        return ""
+    return "Holo" if card.get("is_holo") else "Non-holo"
+
+
+def card_description(card: dict) -> str:
+    """The listing description: the card's facts, then the owner's own words.
+
+    Built from the card and nothing else, so the same card always reads the
+    same. No model writes it. Nothing is promised that the owner did not say:
+    how it ships, extra notes on condition and the like go in listing_notes."""
+    head = card.get("name") or "Pokemon card"
+    where = (card.get("set_name") or "").replace("(Japanese)", "").strip()
+    if where:
+        head += f", {where}"
+    if card.get("card_number"):
+        head += f" #{card['card_number']}"
+    facts = [("Rarity", card.get("rarity") or ""), ("Finish", card_finish(card)),
+             # A condition nobody checked is not stated.
+             ("Condition", _condition_full(card["condition_guess"]) if card.get("condition_guess") else ""),
+             ("Language", card_language(card))]
+    lines = [head + ".", " | ".join(f"{k}: {v}" for k, v in facts if v) + "."]
+    notes = (card.get("listing_notes") or "").strip()
+    if notes:
+        lines.append(notes)
+    return "\n".join(lines)
+
+
+def listing_price(card: dict) -> Optional[float]:
+    """What a card lists for: the owner's own price when they set one,
+    otherwise the worked-out estimate."""
+    for key in ("list_price", "final_price", "price"):
+        try:
+            value = float(card.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
 
 
 class EbayLister:
@@ -245,7 +274,7 @@ class EbayLister:
         condition = _CONDITION_ENUM.get((card.get("condition_guess") or "NM").upper(), "LIKE_NEW")
         aspects: dict[str, list[str]] = {
             "Game": ["Pokémon TCG"],
-            "Language": ["English"],
+            "Language": [card_language(card)],
         }
         if card.get("name"):
             aspects["Card Name"] = [card["name"]]
@@ -300,9 +329,9 @@ class EbayLister:
         Raises ``EbayListingError`` on any API failure. The caller should have
         already filtered out cards without a price or an image.
         """
-        price = card.get("final_price") or card.get("price")
+        price = listing_price(card)
         if not price:
-            raise EbayListingError("card has no final_price — price it first")
+            raise EbayListingError("card has no price — price it or set a list price first")
         if not card.get("image_url"):
             raise EbayListingError("card has no image_url — push it to Cloudinary first")
 
@@ -348,6 +377,31 @@ class EbayLister:
             else None
         )
         return {"sku": sku, "offer_id": offer_id, "listing_id": listing_id, "url": item_url}
+
+    def revise_card(self, card: dict) -> dict:
+        """Bring a card's live listing up to date with the card as it is now:
+        title, description, condition, photo and price. The listing keeps its
+        id. Raises ``EbayListingError`` when the card has no live offer or
+        eBay refuses the change."""
+        price = listing_price(card)
+        if not price:
+            raise EbayListingError("card has no price — price it or set a list price first")
+        sku = self.card_sku(card)
+        offer_id = card.get("ebay_offer_id") or self._existing_offer_id(sku)
+        if not offer_id:
+            raise EbayListingError("this card has no eBay listing to update")
+        resp = self._request(
+            "PUT", f"/sell/inventory/v1/inventory_item/{sku}", json=self._inventory_item_payload(card)
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise EbayListingError(f"inventory_item failed: {resp.status_code}: {self._err(resp)}")
+        # Updating a published offer revises the live listing in place.
+        resp = self._request(
+            "PUT", f"/sell/inventory/v1/offer/{offer_id}", json=self._offer_payload(card, price)
+        )
+        if resp.status_code not in (200, 204):
+            raise EbayListingError(f"update offer failed: {resp.status_code}: {self._err(resp)}")
+        return {"sku": sku, "offer_id": offer_id, "price": round(price, 2)}
 
     def _existing_offer_id(self, sku: str) -> Optional[str]:
         resp = self._request("GET", "/sell/inventory/v1/offer", params={"sku": sku})

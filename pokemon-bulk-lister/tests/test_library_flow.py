@@ -243,6 +243,21 @@ def test_promote_from_bench_logs_added_and_does_not_reimport_sold_cards(app):
     assert (again["promoted"], again["skipped_duplicates"]) == (0, 1)
 
 
+def test_many_cards_can_be_listed_at_one_price_of_the_sellers_own(app):
+    c = _user(app, "bulk@example.com")
+    ids = [_add(c, name=f"Card {i}", set_name="Base", set_code="base1", card_number=str(i))["id"] for i in range(3)]
+    assert c.post("/api/inventory/list-for-sale", json={"item_ids": ids, "price": "nope"}).status_code == 400
+    # No market price on any of them: at market price nothing would list.
+    assert c.post("/api/inventory/list-for-sale", json={"item_ids": ids, "dry_run": True}).get_json()["to_list"] == 0
+    dry = c.post("/api/inventory/list-for-sale", json={"item_ids": ids, "price": 1, "dry_run": True}).get_json()
+    assert (dry["to_list"], dry["total"], dry["listed"]) == (3, 3.0, 0)
+    done = c.post("/api/inventory/list-for-sale", json={"item_ids": ids, "price": "1.00"}).get_json()
+    assert (done["listed"], done["total"]) == (3, 3.0)
+    assert sorted(l["price"] for l in c.get("/api/market/my").get_json()["active_listings"]) == [1.0, 1.0, 1.0]
+    again = c.post("/api/inventory/list-for-sale", json={"item_ids": ids, "price": 2}).get_json()
+    assert (again["listed"], again["skipped_already_listed"]) == (0, 3)
+
+
 def test_priced_scans_are_added_by_themselves_once_the_card_is_confirmed(app):
     with bench_db.connect(app.bench_path) as conn:
         gid = bench_db.get_or_create_grid(conn, "auto", "input/grids/auto.jpg")

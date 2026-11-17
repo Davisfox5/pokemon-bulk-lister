@@ -82,7 +82,8 @@
 
       <div id="bulk-bar" class="bulk-bar hidden" role="toolbar" aria-label="Selected cards">
         <strong id="bulk-count"></strong>
-        <button id="btn-bulk-list" class="btn btn-primary" title="List the selected cards on the marketplace at market price">List for sale</button>
+        <label class="bulk-price">Price each <input id="bulk-price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Market price" aria-label="Price for each selected card. Leave empty for market price."></label>
+        <button id="btn-bulk-list" class="btn btn-primary" title="List the selected cards on the marketplace, at the price entered or at market price">List for sale</button>
         <button id="btn-bulk-remove" class="btn" title="Remove the selected cards from your library">Remove</button>
         <button id="btn-bulk-clear" class="btn btn-ghost">Clear</button>
       </div>

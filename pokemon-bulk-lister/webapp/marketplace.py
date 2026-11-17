@@ -158,9 +158,11 @@ def list_for_sale(item_id: int):
 def bulk_list_for_sale():
     """List many cards at their current market price in one go.
 
-    Body: {"item_ids": [...], "include_flagged": bool?, "dry_run": bool?}
+    Body: {"item_ids": [...], "price": number?, "include_flagged": bool?, "dry_run": bool?}
 
-    Cards with no price, cards already listed, and (unless include_flagged)
+    With "price", every selected card lists at that one price (the seller's
+    own, so nothing is skipped for a missing or flagged market price).
+    Otherwise cards with no price, cards already listed, and (unless include_flagged)
     cards whose price is flagged for review are skipped and counted. dry_run
     returns the same counts without listing anything, so the UI can say
     exactly what is about to happen before the user confirms.
@@ -171,6 +173,11 @@ def bulk_list_for_sale():
         return jsonify({"error": "item_ids (list) required"}), 400
     include_flagged = bool(body.get("include_flagged"))
     dry_run = bool(body.get("dry_run"))
+    own_price = None
+    if body.get("price") not in (None, ""):
+        own_price = _parse_price(body.get("price"))
+        if own_price is None:
+            return jsonify({"error": "price must be a number greater than 0"}), 400
     uid = current_user_id()
     s = get_session()
     try:
@@ -185,12 +192,12 @@ def bulk_list_for_sale():
         for item in items:
             cc = item.catalog_card
             value, provenance = item_valuation(item)
-            price = _parse_price(value)
+            price = own_price if own_price is not None else _parse_price(value)
             if item.id in listed_ids:
                 out["skipped_already_listed"] += 1
             elif price is None:
                 out["skipped_no_price"] += 1
-            elif provenance["flagged"] and not include_flagged:
+            elif own_price is None and provenance["flagged"] and not include_flagged:
                 out["skipped_flagged"] += 1
             else:
                 if not dry_run:

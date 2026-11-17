@@ -524,8 +524,9 @@ $("#btn-bulk-remove").addEventListener("click", async () => {
 
 $("#btn-bulk-list").addEventListener("click", async () => {
   const item_ids = [...lib.selected];
+  const price = $("#bulk-price").value.trim() || null;      // one price for all, or market price each
   try {
-    const p = await postJson("/api/inventory/list-for-sale", { item_ids, dry_run: true });
+    const p = await postJson("/api/inventory/list-for-sale", { item_ids, price, dry_run: true });
     const skips = [
       p.skipped_no_price ? `${p.skipped_no_price} with no market price` : "",
       p.skipped_already_listed ? `${p.skipped_already_listed} already listed` : "",
@@ -536,8 +537,8 @@ $("#btn-bulk-list").addEventListener("click", async () => {
     }
     const { ok, checked } = await askConfirm({
       title: `List ${p.to_list} card${p.to_list === 1 ? "" : "s"} for sale?`,
-      html: `<p>${p.to_list} card${p.to_list === 1 ? "" : "s"} go on the marketplace at their current
-             market price, ${fmtUsd(p.total)} in total. The platform fee is ${p.fee_pct}% of each sale
+      html: `<p>${p.to_list} card${p.to_list === 1 ? "" : "s"} go on the marketplace at ${price
+             ? `${fmtUsd(Number(price))} each` : "their current market price"}, ${fmtUsd(p.total)} in total. The platform fee is ${p.fee_pct}% of each sale
              (${fmtUsd(p.fee_on_sale)} if they all sell).</p>
              ${skips.length ? `<p class="muted">Skipping ${skips.join(" and ")}.</p>` : ""}
              ${p.skipped_flagged ? `<p class="flag-note">${p.skipped_flagged} selected
@@ -547,7 +548,8 @@ $("#btn-bulk-list").addEventListener("click", async () => {
       checkbox: p.skipped_flagged ? `Also list the ${p.skipped_flagged} with prices that need review` : null,
     });
     if (!ok) return;
-    const res = await postJson("/api/inventory/list-for-sale", { item_ids, include_flagged: checked });
+    const res = await postJson("/api/inventory/list-for-sale", { item_ids, price, include_flagged: checked });
+    $("#bulk-price").value = "";
     toast(`Listed ${res.listed} card${res.listed === 1 ? "" : "s"} for ${fmtUsd(res.total)}.`);
     lib.selected.clear();
     await loadMarket();

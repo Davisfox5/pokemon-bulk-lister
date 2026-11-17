@@ -214,3 +214,73 @@ def test_a_postgres_table_from_before_gets_the_columns_added_since(bench):
         have = {r["column_name"] for r in conn.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_name = 'cards'").fetchall()}
     assert {"id_read", "printing"} <= have
+
+
+# ---------------------------------------------------------------- the owner's price and notes
+
+def test_one_price_for_many_cards_and_what_the_listing_says(bench):
+    cards, _ = add_cards(bench, 3)
+    ids = [c["id"] for c in cards]
+    with db.connect(bench.DB_PATH) as conn:
+        for cid in ids:
+            db.update_card(conn, cid, {"name": "Pikachu", "set_name": "Base", "card_number": "58", "id_confidence": 0.97})
+            db.update_card(conn, cid, {"final_price": 0.17, "pricing_confidence": 1.0, "needs_review": 1})
+    client = bench.app.test_client()
+    assert client.post("/api/cards/listing", json={"ids": ids[:2]}).status_code == 400
+    assert client.post("/api/cards/listing", json={"ids": ids[:2], "list_price": "free"}).status_code == 400
+    assert client.post("/api/cards/listing", json={"ids": ids[:2], "list_price": 0}).status_code == 400
+    res = client.post("/api/cards/listing", json={"ids": ids[:2], "list_price": "1", "listing_notes": " Ships in a sleeve. "})
+    assert res.get_json() == {"changed": 2, "on_ebay": []}
+    listed = client.get("/api/cards").get_json()["cards"]
+    assert {c["id"]: (c["list_price"], c["final_price"]) for c in listed} == {
+        ids[0]: (1.0, 0.17), ids[1]: (1.0, 0.17), ids[2]: (None, 0.17)}
+
+    preview = client.get(f"/api/cards/{ids[0]}/listing").get_json()
+    assert (preview["price"], preview["price_is_yours"], preview["estimate"]) == (1.0, True, 0.17)
+    assert preview["title"].startswith("Pikachu #58 Base") and preview["description"].endswith("Ships in a sleeve.")
+    assert client.get(f"/api/cards/{ids[2]}/listing").get_json()["price_is_yours"] is False
+
+    # What goes to eBay and into exports is the owner's price, and a price a
+    # person set is not held back for a review of the estimate.
+    with db.connect(bench.DB_PATH) as conn:
+        shaped = {c["id"]: c for c in bench._cards_payload(db.list_cards(conn, sort="oldest"))}
+    assert (shaped[ids[0]]["final_price"], shaped[ids[0]]["needs_review"]) == (1.0, False)
+    assert (shaped[ids[2]]["final_price"], shaped[ids[2]]["needs_review"]) == (0.17, True)
+
+    # Back to the estimate, and one card through the edit route.
+    assert client.post("/api/cards/listing", json={"ids": ids[:1], "list_price": None}).get_json()["changed"] == 1
+    assert client.patch(f"/api/cards/{ids[2]}", json={"list_price": "2.50"}).get_json()["list_price"] == 2.5
+    assert client.patch(f"/api/cards/{ids[2]}", json={"list_price": "-1"}).status_code == 400
+    after = {c["id"]: c["list_price"] for c in client.get("/api/cards").get_json()["cards"]}
+    assert after == {ids[0]: None, ids[1]: 1.0, ids[2]: 2.5}
+
+
+def test_editing_a_card_that_is_live_on_ebay_updates_the_listing_when_asked(bench, monkeypatch):
+    from lib import ebay_lister
+    from webapp import connections
+
+    cards, _ = add_cards(bench, 2)
+    live, not_live = cards[0]["id"], cards[1]["id"]
+    with db.connect(bench.DB_PATH) as conn:
+        for cid in (live, not_live):
+            db.update_card(conn, cid, {"name": "Pikachu", "set_name": "Base", "card_number": "58", "id_confidence": 0.97})
+            db.update_card(conn, cid, {"final_price": 0.17, "image_url": "https://img.example/p.jpg"})
+        db.update_card(conn, live, {"ebay_listing_id": "L1", "ebay_offer_id": "O1", "ebay_listing_status": "listed"})
+    sent = []
+
+    class Lister:
+        def __init__(self, auth=None):
+            pass
+
+        def revise_card(self, card):
+            sent.append((card["id"], card["final_price"], card["ebay_offer_id"]))
+            return {}
+
+    monkeypatch.setattr(ebay_lister, "EbayLister", Lister)
+    monkeypatch.setattr(connections, "_ebay_auth", lambda: object())
+    client = bench.app.test_client()
+    assert client.post("/api/cards/listing", json={"ids": [live, not_live], "list_price": 1}).get_json()["on_ebay"] == [live]
+    out = client.post("/api/publish/ebay/revise", json={"ids": [live, not_live]}).get_json()
+    assert out == {"updated": 1, "failed": [], "remaining": 0}
+    assert sent == [(live, 1.0, "O1")]                      # only the live one, at the owner's price
+    assert client.post("/api/publish/ebay/revise", json={}).status_code == 400

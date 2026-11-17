@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS cards (
 
     printing                TEXT,
     id_read                 TEXT,
+    list_price              REAL,
+    listing_notes           TEXT,
 
     -- identification (filled by you / Claude vision)
     name                    TEXT,
@@ -126,7 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_cards_name         ON cards(name);
 CARD_FIELDS = (
     "id", "grid_id", "crop_path", "row", "col",
     "name", "set_name", "set_code", "card_number", "rarity",
-    "is_holo", "printing", "id_read", "condition_guess", "id_confidence",
+    "is_holo", "printing", "id_read", "list_price", "listing_notes", "condition_guess", "id_confidence",
     "tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
     "ebay_median_30d", "ebay_max_30d", "ebay_sold_count_30d",
     "terapeak_median_usd", "terapeak_sold_count_365d",
@@ -148,6 +150,8 @@ _MIGRATIONS = (
     ("owner_id", "INTEGER"),
     ("printing", "TEXT"),
     ("id_read", "TEXT"),       # JSON: what was read off the card (printed name, total, set code)
+    ("list_price", "REAL"),    # the owner's own listing price; overrides final_price when listing
+    ("listing_notes", "TEXT"), # the owner's words added to the generated description
 )
 _GRID_MIGRATIONS = (
     ("owner_id", "INTEGER"),

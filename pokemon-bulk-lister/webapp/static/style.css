@@ -419,3 +419,12 @@ body.scan-page { padding: 0 0 48px; }
   .scan-page .toolbar-left { flex: 1 1 100%; }
   .scan-page .toolbar-right { margin-left: auto; }
 }
+
+/* Listing: the owner's price and notes, and what the listing will say */
+.listing-fields { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0 0; display: grid; gap: 8px; }
+.listing-fields legend { padding: 0 6px; color: var(--muted); font-size: 12px; }
+.listing-fields textarea, #listing-form textarea { width: 100%; font: inherit; }
+.listing-preview { background: var(--surface-2, #f3f4f6); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: pre-line; }
+.listing-preview strong { display: block; font-size: 13px; margin-bottom: 4px; }
+#listing-form { display: grid; gap: 10px; width: 100%; }
+.your-price { color: var(--accent); font-weight: 600; }
