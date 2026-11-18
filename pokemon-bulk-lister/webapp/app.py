@@ -136,6 +136,12 @@ if os.getenv("TRUST_PROXY") == "1" or SERVERLESS:
                       PREFERRED_URL_SCHEME="https")
 
 
+@app.route("/privacy")
+def privacy():
+    """The public privacy policy. No login (connections.PRIVACY_PATH)."""
+    return render_template("privacy.html")
+
+
 @app.route("/healthz")
 def healthz():
     """For a hosting platform's health check. Says nothing about the data."""

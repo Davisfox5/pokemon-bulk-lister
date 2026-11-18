@@ -84,7 +84,7 @@ def same_origin_only():
     # eBay's account deletion notices come from eBay's servers. The route
     # takes no login and ignores cookies, so a browser on another site
     # gains nothing by calling it; it checks eBay's signature instead.
-    if request.path == EBAY_DELETION_PATH:
+    if request.path in (EBAY_DELETION_PATH, PRIVACY_PATH):
         return None
     origin = request.headers.get("Origin")
     if not origin:
@@ -102,8 +102,11 @@ _PUBLIC_BENCH_PREFIXES = ("/crops/", "/output/crops/", "/static/")
 # eBay calls it with no login and checks it answers before it turns the
 # production keyset on.
 EBAY_DELETION_PATH = "/api/ebay/deletion"
+# The public privacy policy (app.privacy), which eBay and anyone else must be
+# able to read without an account.
+PRIVACY_PATH = "/privacy"
 _PUBLIC_BENCH_PATHS = ("/healthz", "/api/session", "/api/cron/daily", "/api/cron/descriptions",
-                       EBAY_DELETION_PATH)
+                       EBAY_DELETION_PATH, PRIVACY_PATH)
 
 # Bench routes that act with the install's own outside accounts (publishing,
 # the seller portals, Terapeak, Cloudinary). Under a public host these stay
