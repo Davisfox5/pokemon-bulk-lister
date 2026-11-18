@@ -39,8 +39,9 @@ def test_the_note_from_the_report_reads_plainly():
      price_notes.LOOKUP_FAILED),
     ("cardmarket bulk-floor estimate (p25 of 6 printings — conservative; verify if this could be a special print)",
      price_notes.CM_ESTIMATE),
-    ("two sources disagree >2.5x (0.40 vs 2.10); using lower",
-     "Prices disagree: One source $0.40, another $2.10."),
+    ("two sources disagree >2.5x (0.40 vs 4.10); using lower",
+     "Prices disagree: One source $0.40, another $4.10."),
+    ("two sources disagree >2.5x (0.40 vs 2.10); using lower", price_notes.CLOSE),
     ("match: no_number", price_notes.FALLBACK),
     ("From your spreadsheet", "From your spreadsheet."),
 ])
@@ -76,3 +77,52 @@ def test_an_older_disagreement_is_priced_from_the_cards_own_prices():
         "Prices disagree: TCGplayer $1.06, Cardmarket $7.06.")
     # Without both prices it stays short and general.
     assert price_notes.plain(stored, prices=[("TCGplayer", 1.06), ("Cardmarket", None)]) == price_notes.DISAGREE
+
+
+# ---------------------------------------------------------------- a few cents is not a disagreement
+
+def test_close_prices_are_averaged_not_flagged_whatever_their_ratio():
+    # 7 cents vs 30 cents is 4x apart but only 23 cents.
+    r = aggregate(tcgplayer_market=0.07, ebay_median_30d=None, ebay_max_30d=None,
+                  cardmarket_trend_usd=0.30, terapeak_median_usd=None)
+    assert (r.outlier_flag, r.needs_review, r.notes) == (False, False, "")
+    assert r.price in (0.18, 0.19) and r.sources["cardmarket_trend_usd"] == 0.30
+    # The same 4x on a card worth dollars is a real disagreement.
+    r = aggregate(tcgplayer_market=1.00, ebay_median_30d=None, ebay_max_30d=None,
+                  cardmarket_trend_usd=4.00, terapeak_median_usd=None)
+    assert r.outlier_flag and r.needs_review and r.notes.startswith("Prices disagree")
+    # Three sources: a high one only a little above the rest stays in.
+    r = aggregate(tcgplayer_market=0.10, ebay_median_30d=0.12, ebay_max_30d=None,
+                  cardmarket_trend_usd=0.90, terapeak_median_usd=None)
+    assert not r.outlier_flag and r.price == 0.12
+
+
+def test_pricing_a_card_with_close_sources_raises_no_warning(monkeypatch):
+    from webapp import app as bench
+
+    class TCG:
+        def lookup_prices(self, **kw):
+            return {"card": {"id": "t-23", "set": {"id": "t"}},
+                    "tcgplayer_market_usd": 0.07, "cardmarket_trend_eur": 0.30 / bench.EUR_USD_RATE}
+
+    class Ebay:
+        def build_query(self, **kw):
+            return "q"
+
+        def sold_stats(self, **kw):
+            return dict(median=None, max=None, count=0)
+
+    monkeypatch.setattr(bench, "get_tcg", TCG)
+    monkeypatch.setattr(bench, "get_ebay", Ebay)
+    patch = bench._price_card(dict(name="Pikachu", set_code="t", card_number="23", id_confidence=0.97))
+    assert not patch["needs_review"] and "⚠" not in (patch["pricing_notes"] or "")
+    assert patch["final_price"] in (0.18, 0.19)
+
+
+def test_an_older_note_about_a_few_cents_no_longer_says_they_disagree():
+    assert price_notes.plain("Prices disagree: TCGplayer $0.07, Cardmarket $0.30.") == price_notes.CLOSE
+    old = "⚠ TCG/CM disagree 4.3x on sv1 — variant mismatch?; match: no_number"
+    assert price_notes.plain(old, prices=[("TCGplayer", 0.07), ("Cardmarket", 0.30)]) == price_notes.CLOSE
+    # With something else to say, that is what shows.
+    assert price_notes.plain(old + "; ⚠ Matched on the name only (sv1).",
+                             prices=[("TCGplayer", 0.07), ("Cardmarket", 0.30)]) == price_notes.SET_UNCONFIRMED

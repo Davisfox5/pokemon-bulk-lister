@@ -122,6 +122,11 @@ This is a working tool for one operator, not a product surface.
   Never store or show source codes, set ids, ratios, match levels, URLs or dashes in a
   note; technical detail goes to the log. Screens show at most two sentences, through
   `price_notes.plain()`, which also rewrites notes saved by older versions.
+- Prices within `pricing.MIN_DISAGREEMENT_USD` ($2) of each other never disagree,
+  whatever their ratio (7 cents vs 30 cents is 4x but 23 cents). Every disagreement
+  check goes through `pricing.far_apart(a, b, ratio)`. Below the gap the price is the
+  median of the sources (the average of two) and the screens show "Range $0.07 to
+  $0.30" under it; nothing is flagged.
 - Outlier and low-confidence rows are visually distinct at a glance, using the
   flag tokens above, and are sortable to the top.
 - Anything that spends money or publishes a listing confirms first and says what

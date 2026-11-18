@@ -71,13 +71,18 @@ function provenanceHtml(p) {
   const basis = keys.length ? keys.map(k => SOURCE_LABELS[k]).join(" + ")
     : own ? "Your spreadsheet" : p.priced_at ? "No source prices" : "No price yet";
   const line = [basis, ago(p.priced_at)].filter(Boolean).join(" · ");
+  // Close prices are not a disagreement: show the range the price sits in.
+  const vals = keys.map(k => p.sources[k]).filter(x => x > 0);
+  const lo = vals.length > 1 ? Math.min(...vals) : 0, hi = vals.length > 1 ? Math.max(...vals) : 0;
+  const range = !p.outlier && hi - lo >= 0.01 && !/Prices disagree/i.test(p.notes || "")
+    ? `<span class="price-range">Range ${fmtUsd(lo)} to ${fmtUsd(hi)}</span>` : "";
   // Preserve the actual reason: a generic "Check" would hide a Japanese
   // proxy, a missing number or a different finish behind the same badge.
   const note = p.notes || (p.outlier ? "Prices disagree. Check the printing." : "Check the price before listing.");
   const warning = own ? "Spreadsheet estimate. Check the price." : note;
   const why = p.flagged ? `<span class="flag-note">${esc(warning)}</span>` : "";
   if (!p.priced_at && !p.notes && !keys.length) return `<span class="prov price-source-line">${esc(line)}</span>${why}`;
-  return `<span class="prov price-source-line">${esc(line)}</span>${why}
+  return `<span class="prov price-source-line">${esc(line)}</span>${range}${why}
     <details class="price-details">
       <summary>Price details</summary>
       <div class="price-detail-body">

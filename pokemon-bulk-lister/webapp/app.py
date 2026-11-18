@@ -49,7 +49,7 @@ from lib.cardmarket_client import CardmarketPriceGuide  # noqa: E402
 from lib.ebay_client import EbayAuthError, EbayClient  # noqa: E402
 from lib.printing import of as card_printing
 from lib import price_notes  # noqa: E402
-from lib.pricing import aggregate  # noqa: E402
+from lib.pricing import aggregate, far_apart  # noqa: E402
 from lib.tcgplayer_client import TCGPlayerClient  # noqa: E402
 from webapp import db  # noqa: E402
 from webapp import runtime  # noqa: E402
@@ -1092,8 +1092,9 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         if japanese:
             warnings = [price_notes.JAPANESE]
         if tcg_price and cm_usd and tcg_price > 0 and cm_usd > 0:
-            ratio = max(tcg_price, cm_usd) / min(tcg_price, cm_usd)
-            if ratio > 3.0:
+            # More than 3x apart and more than $2 apart: a few cents is not a
+            # disagreement, however large the ratio.
+            if far_apart(tcg_price, cm_usd, 3.0):
                 warnings.append(price_notes.disagree([("TCGplayer", tcg_price), ("Cardmarket", cm_usd)]))
 
     ebay_stats: dict[str, Any] = {"median": None, "max": None, "count": 0}

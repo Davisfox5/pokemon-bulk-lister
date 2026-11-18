@@ -28,6 +28,7 @@ LOOKUP_FAILED = "The price lookup failed. Try pricing again."
 CM_ESTIMATE = "Cardmarket price estimated from similar printings."
 SET_FILLED = "Set filled in from matching cards."
 FALLBACK = "Check the price before listing."
+CLOSE = "The prices are close together."
 
 # Most important first: the first one or two are what a person sees.
 _ORDER = [FINISH, JAPANESE, CHECK_ID, "disagree", SET_UNCONFIRMED, NUMBER_UNCONFIRMED,
@@ -67,6 +68,17 @@ _LEGACY = [
     (re.compile(r"disagree|variant mismatch", re.I), DISAGREE),
 ]
 _TECHNICAL = re.compile(r"[_=<>|]|https?:|pokemontcg|\bmatch:|\b\d+(\.\d+)?x\b|×")
+
+
+def _close(sentence: str, prices) -> bool:
+    """The prices named in a disagreement (or the card's own) are within the
+    minimum gap that counts as one (lib/pricing.MIN_DISAGREEMENT_USD)."""
+    from lib.pricing import MIN_DISAGREEMENT_USD
+
+    values = [_num(v) for v in re.findall(r"\$(\d[\d,]*(?:\.\d+)?)", sentence)]
+    if len(values) < 2 and prices is not None:
+        values = [v for _, v in prices if v]
+    return len(values) >= 2 and max(values) - min(values) <= MIN_DISAGREEMENT_USD
 
 
 def _num(text: str) -> float:
@@ -112,6 +124,8 @@ def plain(notes: Optional[str], shown: int = SHOWN,
         s = _sentence(fragment)
         if s == DISAGREE and prices is not None:
             s = disagree(prices)
+        if s and s.startswith("Prices disagree") and _close(s, prices):
+            s = CLOSE      # an older note about a few cents: not a disagreement
         if s and s not in found:
             found.append(s)
     # One disagreement sentence is enough; keep the one with the prices.
@@ -123,5 +137,7 @@ def plain(notes: Optional[str], shown: int = SHOWN,
         key = "disagree" if s.startswith("Prices disagree") else s
         return _ORDER.index(key) if key in _ORDER else len(_ORDER)
 
+    if len(found) > 1:
+        found = [s for s in found if s != CLOSE]
     found.sort(key=rank)
     return " ".join(found[:shown]) or FALLBACK

@@ -21,6 +21,17 @@ LOW_CONFIDENCE_THRESHOLD = 0.6
 TIGHT_SPREAD_RATIO = 0.20         # ≤ this % spread = "tight" on the relative axis
 WIDE_SPREAD_RATIO = 1.20          # ≥ this % spread = "max uncertain" on the relative axis
 ABSOLUTE_NOISE_FLOOR_USD = 2.00   # ≤ this $ spread = noise, ignore percentage entirely
+# Prices this close are never a disagreement, whatever their ratio: $0.07 vs
+# $0.30 is 4x but only 23 cents. Below it the price is the middle of the
+# sources and the screens show the range. Every disagreement check uses it.
+MIN_DISAGREEMENT_USD = ABSOLUTE_NOISE_FLOOR_USD
+
+
+def far_apart(a: float, b: float, ratio: float) -> bool:
+    """True when two prices disagree: more than `ratio` times apart AND more
+    than MIN_DISAGREEMENT_USD apart in dollars."""
+    lo, hi = min(a, b), max(a, b)
+    return lo > 0 and hi > ratio * lo and (hi - lo) > MIN_DISAGREEMENT_USD
 ABSOLUTE_REVIEW_USD = 25.00       # ≤ this $ spread = no penalty from the absolute axis
 ABSOLUTE_HIGH_USD = 100.00        # ≥ this $ spread = "max uncertain" on the absolute axis
 
@@ -49,8 +60,11 @@ def aggregate(
     """Aggregate prices from multiple sources.
 
     Rule:
+      0) Prices within MIN_DISAGREEMENT_USD ($2) of each other never
+         disagree, whatever their ratio; the price is their median (the
+         average of two) and the screens show the range.
       1) If TCGplayer and Cardmarket on the same matched card disagree by
-         >5x, treat the outlier as bad upstream data (pokemontcg.io often
+         >5x (and by more than $2), treat the outlier as bad upstream data (pokemontcg.io often
          reflects a different printing's price under one of the two fields).
          Drop the smaller source and use the other — TCGplayer market is
          usually the more trustworthy daily-updated source for US pricing.
@@ -59,8 +73,8 @@ def aggregate(
          enter the aggregate: it comes from the same 30-day comp set as
          ebay_median_30d, so counting both double-weighted eBay and biased
          the result high.
-         - With >=3 sources, a max > 2.5x median is dropped as an outlier
-           and the median re-taken over the rest.
+         - With >=3 sources, a max > 2.5x median (and more than $2 above
+           it) is dropped as an outlier and the median re-taken over the rest.
          - With exactly 2 sources disagreeing >2.5x AND by more than the
            absolute noise floor ($2), use the LOWER one (their median would
            just split the difference; over-listing eats returns,
@@ -85,8 +99,7 @@ def aggregate(
     tcg = tcgplayer_market
     cm = cardmarket_trend_usd
     if tcg and cm and tcg > 0 and cm > 0:
-        ratio = max(tcg, cm) / min(tcg, cm)
-        if ratio > 5.0:
+        if far_apart(tcg, cm, 5.0):
             # The note says what disagreed, in words a person reads
             # (lib/price_notes.py); which one was dropped shows in the price.
             data_correction_note = price_notes.disagree([("TCGplayer", tcg), ("Cardmarket", cm)])
@@ -120,17 +133,13 @@ def aggregate(
     notes = data_correction_note
     used = valid
 
-    if len(valid) >= 3 and hi > OUTLIER_MULTIPLIER * median:
+    if len(valid) >= 3 and far_apart(median, hi, OUTLIER_MULTIPLIER):
         used = sorted(valid)[:-1]
         price = statistics.median(used)
         outlier_flag = True
         extra = price_notes.HIGH_LEFT_OUT
         notes = f"{notes}; {extra}" if notes else extra
-    elif (
-        len(valid) == 2
-        and hi > OUTLIER_MULTIPLIER * lo
-        and (hi - lo) > ABSOLUTE_NOISE_FLOOR_USD  # $0.10-vs-$0.30 is noise, not an outlier
-    ):
+    elif len(valid) == 2 and far_apart(lo, hi, OUTLIER_MULTIPLIER):
         used = [lo]
         price = lo
         outlier_flag = True

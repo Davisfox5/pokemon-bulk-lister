@@ -61,6 +61,15 @@ function reviewWhy(notes) {
   return (notes || '').replace(/⚠\s*/g, '').trim() || 'Check the card, finish and price before listing.';
 }
 
+// Sources that are close (lib/pricing.MIN_DISAGREEMENT_USD) are not a
+// disagreement: the price is their middle and the range is shown with it.
+function priceRange(values, notes) {
+  const v = values.filter(x => x != null && x > 0);
+  if (v.length < 2 || /Prices disagree/i.test(notes || "")) return "";
+  const lo = Math.min(...v), hi = Math.max(...v);
+  return hi - lo >= 0.01 ? `Range ${fmt(lo)} to ${fmt(hi)}` : "";
+}
+
 function fmt(v) {
   if (v === null || v === undefined || v === "") return "—";
   if (typeof v === "number") return `$${v.toFixed(2)}`;
@@ -98,7 +107,9 @@ function priceBasis(card) {
   else if (/number/i.test(notes)) issue = "Check card number";
   if (card.final_price == null && !card.pricing_notes) return '<span class="src">Not priced yet</span>';
   const basis = sources.length ? sources.map(([name]) => name).join(" · ") : "No market source";
+  const range = priceRange(sources.map(([, value]) => value), notes);
   return `<span class="price-source-line">${escapeHtml(basis)}</span>
+    ${range ? `<span class="price-range">${escapeHtml(range)}</span>` : ""}
     ${card.needs_review ? `<span class="flag-note">${escapeHtml(issue)}</span>` : ""}
     <details class="price-details" data-detail="price"><summary>Price details</summary><div class="price-detail-body">
       ${sources.map(([name, value]) => `<span>${escapeHtml(name)} <strong>${fmt(value)}</strong></span>`).join("")}
