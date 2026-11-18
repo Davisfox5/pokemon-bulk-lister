@@ -27,7 +27,7 @@ def test_the_note_from_the_report_reads_plainly():
               "pokemontcg.io; ⚠ name-only match to swsh45 — set_code was not provided, match may not "
               "reflect the actual printing; TCG/CM disagree 6.7x on swsh45 — variant mismatch?; match: no_set")
     assert readable(price_notes.plain(stored, prices=CARD, using=1.06)) == (
-        "Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check it before listing.")
+        "Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check the set before listing.")
     # Without the card's prices, the ones the note spelled out are used.
     assert price_notes.plain(stored).startswith("Prices disagree: TCGplayer $1.06, Cardmarket $7.06.")
 

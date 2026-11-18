@@ -299,7 +299,7 @@ def test_the_scan_list_shows_an_old_price_note_in_plain_words(bench):
                                              'needs_review': True})
     client = bench.app.test_client()
     shown = client.get('/api/cards').get_json()['cards'][0]['pricing_notes']
-    assert shown == 'Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check it before listing.'
+    assert shown == 'Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check the set before listing.'
     assert client.get(f"/api/cards/{rows[0]['id']}").get_json()['pricing_notes'] == shown
     # The stored note is untouched: the review hold still reads its marker.
     with db.connect(bench.DB_PATH) as conn:

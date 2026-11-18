@@ -118,7 +118,7 @@ This is a working tool for one operator, not a product surface.
 - Every price or valuation shows where it came from and how confident it is.
   A number with no provenance is a bug. Do not replace specific warnings with a generic success badge.
 - Price notes are short plain sentences from `lib/price_notes.py` ("Prices disagree:
-  TCGplayer $1.06, Cardmarket $7.06.", "Set not confirmed. Check it before listing.").
+  TCGplayer $1.06, Cardmarket $7.06.", "Set not confirmed. Check the set before listing.").
   Never store or show source codes, set ids, ratios, match levels, URLs or dashes in a
   note; technical detail goes to the log. Screens show at most two sentences, through
   `price_notes.plain()`, which also rewrites notes saved by older versions.

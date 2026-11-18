@@ -26,8 +26,8 @@ WARN = "⚠ "
 
 FINISH = "Choose the finish (non-holo, holo or reverse holo) to price this card."
 JAPANESE = "Japanese card, priced from the English version."
-CHECK_ID = "Check that the card matches its photo."
-SET_UNCONFIRMED = "Set not confirmed. Check it before listing."
+CHECK_ID = "Check the card against the photo."
+SET_UNCONFIRMED = "Set not confirmed. Check the set before listing."
 NUMBER_UNCONFIRMED = "Card number not confirmed. Check the printing."
 DISAGREE = "Prices disagree."            # stored marker when no prices are known
 NO_PRICE = "No price found."
@@ -89,7 +89,7 @@ _TWO = re.compile(r"two sources disagree\D*[\d.]+x \(([\d.]+) vs ([\d.]+)\)")
 _LEGACY = [
     (re.compile(r"finish not checked|choose non-holo|choose the finish", re.I), FINISH),
     (re.compile(r"japanese", re.I), JAPANESE),
-    (re.compile(r"identification needs review|compare the card to its photo|matches its photo", re.I), CHECK_ID),
+    (re.compile(r"identification needs review|compare the card to its photo|matches its photo|against the photo", re.I), CHECK_ID),
     (re.compile(r"name-only match|matched on the name only|name only|set not confirmed", re.I), SET_UNCONFIRMED),
     (re.compile(r"card number was not used|card number not confirmed", re.I), NUMBER_UNCONFIRMED),
     (re.compile(r"no price sources|no price found", re.I), NO_PRICE),
