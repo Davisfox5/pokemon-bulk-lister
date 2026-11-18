@@ -343,7 +343,9 @@ def _listing_preview(card: dict) -> dict:
     return {"title": ebay_lister.card_title(shaped), "description": ebay_lister.card_description(shaped),
             "price": shaped["final_price"], "price_is_yours": card.get("list_price") is not None,
             "estimate": card.get("final_price"),
-            "on_ebay": bool(card.get("ebay_listing_id")) and card.get("ebay_listing_status") == "listed"}
+            "on_ebay": bool(card.get("ebay_listing_id")) and card.get("ebay_listing_status") == "listed",
+            "written_by": card.get("description_source"),
+            "ai_status": _descriptions.status_for(Path(card["crop_path"]).stem)}
 
 
 @app.route("/api/cards/<int:card_id>/listing")
@@ -423,9 +425,14 @@ def api_patch_card(card_id: int):
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     with db.connect(DB_PATH) as conn:
+        before = db.get_card(conn, card_id)
         card = db.update_card(conn, card_id, patch)
     if not card:
         abort(404)
+    # The change made its AI description wrong (db.update_card dropped it):
+    # the owner asked for one, so a new one is written.
+    if before and before.get("description_source") and not card.get("ai_description"):
+        _descriptions.enqueue(_cards_payload([card]))
     return jsonify(card)
 
 
@@ -1970,6 +1977,7 @@ def _cards_payload(cards: list[dict]) -> list[dict]:
             "final_price": c.get("list_price") or c["final_price"],
             "estimate": c["final_price"],
             "listing_notes": c.get("listing_notes") or "",
+            "ai_description": c.get("ai_description") or "",
             "tcgplayer_product_id": c["tcgplayer_product_id"],
             "image_url": c["image_url"] or "",
             "confidence": c["pricing_confidence"],
@@ -2210,6 +2218,7 @@ def api_publish_ebay():
     says so. skip_flagged leaves out cards whose price needs review."""
     body = request.get_json(silent=True) or {}
     skip_flagged = bool(body.get("skip_flagged"))
+    ai = bool(body.get("ai_descriptions"))
     # Required: a bare POST must never be enough to put listings live.
     try:
         expected = int(body["expected"])
@@ -2217,7 +2226,7 @@ def api_publish_ebay():
         return jsonify({"error": "expected (the number of cards you confirmed) is required; "
                                  "read it from /api/publish/status"}), 400
     if SERVERLESS:
-        return _start_sliced_ebay_publish(expected, skip_flagged)
+        return _start_sliced_ebay_publish(expected, skip_flagged, ai)
     with _publish_lock:
         if _publish_state["running"]:
             return jsonify({"error": "a publish job is already running"}), 409
@@ -2268,6 +2277,8 @@ def api_publish_ebay():
                     failures.append(failure)
                 else:
                     listed += 1
+                    if ai and not card.get("ai_description"):
+                        _descriptions.enqueue([card])
                 done += 1
                 _publish_state["progress"] = done
                 _publish_state["message"] = f"{listed} listed, {len(failures)} failed, {done}/{len(eligible)} done"
@@ -2338,10 +2349,10 @@ def _ebay_publish_set(skip_flagged: bool) -> list[dict]:
     return [c for c in eligible if not (skip_flagged and c.get("needs_review"))]
 
 
-def _start_sliced_ebay_publish(expected: int, skip_flagged: bool):
+def _start_sliced_ebay_publish(expected: int, skip_flagged: bool, ai: bool = False):
     if _job_busy(_jk(PUBLISH_JOB)):
         return jsonify({"error": "a publish job is already running"}), 409
-    state = {"running": False, "progress": 0, "total": 0, "site": "ebay", "lease": 0,
+    state = {"running": False, "progress": 0, "total": 0, "site": "ebay", "lease": 0, "ai": ai,
              "listed": 0, "failures": [], "queue": []}
     try:
         eligible = _ebay_publish_set(skip_flagged)
@@ -2394,6 +2405,8 @@ def _ebay_publish_slice(state: dict) -> None:
             state["failed"] = state.get("failed", 0) + 1
         else:
             state["listed"] += 1
+            if state.get("ai") and not card.get("ai_description"):
+                _descriptions.enqueue([card])
     state["progress"] += 1
     state["message"] = (f"{state['listed']} listed, {state.get('failed', 0)} failed, "
                         f"{state['progress']}/{state['total']} done")
@@ -2530,6 +2543,62 @@ from lib import card_catalog as _card_catalog  # noqa: E402
 _card_catalog.use_store(lambda key: runtime.state_get(f"catalog:{key}"),
                         lambda key, value: runtime.state_set(f"catalog:{key}", value))
 
+from webapp import descriptions as _descriptions  # noqa: E402
+_descriptions.use_bench(lambda: DB_PATH)
+
+
+def _pump_descriptions(flush: bool = False, seconds: float = 20.0) -> dict:
+    """Move this bench's AI descriptions along (webapp/descriptions.py), with
+    the install's eBay connection when there is one."""
+    from lib.ebay_lister import EbayLister
+    from lib.ebay_mapping import EbayMapping
+    from webapp import connections
+
+    mapping = None
+    if all(os.getenv(n) for n in ("EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET")):
+        try:
+            mapping = EbayMapping(connections._ebay_auth())   # noqa: SLF001
+        except Exception as exc:
+            print(f"[descriptions] eBay not usable: {exc}", file=sys.stderr)
+    return _descriptions.pump(
+        flush=flush, mapping=mapping, seconds=seconds,
+        shape=lambda row: _cards_payload([row])[0],
+        lister_factory=lambda: EbayLister(auth=connections._ebay_auth()))   # noqa: SLF001
+
+
+@app.route("/api/publish/descriptions", methods=["GET", "POST"])
+def api_descriptions():
+    """GET: how this bench's AI descriptions stand. POST: move them along
+    (send full eBay batches, collect finished ones, write the rest)."""
+    if request.method == "GET":
+        return jsonify(_descriptions.counts())
+    return jsonify(_pump_descriptions())
+
+
+@app.route("/api/cron/descriptions")
+def api_cron_descriptions():
+    """The second of the two daily runs (vercel.json), 12 hours after the
+    first: sends any batch of fewer than 10 that is still waiting."""
+    import hmac
+
+    secret = os.getenv("CRON_SECRET") or ""
+    sent = request.headers.get("Authorization") or ""
+    if not secret or not hmac.compare_digest(sent, f"Bearer {secret}"):
+        return jsonify({"error": "not authorized"}), 401
+    return jsonify(_flush_all_descriptions())
+
+
+def _flush_all_descriptions() -> dict:
+    out: dict[str, Any] = {}
+    for owner in _descriptions.owners_with_work():
+        db.set_owner(owner)
+        try:
+            out[str(owner)] = _pump_descriptions(flush=True, seconds=8.0)
+        except Exception as exc:
+            traceback.print_exc()
+            out[str(owner)] = {"error": str(exc)}
+    return out
+
 if SERVERLESS:
     # No process to run a timer in: the daily cron below does the refresh.
     price_scheduler.install(price_fn=_price_card)
@@ -2607,6 +2676,11 @@ def api_cron_daily():
     except Exception as exc:
         traceback.print_exc()
         out["ebay_error"] = str(exc)
+    try:
+        out["descriptions"] = _flush_all_descriptions()
+    except Exception as exc:
+        traceback.print_exc()
+        out["descriptions_error"] = str(exc)
     return jsonify(out)
 
 

@@ -457,6 +457,38 @@ class AppState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class DescriptionJob(Base):
+    """A scanned card waiting for, or given, an AI-written listing
+    description (webapp/descriptions.py). owner_id is the scan bench's owner
+    (None on a local install), sku the card's photo stem, card_id its bench
+    row. status: waiting (queued), sent (in an eBay batch, task_id), done,
+    failed. source: 'ebay' or 'ours'. use_ours: eBay could not write it, so
+    ours does. applied: the description is on the card and on its live
+    eBay listing."""
+
+    __tablename__ = "description_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(Integer)
+    sku: Mapped[str] = mapped_column(String(200), nullable=False)
+    card_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    facts: Mapped[str] = mapped_column(Text, nullable=False)
+    card: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="waiting")
+    source: Mapped[Optional[str]] = mapped_column(String(10))
+    use_ours: Mapped[bool] = mapped_column(Boolean, default=False)
+    task_id: Mapped[Optional[str]] = mapped_column(String(100))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    queued_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    done_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    applied: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+Index("idx_description_jobs_owner", DescriptionJob.owner_id, DescriptionJob.status)
+
+
 class TcgProduct(Base):
     """One row of the seller's TCGplayer pricing export, already normalised
     the way lib.tcgplayer_catalog compares them. Used on a serverless host,

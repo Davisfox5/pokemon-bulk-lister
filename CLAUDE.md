@@ -130,7 +130,11 @@ The `.claude/agents/` tiering above is **build-time** and out of scope for a
 runtime routing audit. This section covers what the tool calls when it runs.
 
 - Sign-in to the Claude API is `lib/anthropic_auth.py`: `ANTHROPIC_API_KEY` when set, otherwise keyless (Workload Identity Federation) with the host's identity token, which on Vercel arrives in the `x-vercel-oidc-token` request header.
-- One runtime LLM touchpoint: `lib/vision_identify.py`. It calls Claude vision to
+- Two runtime LLM touchpoints. `lib/listing_ai.py` writes opt-in listing
+  descriptions when eBay's own writer is not to be had: Haiku
+  (`claude-haiku-5-5`, falling back to `claude-haiku-4-5`), overridable with
+  `DESCRIPTION_MODEL`.
+- `lib/vision_identify.py`. It calls Claude vision to
   identify cards, defaults to `claude-haiku-5-5` (falling back to
   `claude-haiku-4-5` when that is refused), and is overridable with
   `VISION_MODEL`. The prompt carries the newest sets from the catalog, and the
@@ -165,10 +169,27 @@ runtime routing audit. This section covers what the tool calls when it runs.
   `/api/inventory/promote` with `auto: true`; `catalog.AUTO_ADD_ABOVE` is the
   identification confidence it must be above). A card still marked "Check ID"
   is held for a person. `/api/cards` marks rows already added (`in_library`).
-- Listing text is never written by a model. `ebay_lister.card_title` and
-  `card_description` build it from the card's facts, then the owner's own
-  `cards.listing_notes` (shipping, condition details). Nothing is stated that
-  the owner did not say or check. `GET /api/cards/<id>/listing` previews it.
+- Listing text is built from the card's facts by default: `ebay_lister.card_title`
+  and `card_description`, then the owner's own `cards.listing_notes` (shipping,
+  condition details). Nothing is stated that the owner did not say or check.
+  `GET /api/cards/<id>/listing` previews it. The title is always built.
+- AI descriptions are opt-in: an unticked "Write descriptions with AI" box in
+  the eBay publish dialog. Listings go live with the built description; each
+  card is queued in `description_jobs` (`webapp/descriptions.py`) and its AI
+  text replaces the built one on the card (`cards.ai_description`,
+  `description_source`) and on the live listing when ready. eBay's own writer
+  first (`lib/ebay_mapping.py`, the Inventory Mapping GraphQL API, scope
+  `sell.inventory.mapping`): a batch of 10 goes as soon as 10 are waiting;
+  fewer wait for the twice-daily runs (`/api/cron/daily` at 09:17 UTC and
+  `/api/cron/descriptions` at 21:17 UTC) which send whatever is waiting. After
+  20 eBay batches in a UTC day (200 cards), or when eBay refuses for the day,
+  is not connected, lacks the scope, cannot write a card or has not answered in
+  24 hours, our own writer (`lib/listing_ai.py`) writes it, silently. Ours is
+  shown recent descriptions eBay wrote, with their facts, so it reads like
+  eBay's. Only card facts go to either writer; notes are added under the
+  result, never sent. Changing which card it is drops the AI text and queues a
+  new one. The page asks the server to move them along only while eBay is
+  working on a batch.
 - `cards.list_price` is the owner's own price and overrides `final_price`
   wherever a card is listed or exported (`_cards_payload`,
   `ebay_lister.listing_price`); a card with one is not held back as flagged.

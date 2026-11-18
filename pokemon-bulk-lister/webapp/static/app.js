@@ -141,7 +141,10 @@ async function showListingPreview(id) {
   try {
     const p = await api(`/api/cards/${id}/listing`);
     if (state.editing !== id) return;
+    const who = { ebay: "Description written by eBay", ours: "Description written by AI" }[p.written_by]
+      || { waiting: "AI description on its way", sent: "eBay is writing the description" }[p.ai_status] || "";
     box.innerHTML = `<strong>${escapeHtml(p.title)}</strong>${escapeHtml(p.description)}`
+      + (who ? `<span class="src">${who}</span>` : "")
       + `<span class="src">${p.price == null ? "No price yet" : `Lists at ${fmt(p.price)}${p.price_is_yours ? " (your price)" : " (estimate)"}`}${p.on_ebay ? " · live on eBay" : ""}</span>`;
   } catch { /* the preview is a convenience */ }
 }
@@ -1405,7 +1408,7 @@ function setupPublish() {
       return;
     }
     const money = v => `$${v.toFixed(2)}`;
-    let skipFlagged = false, expected = null;
+    let skipFlagged = false, expected = null, aiDescriptions = false;
     if (site === "ebay") {
       // Flagged prices stay off eBay unless the user opts them in, the same
       // default the library's bulk list uses.
@@ -1434,11 +1437,17 @@ function setupPublish() {
           ${leftOut}
           ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "more card")} (${money(c.flagged_total)})
             ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review and will not be listed
-            unless you tick the box.</p>` : ""}`,
+            unless you tick the box.</p>` : ""}
+          <label class="check ai-desc-opt"><input type="checkbox" id="ai-desc-opt" />
+            Write descriptions with AI</label>
+          <p class="muted small">Listings go live now with the description above. With the box ticked, each
+            one switches to an AI-written description when it is ready: eBay writes them in batches of 10,
+            a few minutes after a batch fills, and any short batch goes within 12 hours. Your notes stay under it.</p>`,
         confirm: "Publish to eBay",
         checkbox: c.flagged ? `Also list the ${c.flagged} flagged` : null,
       });
       if (!answer.ok) return;
+      aiDescriptions = !!$("#ai-desc-opt")?.checked;
       skipFlagged = !answer.checked;
       expected = answer.checked ? c.count : clean;
       if (!expected) {
@@ -1459,11 +1468,11 @@ function setupPublish() {
     btn.disabled = true;
     const endpoint = site === "ebay" ? "/api/publish/ebay" : "/api/publish/portal";
     const opts = site === "ebay"
-      ? { method: "POST", body: JSON.stringify({ skip_flagged: skipFlagged, expected }) }
+      ? { method: "POST", body: JSON.stringify({ skip_flagged: skipFlagged, expected, ai_descriptions: aiDescriptions }) }
       : { method: "POST", body: JSON.stringify({ site }) };
     try {
       await api(endpoint, opts);
-      pollPublishJob();
+      pollPublishJob({ descriptions: site === "ebay" && aiDescriptions });
     } catch (err) {
       alert(err.message);
       btn.disabled = false;
@@ -1820,7 +1829,37 @@ function setupConnections() {
   });
 }
 
-async function pollPublishJob() {
+// AI descriptions: ask the server to move them along (send full batches to
+// eBay, collect what eBay has finished, write the rest), and ask again only
+// while eBay is working on some. Cards waiting for a batch to fill are left
+// to the scheduled run, so an idle page asks for nothing.
+let watchingDescriptions = null;
+async function watchDescriptions() {
+  if (watchingDescriptions) return;
+  const started = Date.now();
+  const say = s => {
+    const parts = [];
+    if (s.written_today) parts.push(`${plural(s.written_today, "AI description")} written today`);
+    if (s.at_ebay) parts.push(`${s.at_ebay} being written by eBay`);
+    if (s.waiting) parts.push(`${s.waiting} waiting for a batch`);
+    if (parts.length) $("#publish-msg").textContent = parts.join(", ") + ".";
+  };
+  const tick = async () => {
+    try {
+      const s = await api("/api/publish/descriptions", { method: "POST" });
+      say(s);
+      if (s.from_ebay || s.written_by_us) await loadCards();
+      if (s.at_ebay && Date.now() - started < 20 * 60 * 1000) {
+        watchingDescriptions = setTimeout(tick, 45000);
+        return;
+      }
+    } catch { /* the scheduled runs carry on without the page */ }
+    watchingDescriptions = null;
+  };
+  watchingDescriptions = setTimeout(tick, 0);
+}
+
+async function pollPublishJob({ descriptions = false } = {}) {
   const bar = $("#publish-bar");
   const fill = $("#publish-progress-fill");
   const msg = $("#publish-bar-msg");
@@ -1836,6 +1875,7 @@ async function pollPublishJob() {
         await loadCards();
         $("#publish-msg").textContent = status.message || "";
         ["#publish-ebay-btn", "#publish-tcg-btn", "#publish-whatnot-btn"].forEach(s => $(s).disabled = false);
+        if (descriptions) watchDescriptions();
         setTimeout(() => bar.classList.add("hidden"), 2500);
       }
     } catch {

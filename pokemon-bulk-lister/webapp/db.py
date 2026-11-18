@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS cards (
     id_read                 TEXT,
     list_price              REAL,
     listing_notes           TEXT,
+    ai_description          TEXT,
+    description_source      TEXT,
 
     -- identification (filled by you / Claude vision)
     name                    TEXT,
@@ -128,7 +130,8 @@ CREATE INDEX IF NOT EXISTS idx_cards_name         ON cards(name);
 CARD_FIELDS = (
     "id", "grid_id", "crop_path", "row", "col",
     "name", "set_name", "set_code", "card_number", "rarity",
-    "is_holo", "printing", "id_read", "list_price", "listing_notes", "condition_guess", "id_confidence",
+    "is_holo", "printing", "id_read", "list_price", "listing_notes", "ai_description", "description_source",
+    "condition_guess", "id_confidence",
     "tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
     "ebay_median_30d", "ebay_max_30d", "ebay_sold_count_30d",
     "terapeak_median_usd", "terapeak_sold_count_365d",
@@ -152,6 +155,8 @@ _MIGRATIONS = (
     ("id_read", "TEXT"),       # JSON: what was read off the card (printed name, total, set code)
     ("list_price", "REAL"),    # the owner's own listing price; overrides final_price when listing
     ("listing_notes", "TEXT"), # the owner's words added to the generated description
+    ("ai_description", "TEXT"),       # an AI-written description, when the owner asked for one
+    ("description_source", "TEXT"),   # who wrote it: 'ebay' or 'ours'
 )
 _GRID_MIGRATIONS = (
     ("owner_id", "INTEGER"),
@@ -487,7 +492,9 @@ def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any],
     if any(k in safe and safe[k] != previous.get(k) for k in identity):
         for field in ("tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
                       "ebay_median_30d", "ebay_max_30d", "terapeak_median_usd", "final_price",
-                      "tcgplayer_product_id", "tcgplayer_url", "cardmarket_url", "pricing_notes"):
+                      "tcgplayer_product_id", "tcgplayer_url", "cardmarket_url", "pricing_notes",
+                      # a description written for the old card says the wrong things
+                      "ai_description", "description_source"):
             safe.setdefault(field, None)
         for field in ("ebay_sold_count_30d", "terapeak_sold_count_365d", "pricing_confidence", "outlier_flag"):
             safe.setdefault(field, 0)

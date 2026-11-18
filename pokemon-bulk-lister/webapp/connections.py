@@ -93,7 +93,7 @@ def same_origin_only():
 # photos (the library and marketplace show them), the health check, and the
 # host's scheduled request, which carries its own secret instead of a login.
 _PUBLIC_BENCH_PREFIXES = ("/crops/", "/output/crops/", "/static/")
-_PUBLIC_BENCH_PATHS = ("/healthz", "/api/session", "/api/cron/daily")
+_PUBLIC_BENCH_PATHS = ("/healthz", "/api/session", "/api/cron/daily", "/api/cron/descriptions")
 
 # Bench routes that act with the install's own outside accounts (publishing,
 # the seller portals, Terapeak, Cloudinary). Under a public host these stay

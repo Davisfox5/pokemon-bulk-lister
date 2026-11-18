@@ -48,7 +48,11 @@ USER_SCOPES = [
 # Read-only access to the seller's orders, for reading sales back
 # (lib/ebay_orders.py). Asked for at consent time from now on.
 SALES_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly"
-CONSENT_SCOPES = USER_SCOPES + [SALES_SCOPE]
+# eBay's AI listing writer (lib/ebay_mapping.py). EBAY_MAPPING_SCOPE=0 leaves
+# it out of the consent request, for an eBay keyset that cannot grant it.
+MAPPING_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.inventory.mapping"
+CONSENT_SCOPES = USER_SCOPES + [SALES_SCOPE] + (
+    [] if os.getenv("EBAY_MAPPING_SCOPE", "1") == "0" else [MAPPING_SCOPE])
 
 
 class EbayUserAuthError(RuntimeError):

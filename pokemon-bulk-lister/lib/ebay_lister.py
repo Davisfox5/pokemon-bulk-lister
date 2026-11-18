@@ -99,6 +99,11 @@ def card_description(card: dict) -> str:
              ("Condition", _condition_full(card["condition_guess"]) if card.get("condition_guess") else ""),
              ("Language", card_language(card))]
     lines = [head + ".", " | ".join(f"{k}: {v}" for k, v in facts if v) + "."]
+    # An AI-written description (eBay's, or ours when eBay's is not to be
+    # had) takes the place of the facts when the owner asked for one.
+    written = (card.get("ai_description") or "").strip()
+    if written:
+        lines = [written]
     notes = (card.get("listing_notes") or "").strip()
     if notes:
         lines.append(notes)
@@ -116,6 +121,27 @@ def listing_price(card: dict) -> Optional[float]:
         if value > 0:
             return value
     return None
+
+
+def card_aspects(card: dict) -> dict[str, list[str]]:
+    """eBay item specifics for a card, from its facts."""
+    aspects: dict[str, list[str]] = {
+        "Game": ["Pokémon TCG"],
+        "Language": [card_language(card)],
+    }
+    if card.get("name"):
+        aspects["Card Name"] = [card["name"]]
+    if card.get("set_name"):
+        aspects["Set"] = [card["set_name"]]
+    if card.get("card_number"):
+        aspects["Card Number"] = [str(card["card_number"])]
+    if card.get("rarity"):
+        aspects["Rarity"] = [card["rarity"]]
+    if card.get("printing") == "reverseHolofoil":
+        aspects["Features"] = ["Reverse Holo"]
+    elif card.get("is_holo"):
+        aspects["Features"] = ["Holo"]
+    return aspects
 
 
 class EbayLister:
@@ -272,22 +298,7 @@ class EbayLister:
 
     def _inventory_item_payload(self, card: dict) -> dict:
         condition = _CONDITION_ENUM.get((card.get("condition_guess") or "NM").upper(), "LIKE_NEW")
-        aspects: dict[str, list[str]] = {
-            "Game": ["Pokémon TCG"],
-            "Language": [card_language(card)],
-        }
-        if card.get("name"):
-            aspects["Card Name"] = [card["name"]]
-        if card.get("set_name"):
-            aspects["Set"] = [card["set_name"]]
-        if card.get("card_number"):
-            aspects["Card Number"] = [str(card["card_number"])]
-        if card.get("rarity"):
-            aspects["Rarity"] = [card["rarity"]]
-        if card.get("printing") == "reverseHolofoil":
-            aspects["Features"] = ["Reverse Holo"]
-        elif card.get("is_holo"):
-            aspects["Features"] = ["Holo"]
+        aspects = card_aspects(card)
 
         image_urls = [card["image_url"]] if card.get("image_url") else []
         return {
