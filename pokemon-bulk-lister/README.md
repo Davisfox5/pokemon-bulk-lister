@@ -330,6 +330,27 @@ second run updates offers instead of duplicating them.
 
 `python -m webapp.setup_ebay` still does step 2 from a terminal.
 
+#### eBay account deletion notifications
+
+eBay leaves a production keyset switched off until the app answers its
+marketplace account deletion notices (or you apply for an exemption). The app
+answers them at `/api/ebay/deletion`, which needs no login:
+
+1. Set `EBAY_VERIFICATION_TOKEN` (32 to 80 letters, digits, `_` or `-`; keep
+   it secret) and `EBAY_DELETION_ENDPOINT` (the full public URL, for example
+   `https://bulk.example.com/api/ebay/deletion`). Deploy.
+2. Check it: `curl 'https://bulk.example.com/api/ebay/deletion?challenge_code=test'`
+   returns `{"challengeResponse": "..."}`.
+3. In the developer portal, **Application Keys, Notifications, Marketplace
+   Account Deletion**: enter an alert email, the same endpoint URL and the
+   same token, and save. eBay sends its challenge right away. Then **Send
+   Test Notification**.
+
+Each notice's `X-EBAY-SIGNATURE` is checked with eBay's public key (fetched
+with `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET`, cached an hour). The app keeps
+no data keyed by an eBay user, so a verified notice is acknowledged and
+logged by its notification id only.
+
 ### TCGplayer and Whatnot (CSV upload through your seller portal)
 
 Neither site has a listing API for regular sellers. The supported route is

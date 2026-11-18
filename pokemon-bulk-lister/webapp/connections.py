@@ -81,6 +81,11 @@ def same_origin_only():
         return jsonify({"error": f"host {host!r} is not allowed; add it to ALLOWED_HOSTS"}), 403
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
+    # eBay's account deletion notices come from eBay's servers. The route
+    # takes no login and ignores cookies, so a browser on another site
+    # gains nothing by calling it; it checks eBay's signature instead.
+    if request.path == EBAY_DELETION_PATH:
+        return None
     origin = request.headers.get("Origin")
     if not origin:
         return None
@@ -93,7 +98,12 @@ def same_origin_only():
 # photos (the library and marketplace show them), the health check, and the
 # host's scheduled request, which carries its own secret instead of a login.
 _PUBLIC_BENCH_PREFIXES = ("/crops/", "/output/crops/", "/static/")
-_PUBLIC_BENCH_PATHS = ("/healthz", "/api/session", "/api/cron/daily", "/api/cron/descriptions")
+# eBay's marketplace account deletion endpoint (webapp/ebay_deletion.py):
+# eBay calls it with no login and checks it answers before it turns the
+# production keyset on.
+EBAY_DELETION_PATH = "/api/ebay/deletion"
+_PUBLIC_BENCH_PATHS = ("/healthz", "/api/session", "/api/cron/daily", "/api/cron/descriptions",
+                       EBAY_DELETION_PATH)
 
 # Bench routes that act with the install's own outside accounts (publishing,
 # the seller portals, Terapeak, Cloudinary). Under a public host these stay
