@@ -25,6 +25,13 @@ How it works, all classical image processing:
    run the whole way across it, if there are any (cards lying against each
    other).
 
+A binder page is read its own way first (`_pocket_cards`): its pockets are
+dark and the cards in them bright, so each card is a bright island with dark
+all round it, which gives the card's own edge and not the pocket's. The
+islands that make a regular grid are kept, and a card the islands missed
+(glare joining it to its neighbour) is placed from the grid the others make
+(`_complete_grid`).
+
 Nothing here knows what is printed on a card. A photo with no visible
 background and no traceable outlines gives nothing to separate; callers fall
 back to a fixed grid for that.
@@ -646,6 +653,267 @@ def _fill_grid(small: np.ndarray, mask: Optional[np.ndarray], cards: list[np.nda
     return added
 
 
+# ---------------------------------------------------------------- a page of dark pockets
+
+_POCKET_CUTS = (75, 90, 105, 120)   # how bright "not pocket" is, tried in turn
+_SEEN_CUTS = tuple(range(60, 181, 15))   # wider, for choosing each card's best outline
+_POCKET_MIN = 4                     # fewer bright islands than this is not a page
+
+
+def _islands(value: np.ndarray, cut: int, frame: float, solid: float) -> list[np.ndarray]:
+    """Card-shaped bright patches with dark all round them."""
+    bright = (value > cut).astype(np.uint8) * 255
+    k = max(3, int(min(value.shape[:2]) * 0.012)) | 1
+    # Opening drops the specks of a textured pocket and thin streaks of glare.
+    bright = cv2.morphologyEx(bright, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    # Every bright patch's outer edge, including one inside a dark page that
+    # is itself inside a bright room.
+    contours, tree = cv2.findContours(bright, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    h, w = value.shape[:2]
+    out = []
+    for cnt, node in zip(contours, tree[0] if tree is not None else []):
+        if node[3] != -1:
+            continue                               # a hole's edge, not a patch's
+        area = cv2.contourArea(cnt)
+        if not _MIN_AREA * frame <= area <= 0.25 * frame:
+            continue
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if x <= 1 or y <= 1 or x + bw >= w - 1 or y + bh >= h - 1:
+            continue                               # runs off the photo: not a whole card
+        if area < solid * cv2.contourArea(cv2.convexHull(cnt)):
+            continue
+        quad = _quad_of(cnt)
+        if _is_card(quad, frame):
+            out.append(quad)
+    return out
+
+
+def _best_each(quads: list[np.ndarray]) -> list[np.ndarray]:
+    """One outline per card from several passes: the most card-shaped."""
+    kept: list[np.ndarray] = []
+    for q in sorted(quads, key=lambda q: abs(_aspect(q) - CARD_ASPECT)):
+        if not any(np.linalg.norm(_centre(q) - _centre(k)) < 0.4 * _short(k) for k in kept):
+            kept.append(q)
+    return kept
+
+
+def _grid_of(cards: list[np.ndarray]) -> Optional[tuple[np.ndarray, np.ndarray, float, float]]:
+    """(rows, cols, wide, tall) when the cards sit on a regular grid: each
+    card's row and column, and a card's size. None when they do not."""
+    centres = np.array([_centre(q) for q in cards])
+    wide = float(np.median([_sides(_portrait(q))[0] for q in cards]))
+    tall = float(np.median([_sides(_portrait(q))[1] for q in cards]))
+
+    def index(values: np.ndarray, size: float) -> Optional[np.ndarray]:
+        order = np.argsort(values)
+        idx = np.zeros(len(values), int)
+        steps = []
+        for a, b in zip(order[:-1], order[1:]):
+            gap = values[b] - values[a]
+            if gap > 0.5 * size:
+                steps.append(gap)
+        if not steps:
+            return idx
+        step = float(np.median([s for s in steps if s < 1.7 * min(steps)]))
+        line = 0
+        for a, b in zip(order[:-1], order[1:]):
+            gap = values[b] - values[a]
+            if gap > 0.5 * size:
+                line += max(1, int(round(gap / step)))
+            idx[b] = line
+        return idx
+
+    cols, rows = index(centres[:, 0], wide), index(centres[:, 1], tall)
+    if cols.max() >= _MAX_GRID or rows.max() >= _MAX_GRID:
+        return None
+    if len(set(zip(rows.tolist(), cols.tolist()))) < len(cards):
+        return None                                # two cards in one cell: not a grid
+    return rows, cols, wide, tall
+
+
+def _overlap(a: np.ndarray, b: np.ndarray) -> float:
+    """How much two outlines agree: shared area over combined area."""
+    shared, _ = cv2.intersectConvexConvex(_order(a), _order(b))
+    union = _area(a) + _area(b) - shared
+    return float(shared / union) if union > 0 else 0.0
+
+
+def _regular(quad: np.ndarray, like: np.ndarray) -> bool:
+    """A clean card outline: opposite sides alike, and shaped like `like`."""
+    q = _portrait(quad)
+    top, right = np.linalg.norm(q[1] - q[0]), np.linalg.norm(q[2] - q[1])
+    bottom, left = np.linalg.norm(q[2] - q[3]), np.linalg.norm(q[3] - q[0])
+    if min(top, bottom) < 0.9 * max(top, bottom) or min(left, right) < 0.9 * max(left, right):
+        return False
+    return abs(_aspect(quad) - _aspect(like)) <= 0.05
+
+
+def _line_meet(p1: np.ndarray, p2: np.ndarray, p3: np.ndarray, p4: np.ndarray) -> Optional[np.ndarray]:
+    d1, d2 = p2 - p1, p4 - p3
+    cross = d1[0] * d2[1] - d1[1] * d2[0]
+    if abs(cross) < 1e-6:
+        return None
+    s = ((p3[0] - p1[0]) * d2[1] - (p3[1] - p1[1]) * d2[0]) / cross
+    return p1 + s * d1
+
+
+def _snap_sides(value: np.ndarray, quad: np.ndarray, reach: float) -> np.ndarray:
+    """Move each side of an outline onto the card's real edge nearby: where
+    it is brightest just inside and darkest just outside (a card in a dark
+    pocket). A side is first moved whole, up to `reach`; then each half may
+    move a little more on its own, which straightens a slightly slanted
+    side. A side with no clear edge stays put, and a result that is no
+    longer a regular card shape is thrown away."""
+    q = _portrait(quad).astype(np.float32)
+    h, w = value.shape[:2]
+    step = max(2.0, 0.012 * float(np.linalg.norm(q[1] - q[0])))
+    halves = ((0.12, 0.45), (0.55, 0.88))                    # clear of the round corners
+
+    def contrast(points: np.ndarray, normal: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+        """For each offset along the outward normal: brightness just inside
+        minus just outside, averaged along the points."""
+        out = np.empty(len(offsets), np.float32)
+        for i, d in enumerate(offsets):
+            inner = points + normal * (d - step)
+            outer = points + normal * (d + step)
+            xi = np.clip(inner[:, 0].round().astype(int), 0, w - 1)
+            yi = np.clip(inner[:, 1].round().astype(int), 0, h - 1)
+            xo = np.clip(outer[:, 0].round().astype(int), 0, w - 1)
+            yo = np.clip(outer[:, 1].round().astype(int), 0, h - 1)
+            out[i] = float(value[yi, xi].astype(np.float32).mean() - value[yo, xo].astype(np.float32).mean())
+        return out
+
+    def best(points: np.ndarray, normal: np.ndarray, limit: float) -> float:
+        offsets = np.arange(-limit, limit + 0.5, 1.0)
+        found = contrast(points, normal, offsets)
+        i = int(np.argmax(found - 0.15 * np.abs(offsets)))   # nearer is likelier
+        return float(offsets[i]) if found[i] >= 22 else 0.0
+
+    def placed(q: np.ndarray, limit: float, split: bool) -> Optional[np.ndarray]:
+        centre = q.mean(axis=0)
+        lines = []
+        for k in range(4):
+            a, b = q[k], q[(k + 1) % 4]
+            along = b - a
+            normal = np.array([along[1], -along[0]], np.float32)
+            normal /= max(1e-6, float(np.linalg.norm(normal)))
+            if np.dot(normal, (a + b) / 2 - centre) < 0:
+                normal = -normal
+            if split:
+                ends = [a + (lo + hi) / 2 * along
+                        + normal * best(a + np.linspace(lo, hi, 14)[:, None] * along, normal, limit)
+                        for lo, hi in halves]
+            else:
+                d = best(a + np.linspace(0.12, 0.88, 28)[:, None] * along, normal, limit)
+                ends = [a + 0.25 * along + normal * d, a + 0.75 * along + normal * d]
+            lines.append((ends[0], ends[1]))
+        corners = []
+        for k in range(4):
+            meet = _line_meet(*lines[k - 1], *lines[k])
+            if meet is None:
+                return None
+            corners.append(meet)
+        return np.array(corners, np.float32)
+
+    def sound(new: Optional[np.ndarray], old: np.ndarray, least: float) -> bool:
+        return (new is not None and _overlap(new, old) >= least and _regular(new, new)
+                and _ASPECT_LO <= _aspect(new) <= _ASPECT_HI)
+
+    moved = placed(q, reach, split=False)
+    if not sound(moved, q, 0.6):
+        moved = q
+    fine = placed(moved, max(2.0, 0.25 * reach), split=True)
+    return fine if sound(fine, moved, 0.85) else moved
+
+
+def _complete_grid(small: np.ndarray, value: np.ndarray, cards: list[np.ndarray],
+                   seen: list[np.ndarray]) -> list[np.ndarray]:
+    """The cards of a page, each by its best outline, with any the islands
+    missed put in from the grid the others make. `seen` is every island
+    outline from every brightness cut, good or rough.
+
+    The found cards fix the page: a homography from grid position to photo
+    says where each card's corners should be. Each position then takes the
+    seen outline that agrees best with that (glare pulls a corner at one cut
+    and not at another), or the predicted outline itself when nothing seen
+    agrees and the spot plainly holds a card."""
+    grid = _grid_of(cards)
+    if grid is None or len(cards) < _POCKET_MIN:
+        return cards
+    rows, cols, wide, tall = grid
+    row_ids, col_ids = sorted(set(rows.tolist())), sorted(set(cols.tolist()))
+    if len(row_ids) < 2 or len(col_ids) < 2:
+        return cards
+    centres = np.array([_centre(q) for q in cards])
+    # Page coordinates: card (r, c) is centred on (c, r), half a card being
+    # (ax, ay) of the step between neighbours.
+    xs = [centres[cols == c, 0].mean() for c in col_ids]
+    ys = [centres[rows == r, 1].mean() for r in row_ids]
+    step_x = float(np.median(np.diff(xs) / np.diff(col_ids)))
+    step_y = float(np.median(np.diff(ys) / np.diff(row_ids)))
+    ax, ay = 0.5 * wide / step_x, 0.5 * tall / step_y
+    corners = np.array([[-ax, -ay], [ax, -ay], [ax, ay], [-ax, ay]], np.float32)
+    src = np.concatenate([corners + [c, r] for r, c in zip(rows, cols)]).astype(np.float32)
+    dst = np.concatenate([_portrait(q) for q in cards]).astype(np.float32)
+    H, _ = cv2.findHomography(src, dst, cv2.RANSAC, 0.08 * wide)
+    if H is None:
+        return cards
+    # Only a real page: nearly every found corner sits where the grid says.
+    back = cv2.perspectiveTransform(src.reshape(-1, 1, 2), H).reshape(-1, 2)
+    if np.percentile(np.linalg.norm(back - dst, axis=1), 80) > 0.12 * wide:
+        return cards
+
+    found = {(int(r), int(c)): q for r, c, q in zip(rows, cols, cards)}
+    h, w = value.shape[:2]
+    out = []
+    for r in range(rows.min() - 1, rows.max() + 2):
+        for c in range(cols.min() - 1, cols.max() + 2):
+            want = cv2.perspectiveTransform((corners + [c, r]).reshape(-1, 1, 2).astype(np.float32), H).reshape(4, 2)
+            mine = found.get((r, c))
+            if want.min() < 0 or want[:, 0].max() >= w or want[:, 1].max() >= h:
+                if mine is not None:
+                    out.append(mine)
+                continue
+            near = [q for q in seen if np.linalg.norm(_centre(q) - _centre(want)) < 0.3 * wide
+                    and _regular(q, want)]
+            best = max(near, key=lambda q: _overlap(q, want), default=None)
+            if best is not None and _overlap(best, want) >= 0.8:
+                out.append(best)
+            elif mine is not None:
+                out.append(mine if _overlap(mine, want) >= 0.65 else want.astype(np.float32))
+            elif rows.min() <= r <= rows.max() and cols.min() <= c <= cols.max():
+                # A hole in the page: a card is there if the spot is bright
+                # like a card and not an empty pocket.
+                mask = np.zeros((h, w), np.uint8)
+                cv2.fillConvexPoly(mask, np.int32(want), 255)
+                if float((value[mask > 0] > _POCKET_CUTS[1]).mean()) >= 0.6 and not _blank(small, want):
+                    out.append(want.astype(np.float32))
+    return out
+
+
+def _pocket_cards(small: np.ndarray, frame: float) -> list[np.ndarray]:
+    """The cards of a binder page (or any grid of cards on something dark),
+    each by its own edge. Empty when the photo is not that."""
+    value = cv2.cvtColor(cv2.GaussianBlur(small, (5, 5), 0), cv2.COLOR_BGR2HSV)[..., 2]
+    strict: list[np.ndarray] = []
+    for cut in _POCKET_CUTS:
+        strict += _islands(value, cut, frame, 0.9)
+    cards = _best_each(strict)
+    if len(cards) < _POCKET_MIN:
+        return []
+    # One size of card per photo.
+    areas = [_area(q) for q in cards]
+    mid = float(np.median(areas))
+    cards = [q for q, a in zip(cards, areas) if mid / 1.45 <= a <= mid * 1.45]
+    if len(cards) < _POCKET_MIN or _grid_of(cards) is None:
+        return []
+    # Every outline at every cut, rough ones too, for the grid to choose from.
+    seen = [q for cut in _SEEN_CUTS for q in _islands(value, cut, frame, 0.8)]
+    cards = _complete_grid(small, value, cards, seen)
+    reach = 0.14 * float(np.median([_short(q) for q in cards]))
+    return [_snap_sides(value, q, reach) for q in cards]
+
+
 def find_cards(img: np.ndarray) -> list[dict]:
     """Every card in the photo: [{"quad": 4x2 corners in the photo's own
     pixels, "row": r, "col": c}], in reading order. Empty when none is found."""
@@ -654,6 +922,20 @@ def find_cards(img: np.ndarray) -> list[dict]:
     small = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale)))) if scale < 1 else img
     frame = float(small.shape[0] * small.shape[1])
 
+    cards = _outline_cards(small, frame)
+    # A page of dark pockets is read by the cards' own bright edges, which
+    # are tighter than the pockets' outlines. It is used when it accounts
+    # for every card the outlines found (a scatter on a dark table, some
+    # cards dark-edged, is left to the outlines).
+    pocket = _pocket_cards(small, frame)
+    if pocket and len(pocket) >= len(cards):
+        cards = pocket
+    return [{"quad": (quad / scale).astype(np.float32), "row": r, "col": c}
+            for quad, r, c in _reading_order(cards)]
+
+
+def _outline_cards(small: np.ndarray, frame: float) -> list[np.ndarray]:
+    """The cards by their traced outlines (steps 1 to 5 above)."""
     outlines = _edge_quads(small, frame)
     blobs: list[np.ndarray] = []          # each separate thing on the background
     lone: list[np.ndarray] = []           # those that are one card-shaped piece
@@ -697,9 +979,7 @@ def find_cards(img: np.ndarray) -> list[dict]:
     cards = [_grow(small, q) for q in cards]
     cards = [q for q in cards if not _blank(small, q)]
     cards = _even_out(cards)
-    cards += _fill_grid(small, mask, cards)
-    return [{"quad": (quad / scale).astype(np.float32), "row": r, "col": c}
-            for quad, r, c in _reading_order(cards)]
+    return cards + _fill_grid(small, mask, cards)
 
 
 def contact_sheet(crops: list[np.ndarray], cols: int = 3) -> np.ndarray:

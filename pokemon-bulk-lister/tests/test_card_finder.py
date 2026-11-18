@@ -116,3 +116,66 @@ def test_a_card_held_in_a_hand_over_a_busy_room():
     assert _overlap(truth, found[0]["quad"], room.shape) > 0.6
     # Most of the crop is the card, not the room.
     assert cv2.contourArea(found[0]["quad"].astype(np.float32)) < 2.2 * CW * CH
+
+
+def _binder_page(seed=5, glare=True, skew=0.0):
+    """A 3x3 binder page held up in a room: black pockets larger than the
+    cards, each card sitting a little differently in its pocket, the page
+    shot at an angle, and glare joining two cards across their pockets.
+    Returns (photo, true card corners)."""
+    rng = np.random.default_rng(seed)
+    pocket_w, pocket_h = CW + 70, CH + 60
+    page_w, page_h = 3 * pocket_w + 60, 3 * pocket_h + 60
+    page = np.full((page_h, page_w, 3), (34, 32, 36), np.uint8)
+    page = np.clip(page + rng.normal(0, 5, page.shape), 0, 255).astype(np.uint8)
+    for k in range(1, 3):                                     # pocket seams
+        cv2.line(page, (30 + k * pocket_w, 20), (30 + k * pocket_w, page_h - 20), (70, 70, 74), 3)
+        cv2.line(page, (20, 30 + k * pocket_h), (page_w - 20, 30 + k * pocket_h), (70, 70, 74), 3)
+    corners = []
+    for r in range(3):
+        for c in range(3):
+            x = 30 + c * pocket_w + (pocket_w - CW) // 2 + int(rng.integers(-18, 19))
+            y = 30 + r * pocket_h + (pocket_h - CH) // 2 + int(rng.integers(-14, 15))
+            card = _card(rng)
+            card[:13], card[-13:], card[:, :13], card[:, -13:] = (205, 208, 212), (205, 208, 212), (205, 208, 212), (205, 208, 212)
+            page[y:y + CH, x:x + CW] = card
+            corners.append(np.array([[x, y], [x + CW, y], [x + CW, y + CH], [x, y + CH]], np.float32))
+    if glare:                                                 # a streak across the top two right-hand pockets
+        x0, y0 = int(corners[1][1][0]) - 20, int(corners[1][0][1]) + 30
+        cv2.rectangle(page, (x0, y0), (int(corners[2][0][0]) + 40, y0 + 60), (215, 215, 220), -1)
+    # The page in a room, shot at an angle.
+    width, height = page_w + 500, page_h + 560
+    room = np.full((height, width, 3), (188, 196, 204), np.uint8)
+    room[height - 220:] = (150, 150, 158)
+    room = np.clip(room + rng.normal(0, 6, room.shape), 0, 255).astype(np.uint8)
+    src = np.array([[0, 0], [page_w, 0], [page_w, page_h], [0, page_h]], np.float32)
+    dst = np.array([[250 + skew, 260], [250 + page_w, 260 + skew], [250 + page_w - skew, 260 + page_h],
+                    [250, 260 + page_h - skew]], np.float32)
+    m = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(page, m, (width, height))
+    mask = cv2.warpPerspective(np.full((page_h, page_w), 255, np.uint8), m, (width, height))
+    room[mask > 127] = warped[mask > 127]
+    truth = [cv2.perspectiveTransform(q.reshape(-1, 1, 2), m).reshape(4, 2) for q in corners]
+    return room, truth
+
+
+@pytest.mark.parametrize("glare,skew", [(False, 0.0), (True, 0.0), (True, 60.0)])
+def test_a_binder_page_gives_every_card_by_its_own_edge_not_its_pocket(glare, skew):
+    photo, truth = _binder_page(glare=glare, skew=skew)
+    found = card_finder.find_cards(photo)
+    assert len(found) == 9
+    for corners in truth:
+        # Tight on the card: a pocket's outline would overlap far less.
+        assert max(_overlap(corners, f["quad"], photo.shape) for f in found) > 0.9
+    centres = [f["quad"].mean(axis=0) for f in found]
+    assert [(f["row"], f["col"]) for f in found] == [(r, c) for r in range(3) for c in range(3)]
+    assert centres[0][0] < centres[1][0] < centres[2][0] and centres[0][1] < centres[3][1] < centres[6][1]
+
+
+def test_an_empty_pocket_is_not_filled_in():
+    photo, truth = _binder_page(glare=False)
+    hole = truth[4]
+    cv2.fillPoly(photo, [np.int32(hole + [[-6, -6], [6, -6], [6, 6], [-6, 6]])], (34, 32, 36))
+    found = card_finder.find_cards(photo)
+    assert len(found) == 8
+    assert max(_overlap(hole, f["quad"], photo.shape) for f in found) < 0.2
