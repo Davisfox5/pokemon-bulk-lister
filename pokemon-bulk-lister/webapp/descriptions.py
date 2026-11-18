@@ -267,7 +267,7 @@ def pump(*, flush: bool = False, mapping: Any = None, writer: Optional[Callable]
             except Exception as exc:               # try again on the next run
                 print(f"[descriptions] our writer: {exc}", file=sys.stderr)
                 for j in chunk:
-                    j.error = f"our writer: {exc}"[:300]
+                    j.error = f"the site's writer: {exc}"[:300]
                 break
             for j in chunk:
                 if texts.get(j.sku):
@@ -325,7 +325,7 @@ def _apply_to_item(s, job: DescriptionJob, data: dict, item_lister: Optional[Cal
     try:
         lister = item_lister(int(data["user_id"]))
         if lister is None:
-            job.error = "the account's eBay connection is gone; the listing keeps its built description"
+            job.error = "the account's eBay connection is gone; the listing keeps the built description"
             return False
         lister.revise_card({**data, "ai_description": job.description})
         return True

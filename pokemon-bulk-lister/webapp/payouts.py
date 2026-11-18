@@ -94,15 +94,15 @@ def _account_dict(account: SellerPayoutAccount | None, stripe_on: bool) -> dict:
                 "next": "Card payments are off on this install, so there is nothing to pay out."}
     if account is None:
         return {"available": True, "state": "none",
-                "next": "Set up payouts to have your share of card sales sent to your bank automatically."}
+                "next": "Set up payouts to have the seller share of card sales sent to the bank automatically."}
     if account.transfers_active:
         return {"available": True, "state": "active",
-                "next": ("Your share of each card sale is sent to your Stripe account automatically. "
-                         + ("Stripe pays it out to your bank on its schedule."
+                "next": ("The seller share of each card sale is sent to the connected Stripe account automatically. "
+                         + ("Stripe pays out to the bank on Stripe's schedule."
                             if account.payouts_enabled else
-                            "Stripe still needs a bank account from you before it can pay out to your bank."))}
+                            "Stripe still needs a bank account before paying out."))}
     return {"available": True, "state": "incomplete",
-            "next": "Stripe needs more details before it can pay you. Continue setup to finish."}
+            "next": "Stripe needs more details before paying out. Continue setup to finish."}
 
 
 # ----------------------------------------------------------------------

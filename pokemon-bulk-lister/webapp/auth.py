@@ -162,11 +162,11 @@ def send_verification(s, user: User, base_url: str) -> str:
     link = f"{base_url.rstrip('/')}/verify-email?token={token}"
     return deliver(
         user.email,
-        "Confirm your email for Card Portfolio",
-        "Open this link to confirm this address belongs to you:\n\n"
+        "Confirm the email address for Card Portfolio",
+        "Open this link to confirm ownership of this address:\n\n"
         f"{link}\n\n"
-        f"It works once and expires in {VERIFY_LINK_HOURS} hours. "
-        "If you did not create an account, ignore this message.",
+        f"The link works once and expires in {VERIFY_LINK_HOURS} hours. "
+        "If no account was created with this address, ignore this message.",
     )
 
 
@@ -190,7 +190,7 @@ def verified_required(fn):
         finally:
             s.close()
         if not ok:
-            message = ("Confirm your email address first. Use the link we sent you, "
+            message = ("Confirm the email address first. Use the emailed link, "
                        "or ask for a new one from the Library page.")
             if request.path.startswith("/api/"):
                 return jsonify({"error": message, "code": "email_unverified"}), 403
@@ -388,7 +388,7 @@ def in_background(fn) -> None:
 
 
 FORGOT_SENT = ("If an account exists for that address, a link to choose a new password "
-               "is on its way. It works once and lasts an hour.")
+               "is on the way. The link works once and lasts an hour.")
 
 
 @auth_bp.route("/forgot-password", methods=["GET"])
@@ -424,8 +424,8 @@ def forgot():
                             to, "Choose a new password for Card Portfolio",
                             "Open this link to choose a new password:\n\n"
                             f"{link}\n\n"
-                            f"It works once and expires in {RESET_LINK_MINUTES} minutes. "
-                            "If you did not ask for this, ignore this message; your password "
+                            f"The link works once and expires in {RESET_LINK_MINUTES} minutes. "
+                            "If no reset was requested, ignore this message; the password "
                             "has not changed.",
                         )
                     except Exception as exc:

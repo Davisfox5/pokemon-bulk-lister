@@ -179,7 +179,7 @@ def apply_charge_state(s, stripe, order: Order, charge, dispute_status: Optional
     if order.status == "disputed":           # and the dispute is no longer open
         order.status = "paid"
         s.commit()
-        changed = f"order {order.id}: dispute closed in your favour; the seller will be paid again"
+        changed = f"order {order.id}: dispute won; the seller will be paid again"
 
     if refunded > 0:
         # Partial refund. The fee and the seller's share are recomputed on
@@ -378,9 +378,9 @@ def return_card(order_id: int):
             return jsonify({"error": "this order's card was already returned"}), 409
         item = _buyers_copy(s, order)
         if item is None:
-            return jsonify({"error": "the buyer no longer holds this card, so it cannot be moved back"}), 409
+            return jsonify({"error": "the buyer no longer holds this card, so the card cannot be moved back"}), 409
         if s.query(MarketListing).filter_by(inventory_item_id=item.id, status="active").count():
-            return jsonify({"error": "the buyer has this card listed for sale; it must be unlisted first"}), 409
+            return jsonify({"error": "the buyer has this card listed for sale; the card must be unlisted first"}), 409
         # What the seller had paid for it, from their own sale record.
         sale = (s.query(LibraryEvent)
                 .filter_by(order_id=order.id, user_id=order.seller_id, kind="sold").first())

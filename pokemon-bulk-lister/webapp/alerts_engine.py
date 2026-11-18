@@ -67,9 +67,9 @@ def _evaluate_rule(s: Session, rule: AlertRule, now) -> list[Alert]:
         msg = None
 
         if rule.kind == "price_above" and price >= rule.threshold:
-            msg = f"{label} is now ${price:.2f}, at or above your ${rule.threshold:.2f} target."
+            msg = f"{label} is now ${price:.2f}, at or above the ${rule.threshold:.2f} target."
         elif rule.kind == "price_below" and price <= rule.threshold:
-            msg = f"{label} dropped to ${price:.2f}, at or below your ${rule.threshold:.2f} floor."
+            msg = f"{label} dropped to ${price:.2f}, at or below the ${rule.threshold:.2f} floor."
         elif rule.kind in ("pct_change", "sell_signal"):
             base = price_at(s, ccid, now - timedelta(days=rule.window_days))
             if not base or base <= 0:

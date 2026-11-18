@@ -13,14 +13,14 @@ async function loadLists() {
   const data = await api("/api/decks");
   dk.lists = data;
   $("#library-note").textContent = data.library_cards
-    ? `${data.library_cards} cards in your library`
-    : "Add cards to your library to find your closest match.";
+    ? `${data.library_cards} cards in the library`
+    : "Add cards to the library to find the closest match.";
   renderLists();
 
   const src = data.popular_source;
   const el = $("#popular-source");
   if (!data.popular.length) {
-    el.textContent = "No popular decks loaded. Click Refresh to pull them from Limitless.";
+    el.textContent = "No popular decks loaded. Click Refresh to load popular decks from Limitless.";
   } else {
     const events = src.tournaments
       .map((t) => `${esc(t.name)} (${esc(t.date)}, ${esc(t.players)} players)`).join("; ");
@@ -145,7 +145,7 @@ function clearDetail() {
     li.classList.remove("active");
     li.setAttribute("aria-pressed", "false");
   });
-  $("#deck-detail").innerHTML = '<div class="deck-empty"><span class="empty-card-mark" aria-hidden="true">▱</span><h2>Start with a deck</h2><p class="muted">Choose a list to see what you have and what’s missing.</p></div>';
+  $("#deck-detail").innerHTML = '<div class="deck-empty"><span class="empty-card-mark" aria-hidden="true">▱</span><h2>Start with a deck</h2><p class="muted">Choose a list to see owned and missing cards.</p></div>';
 }
 
 async function loadDetail() {
@@ -218,7 +218,7 @@ function renderDetail() {
         <div class="tile-sub">${costSub}</div>
       </div>
     </div>
-    ${s.maybe ? `<p class="flag-note deck-printing-note">Check ${s.maybe} different printing${s.maybe === 1 ? "" : "s"} before counting them as owned.</p>` : ""}
+    ${s.maybe ? `<p class="flag-note deck-printing-note">Check ${s.maybe} different printing${s.maybe === 1 ? "" : "s"} before counting as owned.</p>` : ""}
 
     <div class="controls">
       <label class="check"><input type="checkbox" id="missing-only" ${dk.missingOnly ? "checked" : ""}> Missing only</label>
@@ -233,9 +233,9 @@ function renderDetail() {
       <table class="inv-table deck-table">
         <thead><tr>
           <th class="num">Need</th><th>Card</th><th class="num">Have</th><th class="num">Missing</th>
-          <th class="num">Price each</th><th>Where to get it</th>
+          <th class="num">Price each</th><th>Where to buy</th>
         </tr></thead>
-        <tbody>${sections || '<tr><td colspan="6" class="empty">You have every card in this deck.</td></tr>'}</tbody>
+        <tbody>${sections || '<tr><td colspan="6" class="empty">Every card in this deck is owned.</td></tr>'}</tbody>
       </table>
     </div>`;
 }
@@ -246,7 +246,7 @@ function cardRow(card) {
   const other = card.have_other
     ? `<div class="inv-set">${card.have_other} from another printing</div>` : "";
   const maybe = card.maybe
-    ? `<span class="flag-note">You own ${card.maybe} “${esc(card.name)}” in a different printing. Same name is not always the same card; check before counting it.</span>` : "";
+    ? `<span class="flag-note">${card.maybe} “${esc(card.name)}” owned in a different printing. Same name is not always the same card; check before counting.</span>` : "";
   const price = card.basic_energy
     ? '<span class="prov">basic energy, not priced</span>'
     : card.price
@@ -290,13 +290,13 @@ $("#deck-detail").addEventListener("click", async (e) => {
   try {
     if (btn.dataset.act === "save") {
       const res = await postJson("/api/decks", { popular_ref: d.ref });
-      toast(`Saved ${res.name}. It keeps this exact list even after the popular decks refresh.`);
+      toast(`Saved ${res.name}. The saved deck keeps this exact list even after the popular decks refresh.`);
       await loadLists();
       pick(res.ref);
     } else if (btn.dataset.act === "delete") {
       const { ok } = await askConfirm({
         title: "Delete this saved deck?",
-        html: `<p><strong>${esc(d.name)}</strong> is removed from your saved decks. Your cards are not affected.</p>`,
+        html: `<p><strong>${esc(d.name)}</strong> is removed from the saved decks. Library cards are not affected.</p>`,
         confirm: "Delete",
       });
       if (!ok) return;
@@ -313,7 +313,7 @@ $("#deck-detail").addEventListener("click", async (e) => {
       const { ok } = await askConfirm({
         title: `Look up prices for ${dry.to_price} cards?`,
         html: `<p>Looks up ${dry.to_price} missing cards on TCGplayer and recent eBay sales, then saves those prices.${dry.over_cap
-                 ? ` ${dry.over_cap} more are over the per-click limit; run it again afterwards.` : ""}</p>
+                 ? ` ${dry.over_cap} more are over the per-click limit; run the lookup again afterwards.` : ""}</p>
                <p class="muted">A few seconds per card.</p>`,
         confirm: "Look up prices",
       });

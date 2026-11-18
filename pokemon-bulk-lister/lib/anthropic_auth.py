@@ -40,7 +40,7 @@ def _host_identity_token() -> str:
     token = _identity_token or os.getenv("VERCEL_OIDC_TOKEN")
     if not token:
         raise RuntimeError(
-            "no identity token from the host yet: on Vercel it comes with each request "
+            "no identity token from the host yet: on Vercel the token comes with each request "
             "(is OIDC federation enabled for the project?)")
     return token
 

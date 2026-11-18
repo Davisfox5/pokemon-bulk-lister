@@ -161,7 +161,7 @@ class LoginCapture:
                 # live, or the site could never be signed into again without
                 # restarting the app.
                 self._set("error", "the browser did not respond while saving; "
-                                   "close its window and sign in again")
+                                   "close the browser window and sign in again")
         return self.status()
 
     def cancel(self, timeout: float = 15) -> dict:
@@ -189,7 +189,7 @@ class LoginCapture:
                     except Exception as exc:
                         # The window is open; the person can navigate by hand.
                         self._set("waiting", f"could not load the login page ({exc}); "
-                                             "navigate to it in the window")
+                                             "navigate to the login page in the window")
                     else:
                         self._set("waiting", "sign in in the browser window, then come back here")
 
@@ -292,7 +292,7 @@ class PortalUploader:
         if self.state_path.exists():
             return
         raise PortalNotLoggedIn(
-            f"No {self.site_name} session at {self.state_path}. Run from your terminal:\n"
+            f"No {self.site_name} session at {self.state_path}. Run from a terminal:\n"
             f"    python -m webapp.setup_portal --site {self.site_name}\n"
             "A Chromium window will open; sign in and the session will be saved."
         )
@@ -375,8 +375,8 @@ class PortalUploader:
             page.goto(self.upload_url, wait_until="domcontentloaded", timeout=60000)
             if self.login_redirect_token and self.login_redirect_token in page.url:
                 return {"ok": False, "signed_in": False,
-                        "detail": f"the saved session has expired ({self.site} sent us to "
-                                  f"its login page). Sign in again."}
+                        "detail": f"the saved session has expired ({self.site} redirected to "
+                                  f"the login page). Sign in again."}
             try:
                 page.wait_for_load_state("networkidle", timeout=20000)
             except PWTimeoutError:

@@ -263,7 +263,7 @@ def _mine_job(state) -> dict:
     if state.get("running"):
         idle = dict(_IDLE)
         idle["running"] = True
-        idle["message"] = "Someone else is using this. Try again in a moment."
+        idle["message"] = "In use by someone else. Try again in a moment."
         return idle
     return dict(_IDLE)
 
@@ -760,7 +760,7 @@ def api_price_card(card_id: int):
     if not card:
         abort(404)
     if not card.get("name"):
-        return jsonify({"error": "card has no name — identify it first"}), 400
+        return jsonify({"error": "card has no name; identify the card first"}), 400
     try:
         result = _price_card(card)
         with db.connect(DB_PATH) as conn:
@@ -2047,7 +2047,7 @@ def api_tcg_catalog_upload():
 
     upload = request.files.get("file")
     if upload is None:
-        return jsonify({"error": "choose the CSV you exported from TCGplayer"}), 400
+        return jsonify({"error": "choose the CSV exported from TCGplayer"}), 400
     raw = upload.read(40 * 1024 * 1024 + 1)
     if len(raw) > 40 * 1024 * 1024:
         return jsonify({"error": "that file is over 40 MB; export only the Pokemon product line"}), 400
@@ -2195,7 +2195,7 @@ def api_export_lot():
     cards = _unsold(found)
     if len(cards) < len(found):
         return jsonify({"error": f"{len(found) - len(cards)} of the selected cards have already "
-                                 "sold; untick them and try again"}), 400
+                                 "sold; untick those cards and try again"}), 400
     if len(cards) < 2:
         return jsonify({"error": "fewer than 2 cards resolved from card_ids"}), 400
 
@@ -2365,8 +2365,8 @@ def api_publish_ebay():
     try:
         expected = int(body["expected"])
     except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "expected (the number of cards you confirmed) is required; "
-                                 "read it from /api/publish/status"}), 400
+        return jsonify({"error": "expected (the number of cards confirmed) is required; "
+                                 "read the count from /api/publish/status"}), 400
     if SERVERLESS:
         return _start_sliced_ebay_publish(expected, skip_flagged, ai)
     with _publish_lock:
@@ -2399,7 +2399,7 @@ def api_publish_ebay():
             if len(eligible) != expected:
                 _publish_state["message"] = (
                     f"nothing listed: {len(eligible)} cards are eligible now, "
-                    f"you confirmed {expected}. Check the list and publish again."
+                    f"{expected} were confirmed. Check the list and publish again."
                 )
                 return
             _publish_state["total"] = len(eligible)
@@ -2503,7 +2503,7 @@ def _start_sliced_ebay_publish(expected: int, skip_flagged: bool, ai: bool = Fal
     else:
         if len(eligible) != expected:
             state["message"] = (f"nothing listed: {len(eligible)} cards are eligible now, "
-                                f"you confirmed {expected}. Check the list and publish again.")
+                                f"{expected} were confirmed. Check the list and publish again.")
         else:
             state.update(running=True, queue=[int(c["id"]) for c in eligible], total=len(eligible),
                          message="starting…")
@@ -2562,7 +2562,7 @@ def api_publish_portal():
     if SERVERLESS:
         return jsonify({"error": "Uploading through the TCGplayer or Whatnot seller portal drives a browser "
                                  "on the machine the app runs on, which a hosted install does not have. "
-                                 "Download the CSV and upload it in the portal yourself."}), 409
+                                 "Download the CSV and upload the file in the portal by hand."}), 409
     body = request.get_json(silent=True) or {}
     site = body.get("site") or request.args.get("site")
     if site not in ("tcgplayer", "whatnot"):
@@ -2590,7 +2590,7 @@ def api_publish_portal():
             if not rows:
                 _publish_state["message"] = (
                     "nothing uploaded: no cards to send" + (
-                        " (upload your TCGplayer pricing export under Connections so cards "
+                        " (upload the TCGplayer pricing export under Connections so cards "
                         "can be matched to TCGplayer Ids)" if site == "tcgplayer" else ""))
                 return
             _write_csv(path, rows)

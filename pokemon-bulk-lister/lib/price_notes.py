@@ -97,6 +97,10 @@ _LEGACY = [
     (re.compile(r"bulk-floor estimate|estimated from similar printings", re.I), CM_ESTIMATE),
     (re.compile(r"set_code propagated|set filled in", re.I), SET_FILLED),
     (re.compile(r"close together", re.I), CLOSE),
+    # Notes saved in older wording, shown without pronouns.
+    (re.compile(r"from your spreadsheet", re.I), "From the imported spreadsheet."),
+    (re.compile(r"unattributed spreadsheet estimate removed", re.I),
+     "Unattributed spreadsheet estimate removed. Re-import the sheet to restore the estimate."),
 ]
 # Any of these, in any wording, is a price disagreement.
 _DISAGREE_WORDS = re.compile(r"disagree|variant mismatch|dropped from aggregate|far above the others", re.I)

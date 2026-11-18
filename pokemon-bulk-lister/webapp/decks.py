@@ -387,7 +387,7 @@ def create_deck():
     s = get_session()
     try:
         if s.query(Deck).filter_by(user_id=uid).count() >= MAX_SAVED_DECKS:
-            return jsonify({"error": f"you have {MAX_SAVED_DECKS} saved decks, delete one first"}), 400
+            return jsonify({"error": f"{MAX_SAVED_DECKS} saved decks is the limit, delete one first"}), 400
         warnings: list[str] = []
         if body.get("popular_ref"):
             resolved = _resolve(s, uid, str(body["popular_ref"]))

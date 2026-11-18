@@ -78,7 +78,7 @@ def same_origin_only():
 
     host = (urlsplit(f"//{request.host}").hostname or "").lower()
     if host not in allowed_hosts():
-        return jsonify({"error": f"host {host!r} is not allowed; add it to ALLOWED_HOSTS"}), 403
+        return jsonify({"error": f"host {host!r} is not allowed; add the host to ALLOWED_HOSTS"}), 403
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
     # eBay's account deletion notices come from eBay's servers. The route
@@ -235,12 +235,12 @@ def _ebay_status() -> dict:
         except Exception as exc:
             out["error"] = str(exc)
         if not out["authorized"]:
-            out["next"] = "Connect your eBay account: open the consent link, approve, paste the URL you land on."
+            out["next"] = "Connect the eBay account: open the consent link, approve, paste the landing URL."
         elif not out["images"]:
             out["next"] = ("Connected. Listings need hosted photos: add the three CLOUDINARY_ "
-                           "values to .env so photos upload automatically when you publish.")
+                           "values to .env so photos upload automatically on publish.")
         else:
-            out["next"] = "Connected. Run the account check once before your first publish."
+            out["next"] = "Connected. Run the account check once before the first publish."
         if out["authorized"] and not out.get("can_read_sales"):
             out["next"] += (" This connection was made before sales could be read back: "
                             "disconnect and connect again to let the app see what sold.")
@@ -265,7 +265,7 @@ def ebay_authorize():
 
     pasted = str((request.get_json(silent=True) or {}).get("redirect") or "").strip()
     if not pasted:
-        return jsonify({"error": "paste the URL eBay redirected you to"}), 400
+        return jsonify({"error": "paste the URL eBay redirected to"}), 400
     try:
         auth = _ebay_auth()
         auth.exchange_code(EbayUserAuth.extract_code(pasted))
@@ -336,8 +336,8 @@ def ebay_check():
         step("Inventory location", False, f"could not reach eBay: {exc}")
 
     step("Photo hosting", cloudinary_ready(),
-         "Cloudinary is configured; photos upload when you publish" if cloudinary_ready()
-         else "Cloudinary is not configured, so cards need an image URL before they can list")
+         "Cloudinary is configured; photos upload on publish" if cloudinary_ready()
+         else "Cloudinary is not configured, so cards need an image URL before listing")
     return jsonify({"ok": all(s["ok"] for s in steps), "steps": steps})
 
 
@@ -365,9 +365,9 @@ def _stripe_status() -> dict:
                        "(sk_test_...) first. Until then, buyers and sellers settle directly.")
     elif mode == "test":
         out["next"] = ("Test mode: buyers can pay with Stripe's test cards and no money moves. "
-                       "Swap in the live key when you are ready.")
+                       "Swap in the live key when ready.")
     else:
-        out["next"] = "Live mode: buyers pay by card into your Stripe account."
+        out["next"] = "Live mode: buyers pay by card into the connected Stripe account."
     return out
 
 
@@ -405,7 +405,7 @@ def _portal_lib():
 
 HOSTED_PORTAL_NOTE = ("Signing in to the seller portal opens a browser on the machine the app runs on, "
                       "which a hosted install does not have. Download the CSV from the Scan page and "
-                      "upload it in the portal yourself.")
+                      "upload the file in the portal by hand.")
 
 
 def _portal_status(site: str) -> dict:
@@ -429,9 +429,9 @@ def _portal_status(site: str) -> dict:
     }
     label = lib.PORTALS[site]["label"]
     if login["state"] in ("opening", "waiting"):
-        out["next"] = f"Sign in to {label} in the browser window that opened, then click “I'm signed in”."
+        out["next"] = f"Sign in to {label} in the browser window that opened, then save the session."
     elif has:
-        out["next"] = f"Session saved {out['saved_at']}. Run the check to confirm it still works."
+        out["next"] = f"Session saved {out['saved_at']}. Run the check to confirm the session still works."
     else:
         out["next"] = f"Click “Sign in to {label}”. A browser window opens on this computer; sign in there."
     return out
@@ -543,7 +543,7 @@ def connections_status():
             "ready": _anthropic_ready(),
             "next": ("Configured (signs in with the host's identity, no stored key)." if _anthropic_keyless()
                      else "Configured.") if _anthropic_ready() else
-                    "Add ANTHROPIC_API_KEY to .env and restart. Without it only the free "
+                    "Add ANTHROPIC_API_KEY to .env and restart. Without the key only the free "
                     "image match can identify cards.",
         },
         "tcgplayer": _portal_status("tcgplayer"),

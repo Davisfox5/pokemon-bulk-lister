@@ -11,7 +11,7 @@
   {% include '_navigation.html' %}
   <main id="main-content" class="app-main">
     <div class="page-intro scan-intro">
-      <div><h1 id="scan-title">Scan cards</h1><p id="scan-subtitle" class="muted">Your next collection starts with a photo.</p></div>
+      <div><h1 id="scan-title">Scan cards</h1><p id="scan-subtitle" class="muted">The next collection starts with a photo.</p></div>
       <div class="page-actions">
         <button id="review-next-btn" type="button" class="hidden">Review cards</button>
         <button id="library-btn" class="primary hidden">Add to library</button>
@@ -23,7 +23,7 @@
       <div class="upload-content">
         <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose card photos">
           <svg class="upload-art" viewBox="0 0 112 100" fill="none" aria-hidden="true"><rect x="12" y="20" width="48" height="66" rx="6" transform="rotate(-12 12 20)" fill="var(--upload-back)" stroke="var(--border)"/><rect x="49" y="9" width="48" height="66" rx="6" transform="rotate(10 49 9)" fill="var(--upload-back)" stroke="var(--border)"/><rect x="32" y="15" width="48" height="68" rx="6" fill="var(--surface-1)" stroke="var(--accent)" stroke-width="1.5"/><path d="M44 38v-8h8m16 8v-8h-8M44 60v8h8m16-8v8h-8m-6-13V43m-6 6h12" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>
-          <strong>Drop your card photos here</strong>
+          <strong>Drop card photos here</strong>
           <span id="dropzone-hint" class="muted">One card or a whole binder page</span>
           <span class="upload-file-cta">Choose photos</span>
           <input id="file-input" type="file" multiple accept="image/*" hidden />
@@ -87,7 +87,7 @@
   </section>
 
   <section class="panel cards-panel" aria-labelledby="cards-heading">
-    <div class="cards-heading"><h2 id="cards-heading" tabindex="-1">Your cards <span id="visible-count" class="muted"></span></h2>
+    <div class="cards-heading"><h2 id="cards-heading" tabindex="-1">Cards <span id="visible-count" class="muted"></span></h2>
       <div id="stats" class="stats"></div>
       <button id="select-visible-btn" type="button" class="phone-select">Select all</button>
     </div>
@@ -128,7 +128,7 @@
     <div class="publish-row">
       <strong>Sales</strong>
       <button id="sync-ebay-btn" title="Read recent orders from eBay and record what sold">Sync eBay sales</button>
-      <button id="sales-import-btn" type="button" title="Import the sales CSV you exported from Whatnot">Import Whatnot sales CSV…</button>
+      <button id="sales-import-btn" type="button" title="Import the sales CSV exported from Whatnot">Import Whatnot sales CSV…</button>
       <input id="sales-file" type="file" accept=".csv,text/csv" hidden />
       <span id="sales-meta" class="muted small"></span>
     </div>
@@ -177,12 +177,12 @@
           <label>Finish
             <select name="printing"><option value="unknown">Not checked</option><option value="normal">Non-holo</option><option value="holofoil">Holo</option><option value="reverseHolofoil">Reverse holo</option></select>
           </label>
-          <p class="muted small">Check condition and finish against your card.</p>
+          <p class="muted small">Check condition and finish against the card.</p>
           <input type="hidden" name="id_confidence" />
           <div class="prices-grid" id="modal-prices"></div>
           <fieldset class="listing-fields">
             <legend>Listing</legend>
-            <label>Your price <input name="list_price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Uses the estimate" /></label>
+            <label>Set price <input name="list_price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Uses the estimate" /></label>
             <label>Notes for buyers <textarea name="listing_notes" rows="2" maxlength="2000" placeholder="Shipping, condition details, anything else. Added under the card's details."></textarea></label>
             <div id="modal-listing" class="listing-preview" aria-live="polite"></div>
           </fieldset>
@@ -208,7 +208,7 @@
         <button id="conn-close" aria-label="Close">×</button>
       </header>
       <div class="modal-body conn-body">
-        <p class="muted small">Some connections are set up by whoever runs this site. If a step below needs a key, ask them.</p>
+        <p class="muted small">Some connections are set up by the site operator. If a step below needs a key, ask the operator.</p>
         <div id="conn-list">Loading…</div>
       </div>
     </div>
@@ -259,7 +259,7 @@
   <div id="choose-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="choose-title">
     <div class="modal-card choose-card">
       <header>
-        <h2 id="choose-title">Which card is this?</h2>
+        <h2 id="choose-title">Which card?</h2>
         <button id="choose-x" aria-label="Close">×</button>
       </header>
       <div class="modal-body">
@@ -268,7 +268,7 @@
           <p id="choose-read" class="muted small"></p>
           <div id="choose-list" class="choose-list"></div>
           <div id="choose-other" class="choose-other hidden">
-            <button id="choose-manual" type="button">Enter it myself</button>
+            <button id="choose-manual" type="button">Enter by hand</button>
             <button id="choose-retry" type="button">Read the photo again</button>
           </div>
           <p id="choose-status" class="muted small"></p>
@@ -313,7 +313,7 @@
             <input type="number" min="1" step="1" name="quantity" value="1" />
           </label>
           <label>Lot name
-            <input name="slug" placeholder="Leave blank to name it for you" />
+            <input name="slug" placeholder="Leave blank for an automatic name" />
           </label>
           <label>Extra note for description (optional)
             <input name="note" placeholder="e.g. Smoke-free home, ships next business day." />

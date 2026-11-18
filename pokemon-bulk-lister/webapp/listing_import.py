@@ -134,7 +134,7 @@ def parse_tcgplayer_listings(text: str) -> tuple[list[dict], dict]:
     missing = [labels[f] for f in labels if not cols[f]]
     if missing:
         raise ValueError(
-            "this does not look like a TCGplayer pricing export: no " + ", ".join(missing)
+            "this file does not look like a TCGplayer pricing export: no " + ", ".join(missing)
             + " column. Columns found: " + (", ".join(headers) or "none"))
     info = {"rows": 0, "skipped": 0, "not_listed": 0}
     lines: list[dict] = []
@@ -149,7 +149,7 @@ def parse_tcgplayer_listings(text: str) -> tuple[list[dict], dict]:
             info["not_listed"] += 1
             continue
         if len(lines) >= MAX_ROWS:
-            raise ValueError(f"that file lists more than {MAX_ROWS} cards for sale; split it up")
+            raise ValueError(f"that file lists more than {MAX_ROWS} cards for sale; split the file up")
         name = re.sub(r"\s+-\s+\d[\w/]*\s*$", "", (raw.get(cols["name"]) or "")).strip()
         number_raw = (raw.get(cols["number"]) or "").strip() if cols["number"] else ""
         number = number_raw.split("/")[0].lstrip("0") or number_raw.split("/")[0]
@@ -196,7 +196,7 @@ _CARD_FIELD_LABELS = {
     "name": "card name", "set": "set", "set_code": "set code", "number": "card number",
     "quantity": "quantity", "condition": "condition", "holo": "holo",
     "printing": "printing (holo or not; the wording is kept in the note)",
-    "rarity": "rarity (and holo or not, if it says foil or holo)",
+    "rarity": "rarity (and holo or not, if the rarity says foil or holo)",
     "cost": "price paid", "market": "market price (used until a live price is found)",
     "price_source": "where the market price came from", "note": "note",
 }
@@ -283,7 +283,7 @@ def parse_card_list(text: str) -> tuple[list[dict], dict]:
             info["not_listed"] += 1
             continue
         if len(lines) >= MAX_ROWS:
-            raise ValueError(f"that sheet has more than {MAX_ROWS} cards; split it up")
+            raise ValueError(f"that sheet has more than {MAX_ROWS} cards; split the sheet up")
         set_name, number_raw = cell(raw, "set"), cell(raw, "number")
         first = number_raw.split("/")[0].strip()
         number = first.lstrip("0") or first
@@ -370,7 +370,7 @@ def parse_whatnot_listings(text: str) -> tuple[list[dict], dict]:
             info["not_listed"] += 1
             continue
         if len(lines) >= MAX_ROWS:
-            raise ValueError(f"that file has more than {MAX_ROWS} listings; split it up")
+            raise ValueError(f"that file has more than {MAX_ROWS} listings; split the file up")
         sku = (raw.get(cols["sku"]) or "").strip() or None if cols["sku"] else None
         own_id = (raw.get(cols["id"]) or "").strip() if cols["id"] else ""
         # Without an id from Whatnot, the SKU or the title stands in, so the
@@ -495,7 +495,7 @@ def match_title(s, title: str, budget: _Budget) -> tuple[Optional[dict], str]:
         return None, "the card lookup could not be reached; use Try matching again"
     fits = _named_in(title_norm, found, lambda c: c["name"])
     if not fits:
-        return None, f"no card numbered {hit.group(1)}/{hit.group(2)} has its name in this title"
+        return None, f"no card numbered {hit.group(1)}/{hit.group(2)} is named in this title"
     if len(fits) > 1:
         return None, f"{len(fits)} different cards fit this title"
     card = dict(fits[0])
@@ -807,7 +807,7 @@ def import_ebay():
     finally:
         s.close()
     if not auths:
-        return jsonify({"error": "eBay is not connected for this account. Connect it first."}), 409
+        return jsonify({"error": "eBay is not connected for this account. Connect eBay first."}), 409
     lines: list[dict] = []
     seen: set[str] = set()
     for auth in auths:

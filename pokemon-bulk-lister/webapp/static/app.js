@@ -169,7 +169,7 @@ function priceBasis(card) {
   let issue = "Check price";
   if (/Japanese/i.test(notes)) issue = "Japanese card, English price";
   else if (/finish/i.test(notes)) issue = "Check finish";
-  else if (/matches its photo/i.test(notes)) issue = "Check card match";
+  else if (/against the photo/i.test(notes)) issue = "Check card match";
   else if (/Prices disagree/i.test(notes)) issue = "Prices disagree";
   else if (/Set not confirmed/i.test(notes)) issue = "Check set";
   else if (/number/i.test(notes)) issue = "Check card number";
@@ -196,7 +196,7 @@ async function offerEbayUpdate(ids) {
   const { ok } = await askConfirm({
     title: `Update ${plural(live.length, "eBay listing")}?`,
     html: `<p>${live.length === 1 ? "This card is" : `${live.length} of these cards are`} live on eBay.
-      The ${live.length === 1 ? "listing takes" : "listings take"} the card's details, notes and price as they are now.
+      The ${live.length === 1 ? "listing takes" : "listings take"} the card's current details, notes and price.
       Buyers see the change right away.</p>`,
     confirm: "Update on eBay",
   });
@@ -224,10 +224,10 @@ async function showListingPreview(id) {
     const p = await api(`/api/cards/${id}/listing`);
     if (state.editing !== id) return;
     const who = { ebay: "Description written by eBay", ours: "Description written by AI" }[p.written_by]
-      || { waiting: "AI description on its way", sent: "eBay is writing the description" }[p.ai_status] || "";
+      || { waiting: "AI description on the way", sent: "eBay is writing the description" }[p.ai_status] || "";
     box.innerHTML = `<strong>${escapeHtml(p.title)}</strong>${escapeHtml(p.description)}`
       + (who ? `<span class="src">${who}</span>` : "")
-      + `<span class="src">${p.price == null ? "No price yet" : `Lists at ${fmt(p.price)}${p.price_is_yours ? " (your price)" : " (estimate)"}`}${p.on_ebay ? " · live on eBay" : ""}</span>`;
+      + `<span class="src">${p.price == null ? "No price yet" : `Lists at ${fmt(p.price)}${p.price_is_yours ? " (set price)" : " (estimate)"}`}${p.on_ebay ? " · live on eBay" : ""}</span>`;
   } catch { /* the preview is a convenience */ }
 }
 
@@ -251,8 +251,8 @@ function renderRow(card) {
       <td>
         <strong>${escapeHtml(card.name) || "<span class='muted'>No name yet</span>"}</strong>
         ${card.printing === "reverseHolofoil" ? "<span class='muted'> · reverse holo</span>" : card.is_holo ? "<span class='muted'> · holo</span>" : card.printing === "unknown" ? "<span class='flag-text'> · finish not checked</span>" : ""}
-        ${card.sold ? "<span class='sold-tag' title='Sold. It is left out of publishing and exports.'>sold</span>" : ""}
-        ${card.in_library ? "<span class='muted small' title='This card is in your library.'> · in library</span>" : ""}
+        ${card.sold ? "<span class='sold-tag' title='Sold. Left out of publishing and exports.'>sold</span>" : ""}
+        ${card.in_library ? "<span class='muted small' title='This card is in the library.'> · in library</span>" : ""}
         <div class="muted small">${escapeHtml(card.condition_guess || "")}</div>
       </td>
       <td class="muted small">${escapeHtml(setBits)}</td>
@@ -261,7 +261,7 @@ function renderRow(card) {
       <td class="price">${ebayCell}</td>
       <td class="price">${state.pricing.has(card.id) ? '<span class="pricing-now">Pricing…</span>'
         : card.list_price != null
-          ? `<strong>${fmt(card.list_price)}</strong><span class="src your-price">Your price</span><span class="src">Estimate ${fmt(card.final_price)}</span>`
+          ? `<strong>${fmt(card.list_price)}</strong><span class="src your-price">Set price</span><span class="src">Estimate ${fmt(card.final_price)}</span>`
           : `<strong>${fmt(card.final_price)}</strong>${priceBasis(card)}`}${onEbay(card) ? '<span class="src">Live on eBay</span>' : ""}</td>
       <td><span class="id-status ${card.id_confidence <= 0.6 ? 'review' : ''}">${!card.name ? 'Not identified' : card.id_confidence <= 0.6 ? 'Check ID' : card.id_confidence >= 0.97 ? 'Catalog match' : 'Check photo'}</span>
       </td>
@@ -299,7 +299,7 @@ function renderCards() {
   $("#visible-count").textContent = cards.length;
   if (!cards.length) {
     const filtered = state.search || state.needsReview || state.unidentified;
-    body.innerHTML = `<tr><td colspan="10" class="muted empty-state"><strong>${filtered ? 'No cards match these filters' : 'Your cards will appear here'}</strong>${filtered ? '<button type="button" data-act="clear-filters">Clear filters</button>' : 'Add a photo to get started.'}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="muted empty-state"><strong>${filtered ? 'No cards match these filters' : 'Cards will appear here'}</strong>${filtered ? '<button type="button" data-act="clear-filters">Clear filters</button>' : 'Add a photo to get started.'}</td></tr>`;
     drawnRows.clear();
     syncSelectAllCheckbox();
     updateBundleButton();
@@ -376,8 +376,8 @@ async function deleteCards(ids) {
   const n = ids.length;
   const { ok } = await askConfirm({
     title: `Delete ${n} card${n === 1 ? "" : "s"}?`,
-    html: `<p>${n === 1 ? "This card and its photo are" : `These ${n} cards and their photos are`} removed from this page.
-           Cards already added to your library stay there.</p>`,
+    html: `<p>${n === 1 ? "This card and photo are" : `These ${n} cards and photos are`} removed from this page.
+           Cards already added to the library stay there.</p>`,
     confirm: "Delete",
   });
   if (!ok) return;
@@ -442,7 +442,7 @@ async function addPricedToLibrary() {
       await loadCards();
     }
     if (added) {
-      $("#upload-status").innerHTML = `Added ${plural(added, "priced card")} to your library. `
+      $("#upload-status").innerHTML = `Added ${plural(added, "priced card")} to the library. `
         + `<a href="/portfolio">Open library</a>`;
     }
   } catch (err) {
@@ -685,7 +685,7 @@ function csvParts(text, maxBytes = 3000000) {
   const parts = [];
   for (const row of records) {
     const rowBytes = bytes(row);
-    if (headerBytes + rowBytes > maxBytes) throw new Error('A CSV row is too large to upload. Shorten its notes or description.');
+    if (headerBytes + rowBytes > maxBytes) throw new Error('A CSV row is too large to upload. Shorten the notes or description in that row.');
     if (used + rowBytes > maxBytes) {
       parts.push(part);
       part = header; used = headerBytes;
@@ -760,16 +760,16 @@ async function addToLibrary() {
   if (!ready.length) {
     $("#upload-status").textContent = picked.length
       ? "The selected cards still need a name and price."
-      : "Identify and price your cards before adding them to the library.";
+      : "Identify and price cards before adding to the library.";
     return;
   }
   const value = ready.reduce((sum, c) => sum + c.final_price, 0);
   const { ok } = await askConfirm({
-    title: `Add ${plural(ready.length, "card")} to your library?`,
-    html: `<p>${plural(ready.length, "priced card")}${picked.length ? " from your selection" : ""}, worth
-      $${value.toFixed(2)} at current prices, will be added to your library. Cards already added are skipped.</p>
-      ${left ? `<p class="muted">${plural(left, "card")} still need a name or a price. They stay on this page.</p>` : ""}
-      ${flagged ? `<p class="flag-text">${plural(flagged, "card")} ${flagged === 1 ? "needs" : "need"} a price check. ${flagged === 1 ? "It is" : "They are"} added too, and stay marked in the library.</p>` : ""}`,
+    title: `Add ${plural(ready.length, "card")} to the library?`,
+    html: `<p>${plural(ready.length, "priced card")}${picked.length ? " from the selection" : ""}, worth
+      $${value.toFixed(2)} at current prices, will be added to the library. Cards already added are skipped.</p>
+      ${left ? `<p class="muted">${plural(left, "card")} still need a name or a price. Those cards stay on this page.</p>` : ""}
+      ${flagged ? `<p class="flag-text">${plural(flagged, "card")} ${flagged === 1 ? "needs" : "need"} a price check. ${flagged === 1 ? "That card is added too, and stays" : "Those cards are added too, and stay"} marked in the library.</p>` : ""}`,
     confirm: "Add to library",
   });
   if (!ok) return;
@@ -779,9 +779,9 @@ async function addToLibrary() {
   const res = await api("/api/inventory/promote", { method: "POST", body: JSON.stringify(body) });
   await loadCards();
   $("#upload-status").innerHTML =
-    `Added ${plural(res.promoted, "card")} to your library` +
+    `Added ${plural(res.promoted, "card")} to the library` +
     (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already there)` : "") +
-    `. <a href="/portfolio">Open library</a> to sell them or check them against decks.`;
+    `. <a href="/portfolio">Open library</a> to sell cards or check against decks.`;
 }
 
 // ---------------------------------------------------------------- table interactions
@@ -1007,7 +1007,7 @@ function drawChoices(data) {
         <span class="src">${escapeHtml(c.why || "")}</span></span></label>`).join("");
   $("#choose-list").innerHTML = rows + `
     <label class="choose-opt"><input type="radio" name="choose-pick" value="other" ${rows ? "" : "checked"} />
-      <span><strong>Something else</strong><span class="src">${rows ? "None of these is the card." : "The catalog has no card that fits what was read."}</span></span></label>`;
+      <span><strong>Something else</strong><span class="src">${rows ? "None of the listed cards." : "The catalog has no card that fits what was read."}</span></span></label>`;
   $("#choose-status").textContent = "";
   syncChoose();
 }
@@ -1031,7 +1031,7 @@ async function chooseCard(id) {
   $("#choose-other").classList.add("hidden");
   $("#choose-retry").disabled = false;
   $("#choose-ok").disabled = true;
-  $("#choose-status").textContent = "Looking it up…";
+  $("#choose-status").textContent = "Looking up the card…";
   $("#choose-modal").classList.remove("hidden");
   $("#choose-cancel").focus();
   try {
@@ -1040,7 +1040,7 @@ async function chooseCard(id) {
   } catch (err) {
     if (choosing?.request !== request) return;
     drawChoices({ choices: [], current: card });
-    $("#choose-status").textContent = `Could not look it up: ${err.message}`;
+    $("#choose-status").textContent = `Could not look up the card: ${err.message}`;
   }
 }
 
@@ -1053,7 +1053,7 @@ function openListing() {
   const form = $("#listing-form");
   form.reset();
   $("#listing-title").textContent = `Set price for ${plural(ids.length, "card")}`;
-  $("#listing-what").textContent = "Each card lists at this price in place of its estimate, on eBay and in exports.";
+  $("#listing-what").textContent = "Each card lists at this price in place of the estimate, on eBay and in exports.";
   $("#listing-status").textContent = "";
   $("#listing-modal").classList.remove("hidden");
   form.list_price.focus();
@@ -1121,7 +1121,7 @@ function setupChoose() {
       const data = await api(`/api/cards/${id}/choices`);
       if (choosing?.request === request) drawChoices(data);
     } catch (err) {
-      if (choosing?.request === request) $("#choose-status").textContent = `Could not read it: ${err.message}`;
+      if (choosing?.request === request) $("#choose-status").textContent = `Could not read the photo: ${err.message}`;
     } finally {
       if (choosing?.request === request) btn.disabled = false;
     }
@@ -1322,8 +1322,8 @@ function setupToolbar() {
     const n = state.stats.identified ?? 0;  // whole bench, not the filtered view
     const { ok } = await askConfirm({
       title: `Re-price ${plural(n, "card")}?`,
-      html: `<p>This looks up every identified card again, including the ones already priced, and
-        replaces their prices.${useTerapeak === "1" ? " A year of eBay sales adds about 5 seconds per card." : ""}</p>
+      html: `<p>Every identified card is looked up again, including cards already priced, and
+        the prices are replaced.${useTerapeak === "1" ? " A year of eBay sales adds about 5 seconds per card." : ""}</p>
         <p class="muted">Use “Identify &amp; price” for new cards only.</p>`,
       confirm: "Re-price all",
     });
@@ -1346,7 +1346,7 @@ function setupToolbar() {
       el.textContent = "signed in";
       el.style.color = "var(--up)";
     } else {
-      el.textContent = "you’ll sign in once";
+      el.textContent = "one sign-in needed";
     }
   }).catch(() => {});
 
@@ -1474,8 +1474,8 @@ function setupPublish() {
     const WHY_LEFT_OUT = {
       ebay: "without a hosted photo (Cloudinary is not set up; see Connections)",
       tcgplayer: c.catalog === false
-        ? "cannot be matched until you upload your TCGplayer pricing export (Connections)"
-        : "with no single matching row in your TCGplayer pricing export",
+        ? "cannot be matched until the TCGplayer pricing export is uploaded (Connections)"
+        : "with no single matching row in the TCGplayer pricing export",
     };
     const leftOut = c.left_out
       ? `<p class="muted">${plural(c.left_out, "priced card")} ${WHY_LEFT_OUT[site]} will be left out.</p>` : "";
@@ -1498,7 +1498,7 @@ function setupPublish() {
       if (first) {
         try {
           const p = await api(`/api/cards/${first.id}/listing`);
-          sample = `<p class="muted small">Each listing is written from the card's details and your notes. For example:</p>
+          sample = `<p class="muted small">Each listing is written from the card's details and the listing notes. For example:</p>
             <div class="listing-preview"><strong>${escapeHtml(p.title)}</strong>${escapeHtml(p.description)}</div>`;
         } catch { /* the sample is a convenience */ }
       }
@@ -1506,21 +1506,21 @@ function setupPublish() {
         title: c.flagged
           ? `Publish live eBay listings for ${plural(clean, "card")}?`
           : `Publish ${plural(c.count, "live eBay listing")}?`,
-        html: `<p>${plural(clean, "card")} will be listed live on your eBay account at their final
-          prices, ${money(c.total - c.flagged_total)} in total. Buyers can purchase them as soon as this
-          finishes. Cards already on eBay are updated, not duplicated. A price you set yourself is used
+        html: `<p>${plural(clean, "card")} will be listed live on the connected eBay account at final
+          prices, ${money(c.total - c.flagged_total)} in total. Buyers can purchase the cards as soon as publishing
+          finishes. Cards already on eBay are updated, not duplicated. A set price is used
           in place of the estimate.</p>
           ${sample}
           ${c.to_upload ? `<p class="muted">Card photos that are not hosted yet (${c.flagged ? `${c.to_upload_unflagged}, or ${c.to_upload} with the flagged cards` : c.to_upload}) are uploaded to Cloudinary first.</p>` : ""}
           ${leftOut}
           ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "more card")} (${money(c.flagged_total)})
             ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review and will not be listed
-            unless you tick the box.</p>` : ""}
+            unless the box is ticked.</p>` : ""}
           <label class="check ai-desc-opt"><input type="checkbox" id="ai-desc-opt" />
             Write descriptions with AI</label>
           <p class="muted small">Listings go live now with the description above. With the box ticked, each
-            one switches to an AI-written description when it is ready: eBay writes them in batches of 10,
-            a few minutes after a batch fills, and any short batch goes within 12 hours. Your notes stay under it.</p>`,
+            listing switches to an AI-written description when ready: eBay writes descriptions in batches of 10,
+            a few minutes after a batch fills, and any short batch goes within 12 hours. Listing notes stay under the description.</p>`,
         confirm: "Publish to eBay",
         checkbox: c.flagged ? `Also list the ${c.flagged} flagged` : null,
       });
@@ -1536,9 +1536,9 @@ function setupPublish() {
       const answer = await askConfirm({
         title: `Upload ${plural(c.count, "card")} to ${SITE_NAMES[site]}?`,
         html: `<p>A CSV with ${plural(c.count, "priced card")}, ${money(c.total)} in total, will be
-          generated and submitted through your ${SITE_NAMES[site]} seller portal session.</p>
+          generated and submitted through the saved ${SITE_NAMES[site]} seller portal session.</p>
           ${leftOut}
-          ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "of these card")} ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review. Fix or re-price them first if they should not go out as is.</p>` : ""}`,
+          ${c.flagged ? `<p class="flag-text">${plural(c.flagged, "of these card")} ${c.flagged === 1 ? "has a price" : "have prices"} flagged for review. Fix or re-price those cards first if the prices should not go out as is.</p>` : ""}`,
         confirm: `Upload to ${SITE_NAMES[site]}`,
       });
       if (!answer.ok) return;
@@ -1586,7 +1586,7 @@ async function loadSales() {
   $("#sales-import-btn").disabled = false;
   const e = s.ebay;
   $("#sales-meta").textContent = !e.connected ? "eBay not connected"
-    : !e.can_read_sales ? "reconnect eBay under Connections to read its sales"
+    : !e.can_read_sales ? "reconnect eBay under Connections to read eBay sales"
     : !s.sync_minutes ? "automatic eBay checks are off"
     : s.last_sync_at ? `eBay last checked ${new Date(s.last_sync_at).toLocaleTimeString()}; checked automatically every ${s.sync_minutes} minutes`
     : `eBay is checked automatically every ${s.sync_minutes} minutes`;
@@ -1610,7 +1610,7 @@ function salesSummary(r, where) {
   if (r.unmatched) bits.push(`${r.unmatched} could not be matched to a library card (listed below)`);
   if (r.duplicates) bits.push(`${r.duplicates} already recorded`);
   if (r.void) bits.push(`${r.void} cancelled or refunded`);
-  if (r.adjusted) bits.push(`${r.adjusted} sale(s) were partly refunded since, and their price was lowered to match`);
+  if (r.adjusted) bits.push(`${r.adjusted} sale(s) were partly refunded since, and the sale price was lowered to match`);
   if (r.reversed) bits.push(`${r.reversed} earlier sale(s) were refunded since, and the card was put back`);
   if (r.not_paid_yet) bits.push(`${r.not_paid_yet} not paid yet`);
   if (r.skipped) bits.push(`${r.skipped} rows skipped (no SKU or price)`);
@@ -1660,7 +1660,7 @@ function setupSales() {
       }
       const { ok } = await askConfirm({
         title: `Record ${plural(fresh, "sale")} from ${name}?`,
-        html: `<p>${plural(fresh, "sale")} worth $${p.total.toFixed(2)} will be recorded against your library. Each sold card leaves it,
+        html: `<p>${plural(fresh, "sale")} worth $${p.total.toFixed(2)} will be recorded against the library. Each sold card leaves the library,
           comes off the marketplace, and shows under Sold.</p>
           <p class="muted">Read from columns: SKU “${escapeHtml(p.columns.sku)}”, price “${escapeHtml(p.columns.price)}”${p.columns.quantity ? `, quantity “${escapeHtml(p.columns.quantity)}”` : ""}${p.columns.date ? `, date “${escapeHtml(p.columns.date)}”` : ""}.
           ${p.already_imported ? `${p.already_imported} were imported before and are skipped.` : ""}
@@ -1738,8 +1738,8 @@ function tcgCatalogHtml() {
   const t = conn.tcg;
   if (!t) return "";
   const status = t.loaded
-    ? `Pricing export loaded: ${t.rows} products. ${t.matched} of your ${t.priced} priced cards match a TCGplayer Id.`
-    : "Upload your TCGplayer pricing export (seller portal, Pricing, Export) so uploads carry real TCGplayer Ids. Without it the TCGplayer CSV is empty.";
+    ? `Pricing export loaded: ${t.rows} products. ${t.matched} of ${t.priced} priced cards match a TCGplayer Id.`
+    : "Upload the TCGplayer pricing export (seller portal, Pricing, Export) so uploads carry real TCGplayer Ids. Without the export the TCGplayer CSV is empty.";
   return `<div class="conn-actions" style="margin-top:8px">
       <span class="small">${escapeHtml(status)}</span>
       <button data-act="tcg-catalog">${t.loaded ? "Replace export" : "Upload export"}</button>
@@ -1754,7 +1754,7 @@ function portalItem(key, name) {
   if (!d.playwright) actions = "";
   else if (login === "opening") actions = `<span class="muted">Opening a browser window…</span>`;
   else if (login === "waiting") {
-    actions = `<button class="primary" data-act="portal-finish">I'm signed in, save it</button>
+    actions = `<button class="primary" data-act="portal-finish">Signed in, save session</button>
                <button data-act="portal-cancel">Cancel</button>`;
   } else if (d.session) {
     actions = `<button data-act="portal-check">Check session</button>
@@ -1768,8 +1768,8 @@ function portalItem(key, name) {
   return connItem(key, name,
     d.session ? "session saved" : "not connected", d.session ? "ok" : "todo",
     d.next + problem, actions + (key === "tcgplayer" ? tcgCatalogHtml() : ""),
-    `${name} has no listing API for regular sellers, so this drives your seller portal in a browser.
-     That is against ${name}'s terms and can break when they change the page. Uploading the exported CSV by hand always works.`);
+    `${name} has no listing API for regular sellers, so uploads drive the ${name} seller portal in a browser.
+     Doing so is against ${name}'s terms and can break when ${name} changes the page. Uploading the exported CSV by hand always works.`);
 }
 
 function renderConnections() {
@@ -1778,7 +1778,7 @@ function renderConnections() {
   let ebayActions = "";
   if (e.configured && !e.authorized) {
     ebayActions = `<button class="primary" data-act="ebay-consent">1. Open eBay consent page</button>
-      <input id="ebay-redirect-input" placeholder="2. Paste the URL eBay sent you to" aria-label="Redirect URL from eBay" />
+      <input id="ebay-redirect-input" placeholder="2. Paste the URL eBay redirected to" aria-label="Redirect URL from eBay" />
       <button data-act="ebay-authorize">3. Connect</button>`;
   } else if (e.authorized) {
     ebayActions = `<button data-act="ebay-check">Check account</button>
@@ -1791,7 +1791,7 @@ function renderConnections() {
     connItem("ebay", `eBay${e.env === "sandbox" ? " (sandbox)" : ""}`,
       e.ready ? "connected" : "needs setup", e.ready ? "ok" : "todo", e.next + (e.error ? ` (${e.error})` : ""),
       ebayActions,
-      e.authorized ? "" : "After you approve, eBay sends the browser to your RuName's accepted URL. That page can be anything; copy its full address from the address bar."),
+      e.authorized ? "" : "After approval, eBay sends the browser to the RuName's accepted URL. That page can be anything; copy the full address from the address bar."),
     connItem("cloudinary", "Photo hosting (Cloudinary)", d.cloudinary.ready ? "ready" : "needs setup",
       d.cloudinary.ready ? "ok" : "todo", d.cloudinary.next),
     portalItem("tcgplayer", "TCGplayer"),
@@ -1868,7 +1868,7 @@ function setupConnections() {
         case "ebay-disconnect": {
           const { ok } = await askConfirm({
             title: "Disconnect eBay?",
-            html: "<p>The saved authorization is deleted. Listings already live on eBay stay up; you can reconnect at any time.</p>",
+            html: "<p>The saved authorization is deleted. Listings already live on eBay stay up. Reconnect at any time.</p>",
             confirm: "Disconnect",
           });
           if (ok) await post("/api/connections/ebay/disconnect");
@@ -1884,7 +1884,7 @@ function setupConnections() {
         case "portal-finish":
           btn.textContent = "Saving…";
           await post(`/api/connections/portal/${key}/login/finish`);
-          conn.results[key] = { ok: true, detail: "Session saved. Run “Check session” to confirm it works." };
+          conn.results[key] = { ok: true, detail: "Session saved. Run “Check session” to confirm the session works." };
           break;
         case "portal-cancel":
           await post(`/api/connections/portal/${key}/login/cancel`);

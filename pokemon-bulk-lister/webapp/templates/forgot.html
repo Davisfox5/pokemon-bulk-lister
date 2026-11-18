@@ -10,7 +10,7 @@
 <body class="auth-page">
   <main class="auth-card">
     <a class="auth-brand" href="/">Pokémon <span>bulk lister</span></a>
-    <h1>Forgot your password?</h1>
+    <h1>Forgot password?</h1>
     {% if error %}<p class="auth-error">{{ error }}</p>{% endif %}
     {% if sent %}
       <p class="auth-sub">{{ sent }}</p>
@@ -19,7 +19,7 @@
           console window the app runs in.</p>
       {% endif %}
     {% else %}
-      <p class="auth-sub">Enter your email and we'll send a link to choose a new one.</p>
+      <p class="auth-sub">Enter the account email to get a link for choosing a new password.</p>
       <form method="post" action="/forgot-password">
         <label>Email
           <input type="email" name="email" required autocomplete="email" autofocus>

@@ -964,7 +964,7 @@ def test_a_dispute_holds_the_money_and_a_win_pays_the_seller_again(shop):
 
     shop.fake.disputes[cid] = "won"
     r = shop.operator.post("/api/admin/refunds/check").get_json()
-    assert "in your favour" in r["changes"][0] and _status(shop, oid) == "paid"
+    assert "dispute won" in r["changes"][0] and _status(shop, oid) == "paid"
     assert [t["amount"] for t in shop.fake.transfers] == [1800, 1800]              # paid a second time
     assert shop.fake.transfers[1]["reversed"] is False
     assert shop.seller.get("/api/market/my").get_json()["balance"] == 0.0
@@ -1171,7 +1171,7 @@ def test_forgot_password_resets_it_signs_other_browsers_out_and_confirms_the_add
     anon = app.test_client()
     assert anon.get("/forgot-password").status_code == 200
     r = anon.post("/forgot-password", data={"email": "a@example.com"})
-    assert r.status_code == 200 and b"on its way" in r.data
+    assert r.status_code == 200 and b"on the way" in r.data
     link = _reset_link(app.outbox, "a@example.com")
     token = link.split("token=")[1]
     assert anon.get(link).status_code == 200

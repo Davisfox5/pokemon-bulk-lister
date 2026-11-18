@@ -94,7 +94,7 @@ class TcgCatalog:
             wanted = {"id": "TCGplayer Id", "name": "Product Name", "number": "Number",
                       "condition": "Condition"}
             raise ValueError(
-                "this does not look like a TCGplayer pricing export: no "
+                "this file does not look like a TCGplayer pricing export: no "
                 + ", ".join(wanted[m] for m in missing) + " column. Columns found: "
                 + (", ".join(headers) or "none"))
         rows = []

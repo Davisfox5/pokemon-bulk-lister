@@ -67,9 +67,9 @@ function provenanceHtml(p) {
   if (!p) return '<span class="prov price-source-line">No price yet</span>';
   const keys = Object.keys(SOURCE_LABELS).filter((k) => p.sources && p.sources[k] != null);
   const conf = `${Math.round((p.confidence ?? 0) * 100)}%`;
-  const own = /^From your spreadsheet/.test(p.notes || "");
+  const own = /^From (your|the imported) spreadsheet/.test(p.notes || "");
   const basis = keys.length ? keys.map(k => SOURCE_LABELS[k]).join(" + ")
-    : own ? "Your spreadsheet" : p.priced_at ? "No source prices" : "No price yet";
+    : own ? "Spreadsheet" : p.priced_at ? "No source prices" : "No price yet";
   const line = [basis, ago(p.priced_at)].filter(Boolean).join(" · ");
   // Close prices are not a disagreement: show the range the price sits in.
   const vals = keys.map(k => p.sources[k]).filter(x => x > 0);
@@ -145,8 +145,8 @@ function askConfirm({ title, html, confirm = "Confirm", checkbox = null }) {
    listing_id, name, price, seller and optionally set_name/card_number/condition. */
 async function buyListing(l, payments) {
   const how = payments === "stripe"
-    ? "You'll go to Stripe to pay by card. The card moves to your library once payment clears."
-    : "No card payments are set up here, so you pay the seller directly. The card moves to your library when the seller marks it paid.";
+    ? "Payment is by card through Stripe. The card moves to the library once payment clears."
+    : "No card payments are set up here, so payment goes directly to the seller. The card moves to the library when the seller marks the order paid.";
   const what = [l.set_name, l.card_number ? "#" + l.card_number : "", l.condition].filter(Boolean).join(" · ");
   const { ok } = await askConfirm({
     title: `Buy for ${fmtUsd(l.price)}?`,
@@ -157,7 +157,7 @@ async function buyListing(l, payments) {
   if (!ok) return false;
   const res = await postJson(`/api/market/listings/${l.listing_id}/buy`);
   if (res.checkout_url) { window.location = res.checkout_url; return true; }
-  toast("Order placed. It shows under Purchased once the seller confirms payment.");
+  toast("Order placed. The order shows under Purchased once the seller confirms payment.");
   return true;
 }
 

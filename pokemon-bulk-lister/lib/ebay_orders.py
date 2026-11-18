@@ -121,7 +121,7 @@ def fetch_sale_lines(auth: EbayUserAuth, since: Optional[datetime] = None,
     if not auth.has_scope(SALES_SCOPE):
         raise EbaySalesScopeMissing(
             "this eBay connection was made before sales could be read back; "
-            "disconnect and connect eBay again to allow it")
+            "disconnect and connect eBay again to allow reading sales")
     since = since or (datetime.now(timezone.utc) - timedelta(days=30)).replace(tzinfo=None)
     stamp = since.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     base = SANDBOX_BASE if auth.is_sandbox else PRODUCTION_BASE

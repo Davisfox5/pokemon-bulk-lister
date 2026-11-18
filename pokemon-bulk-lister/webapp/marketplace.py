@@ -352,7 +352,7 @@ def buy(listing_id: int):
         if listing is None:
             abort(404)
         if listing.seller_id == uid:
-            return jsonify({"error": "that's your own listing"}), 400
+            return jsonify({"error": "the listing belongs to this account"}), 400
         # An abandoned card checkout must not block the next buyer forever.
         _sweep_stripe_orders(
             s, s.query(Order).filter_by(listing_id=listing.id, status="pending_payment").all())
@@ -444,9 +444,9 @@ def buy(listing_id: int):
         return jsonify({
             "order_id": order.id,
             "status": "pending_payment",
-            "note": ("No payment processor configured — settle payment with the "
-                     "seller directly; they confirm with “mark paid”, which "
-                     "transfers the card to your library."),
+            "note": ("No payment processor configured. Settle payment with the "
+                     "seller directly; the seller confirms with “mark paid”, which "
+                     "transfers the card to the buyer's library."),
         })
     finally:
         s.close()
@@ -636,7 +636,7 @@ def _apply_stripe_session(s, order: Order, session_obj) -> str:
             _refund(s, session_obj, order, "amount charged did not match the order")
             raise PaymentError(
                 f"Stripe charged {session_obj['amount_total']} {session_obj['currency']} but "
-                f"the order is for {expected} usd; it was cancelled and refunded")
+                f"the order is for {expected} usd; the order was cancelled and refunded")
         try:
             _apply_payment(s, order)
         except AlreadySettled:
@@ -802,7 +802,7 @@ def cancel_order(order_id: int):
                     return jsonify({"order_id": order_id, "status": "cancelled"})
                 return jsonify({"error": "card payments are switched off on this server, so the "
                                          "payment cannot be checked. The order is released "
-                                         f"{STRIPE_CHECKOUT_MINUTES} minutes after it was placed."}), 409
+                                         f"{STRIPE_CHECKOUT_MINUTES} minutes after being placed."}), 409
             try:
                 status = _void_stripe_order(s, stripe, order)
             except PaymentError as exc:
@@ -1075,7 +1075,7 @@ def record_payout():
         with payout_lock:
             owed = seller_balance(s, seller.id)["balance"]
             if amount > owed + 0.005:
-                return jsonify({"error": f"that is more than the ${owed:.2f} owed to this seller"}), 400
+                return jsonify({"error": f"the amount is more than the ${owed:.2f} owed to this seller"}), 400
             s.add(Payout(
                 seller_id=seller.id, amount=amount, recorded_by=uid,
                 method=str(body.get("method") or "")[:40] or None,

@@ -58,7 +58,7 @@
       <div class="drive-trail"></div>
       <div class="drive-tools"></div>
       <div class="drive-body"></div>
-      <details class="drive-more"><summary>Folder not listed? Open it by link</summary>
+      <details class="drive-more"><summary>Folder not listed? Open by link</summary>
         <form class="drive-link"><input type="url" name="link" placeholder="Paste a Drive folder link" aria-label="Drive folder link">
           <button type="submit">Open</button></form></details>
       <div class="drive-foot"><span class="count"></span>
@@ -125,7 +125,7 @@
       if (err.reconnect || err.status === 409) return offerConnect();
       return note(h(err.message));
     }
-    const top = trail.length === 1 && !shareWith ? [{ id: "shared-with-me", name: "Shared with me" }] : [];
+    const top = trail.length === 1 && !shareWith ? [{ id: "shared-with-me", name: "Shared files" }] : [];
     const rows = top.concat(listing.folders).map((f) =>
       `<li class="drive-row"><button type="button" class="folder" data-drive="open" data-id="${h(f.id)}" data-name="${h(f.name)}">📁 ${h(f.name)}</button></li>`)
       .concat(listing.files.map((f) =>
@@ -145,9 +145,9 @@
       return note(err.status === 401 ? `<a href="/login?next=${encodeURIComponent(location.pathname)}">Log in</a> to use Google Drive.` : h(err.message));
     }
     if (!status.configured) {
-      return note("Google Drive is not set up on this install. It needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (see the README).");
+      return note("Google Drive is not set up on this install. Setup needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (see the README).");
     }
-    note(`Connect your Google Drive to pick files from it. Access is read-only: this app cannot change or delete anything there.
+    note(`Connect Google Drive to pick files. Access is read-only: this app cannot change or delete anything there.
       <br><br><a class="btn primary" href="/api/drive/connect?next=${encodeURIComponent(location.pathname)}">Connect Google Drive</a>`);
   }
 
@@ -256,7 +256,7 @@
         try {
           const chosen = await filesFor(data.docs || [], options.kind);
           if (!chosen.files.length) {
-            return say(`No ${options.kind === "photos" ? "photos" : "spreadsheets"} in what you picked.`);
+            return say(`No ${options.kind === "photos" ? "photos" : "spreadsheets"} in the picked items.`);
           }
           // A folder can hold hundreds of photos: say how many before using them.
           if (chosen.folders.length && typeof askConfirm === "function") {
@@ -289,7 +289,7 @@
     // An install with a service account has no Drive of its own to show:
     // the starting point is whatever was shared with its address.
     shareWith = status.mode === "service_account" ? status.share_with : null;
-    trail = shareWith ? [{ id: "shared-with-me", name: "Shared with this app" }] : [{ id: "root", name: "My Drive" }];
+    trail = shareWith ? [{ id: "shared-with-me", name: "Shared with this app" }] : [{ id: "root", name: "Drive" }];
     startId = status.start_folder ? status.start_folder.id : null;
     if (status.start_folder) trail.push(status.start_folder);
     dlg.querySelector(".drive-tools").innerHTML = "";

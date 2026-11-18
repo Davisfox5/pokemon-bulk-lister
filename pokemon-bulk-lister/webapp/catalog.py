@@ -198,7 +198,7 @@ def item_valuation(item: InventoryItem) -> tuple:
         price = saved.price
         provenance = {"sources": {}, "confidence": 0.4, "outlier": False, "flagged": True,
                       "priced_at": saved.updated_at.isoformat() + "Z",
-                      "notes": "From your spreadsheet" + (f" ({saved.source})" if saved.source else ""),
+                      "notes": "From the imported spreadsheet" + (f" ({saved.source})" if saved.source else ""),
                       "estimate": True}
     return price, provenance
 
@@ -373,9 +373,9 @@ def patch_inventory(item_id: int):
             try:
                 yours = round(float(raw), 2) if raw not in (None, "") else None
             except (TypeError, ValueError):
-                return jsonify({"error": "your price must be a number"}), 400
+                return jsonify({"error": "the set price must be a number"}), 400
             if yours is not None and not (math.isfinite(yours) and 0 < yours <= 100_000):
-                return jsonify({"error": "your price must be more than 0"}), 400
+                return jsonify({"error": "the set price must be more than 0"}), 400
             set_your_price(s, item.id, yours)
             _price_on_scan(item.source_crop_path, yours)
         s.commit()
@@ -422,7 +422,7 @@ def release_listings(s, item: InventoryItem) -> str | None:
     active = s.query(MarketListing).filter_by(inventory_item_id=item.id, status="active").all()
     for listing in active:
         if s.query(Order).filter_by(listing_id=listing.id, status="pending_payment").count():
-            return "a buyer has a pending order on this card; settle or wait for it first"
+            return "a buyer has a pending order on this card; settle or wait for that order first"
     for listing in active:
         listing.status = "cancelled"
     return None

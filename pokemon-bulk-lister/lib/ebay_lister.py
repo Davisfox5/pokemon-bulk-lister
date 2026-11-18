@@ -342,9 +342,9 @@ class EbayLister:
         """
         price = listing_price(card)
         if not price:
-            raise EbayListingError("card has no price — price it or set a list price first")
+            raise EbayListingError("card has no price; price the card or set a list price first")
         if not card.get("image_url"):
-            raise EbayListingError("card has no image_url — push it to Cloudinary first")
+            raise EbayListingError("card has no image_url; push the photo to Cloudinary first")
 
         sku = self.card_sku(card)
         if dry_run:
@@ -396,7 +396,7 @@ class EbayLister:
         eBay refuses the change."""
         price = listing_price(card)
         if not price:
-            raise EbayListingError("card has no price — price it or set a list price first")
+            raise EbayListingError("card has no price; price the card or set a list price first")
         sku = self.card_sku(card)
         offer_id = card.get("ebay_offer_id") or self._existing_offer_id(sku)
         if not offer_id:

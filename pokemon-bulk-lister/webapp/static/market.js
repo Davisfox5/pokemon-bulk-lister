@@ -10,7 +10,7 @@ async function load() {
   $("#market-payment").textContent = data.payments === "stripe" ? "Pay by card" : "Pay the seller directly";
   $("#market-meta").textContent =
     `Sellers pay a ${data.fee_pct}% platform fee. ${
-      data.payments === "stripe" ? "Card payments are handled by Stripe." : "Arrange payment directly with the seller. Cards enter your library after the seller confirms payment."}`;
+      data.payments === "stripe" ? "Card payments are handled by Stripe." : "Arrange payment directly with the seller. Cards enter the library after the seller confirms payment."}`;
 
   const setSel = $("#mk-set");
   const current = setSel.value;
@@ -52,18 +52,18 @@ function render() {
     ? rows.length === mk.listings.length ? `${rows.length} listing${rows.length === 1 ? "" : "s"}` : `${rows.length} of ${mk.listings.length} listings`
     : "";
   if (!mk.listings.length) {
-    grid.innerHTML = '<div class="market-empty"><span class="empty-card-mark" aria-hidden="true">▱</span><h2>No cards listed yet</h2><a class="btn" href="/portfolio">Choose from your library</a></div>';
+    grid.innerHTML = '<div class="market-empty"><span class="empty-card-mark" aria-hidden="true">▱</span><h2>No cards listed yet</h2><a class="btn" href="/portfolio">Choose from the library</a></div>';
     return;
   }
   if (!rows.length) {
-    grid.innerHTML = '<div class="market-empty"><h2>No matching cards</h2><p class="muted">Try a different search or clear your filters.</p><button type="button" class="btn" data-clear-market>Clear search &amp; filters</button></div>';
+    grid.innerHTML = '<div class="market-empty"><h2>No matching cards</h2><p class="muted">Try a different search or clear the filters.</p><button type="button" class="btn" data-clear-market>Clear search &amp; filters</button></div>';
     return;
   }
   grid.innerHTML = rows.map((l) => {
     const vs = l.vs_market_pct == null ? "" :
       `<span class="chg ${l.vs_market_pct <= 0 ? "up" : "down"}">${l.vs_market_pct > 0 ? "+" : ""}${l.vs_market_pct}% vs market</span>`;
     const action = l.mine
-      ? '<span class="muted">your listing</span>'
+      ? '<span class="muted">own listing</span>'
       : l.pending
         ? '<span class="pill">sale pending</span>'
         : `<button class="btn btn-primary mc-buy" data-id="${l.listing_id}">Buy card</button>`;
@@ -132,9 +132,9 @@ document.addEventListener("keydown", (e) => {
   history.replaceState(null, "", location.pathname);
   if (!order) return;
   postJson(`/api/market/orders/${order}/cancel`)
-    .then(() => toast("Checkout was cancelled. You were not charged, and the card is for sale again."))
+    .then(() => toast("Checkout was cancelled. No charge was made, and the card is for sale again."))
     .catch((err) => toast(/already been paid/.test(err.message)
-      ? "That payment had already gone through. The card is in your library."
+      ? "That payment had already gone through. The card is in the library."
       : "Checkout was left unfinished. The card is released when the checkout expires.", "err"))
     .finally(() => load().catch(() => {}));
 })();

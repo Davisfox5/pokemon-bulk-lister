@@ -150,7 +150,7 @@ class EbayUserAuth:
             raise EbayUserAuthError("EBAY_CLIENT_ID not set")
         if not self.redirect_uri:
             raise EbayUserAuthError(
-                "EBAY_REDIRECT_URI (your RuName) not set — create one under "
+                "EBAY_REDIRECT_URI (the RuName) not set; create one under "
                 "developer.ebay.com -> User Tokens -> Get a Token from eBay via Your Application."
             )
         params = {

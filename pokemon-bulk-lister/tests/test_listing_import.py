@@ -306,7 +306,7 @@ def test_a_card_list_says_what_it_read_keeps_the_rest_as_a_note_and_says_what_it
     assert (drag["quantity"], drag["condition"], drag["is_holo"], drag["rarity"], drag["acquired_price"]) == (
         2, "NM", True, "Double Rare", 9.5)
     assert drag["notes"] == "pulled myself; Number as written: 130/167; Binder Page: 3"
-    assert (drag["price"], drag["provenance"]["notes"]) == (14.5, "From your spreadsheet")
+    assert (drag["price"], drag["provenance"]["notes"]) == (14.5, "From the imported spreadsheet")
     assert (have["Dreepy"]["is_holo"], have["Dreepy"]["notes"]) == (False, "Printing: Reverse Holo; Binder Page: 3")
     # A grade the app has no field for is kept as written, not thrown away.
     assert have["Pikachu"]["condition"] == "NM"
@@ -362,7 +362,7 @@ def test_a_sheet_read_badly_before_is_repaired_by_reading_it_again(site, monkeyp
         "Language: English; Suggested list price: $0.99; ID confidence: High")
     assert pika["price"] == 0.87
     assert pika["set_name"] == "30th Celebration"       # the catalog's spelling, so a lookup can find it
-    assert pika["provenance"]["notes"] == "From your spreadsheet (TCGplayer market via TCGVault (Oct 9))"
+    assert pika["provenance"]["notes"] == "From the imported spreadsheet (TCGplayer market via TCGVault (Oct 9))"
     assert (have["Jirachi ex"]["is_holo"], have["Jirachi ex"]["price"]) == (False, 41.2)
 
     # Reading it a third time changes nothing.

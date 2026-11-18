@@ -83,7 +83,7 @@ def test_sources_always_in_the_same_order_with_the_price_used():
      "cardmarket bulk-floor estimate (p25 of 79 printings — conservative; verify if this could be a special print)",
      f"{price_notes.LOOKUP_FAILED} {price_notes.CM_ESTIMATE}"),
     ("match: no_number", price_notes.FALLBACK),
-    ("From your spreadsheet", "From your spreadsheet."),
+    ("From your spreadsheet", "From the imported spreadsheet."),
 ])
 def test_every_other_stored_wording_becomes_a_plain_sentence(stored, shown):
     assert readable(price_notes.plain(stored)) == shown

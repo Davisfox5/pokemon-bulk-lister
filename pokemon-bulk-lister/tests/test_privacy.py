@@ -22,7 +22,7 @@ def test_privacy_policy_is_readable_without_a_session(anon):
     assert r.status_code == 200
     page = r.get_data(as_text=True)
     for words in ("DTF Services LLC", "St. Augustine", "davisfox5@gmail.com", "OAuth tokens",
-                  "Sell APIs", "do not sell", "/api/ebay/deletion", "eBay buyers"):
+                  "Sell APIs", "does not sell user data", "/api/ebay/deletion", "eBay buyers"):
         assert words in page
     assert connections.PRIVACY_PATH == "/privacy"
 

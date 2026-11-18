@@ -197,7 +197,7 @@ def ebay_consent_url():
     finally:
         s.close()
     if keys is None:
-        return jsonify({"error": "save your eBay API keys first"}), 400
+        return jsonify({"error": "save the eBay API keys first"}), 400
     try:
         return jsonify({"url": _auth_for(uid, keys).build_consent_url()})
     except EbayUserAuthError as exc:
@@ -210,7 +210,7 @@ def ebay_authorize():
     body = request.get_json(silent=True) or {}
     pasted = (body.get("redirect") or "").strip()
     if not pasted:
-        return jsonify({"error": "paste the URL eBay redirected you to (or the code)"}), 400
+        return jsonify({"error": "paste the URL eBay redirected to (or the code)"}), 400
     uid = current_user_id()
     s = get_session()
     try:
@@ -218,7 +218,7 @@ def ebay_authorize():
     finally:
         s.close()
     if keys is None:
-        return jsonify({"error": "save your eBay API keys first"}), 400
+        return jsonify({"error": "save the eBay API keys first"}), 400
     auth = _auth_for(uid, keys)
     try:
         code = auth.extract_code(pasted)
@@ -285,7 +285,7 @@ def ebay_list_item():
     if not price or price <= 0:
         return jsonify({"error": "no price — refresh prices or pass one explicitly"}), 400
     if not card["image_url"]:
-        return jsonify({"error": "item has no image URL — upload its photo first"}), 400
+        return jsonify({"error": "item has no image URL; upload a photo first"}), 400
 
     auth = _auth_for(uid, keys)
     if not auth.is_authorized():

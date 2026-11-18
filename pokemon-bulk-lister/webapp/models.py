@@ -732,7 +732,7 @@ def _quarantine_shared_spreadsheet_prices() -> None:
                 for snapshot in snapshots:
                     session.delete(snapshot)
                 cc.final_price, cc.last_priced_at, cc.pricing_confidence = None, None, 0.0
-                cc.pricing_notes = "Unattributed spreadsheet estimate removed. Re-import your sheet to restore your own estimate."
+                cc.pricing_notes = "Unattributed spreadsheet estimate removed. Re-import the sheet to restore the estimate."
             session.flush()
 
 

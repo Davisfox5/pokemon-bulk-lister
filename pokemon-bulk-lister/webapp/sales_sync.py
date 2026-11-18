@@ -202,7 +202,7 @@ def _undo(s, sale: ExternalSale) -> None:
             quantity=event.quantity, condition=event.condition, image_url=event.image_url,
             crop_path=event.crop_path, note=f"sale {sale.external_id} was refunded or cancelled",
         )
-    sale.status, sale.detail = "void", "refunded or cancelled after it was recorded; the card was put back"
+    sale.status, sale.detail = "void", "refunded or cancelled after being recorded; the card was put back"
 
 
 def _net_unit_price(line: dict, quantity: int) -> Optional[float]:
@@ -288,9 +288,9 @@ def record_sale_lines(lines: list[dict], source: str, owners: Optional[set[int]]
                 if item is None:
                     sale.status = "unmatched"
                     sale.detail = (
-                        "no SKU on this sale, so it cannot be tied to a card" if not sku
+                        "no SKU on this sale, so the sale cannot be tied to a card" if not sku
                         else BENCH_ONLY if bench_id is not None
-                        else "no card with this SKU in the library of the account that sold it")
+                        else "no card with this SKU in the library of the selling account")
                     mark_bench = bench_id is not None
                     counted = "unmatched"
                     out["unmatched"] += 1
@@ -351,7 +351,7 @@ def sync_ebay(days: int = 30) -> dict:
     try:
         auth = connections._ebay_auth()   # noqa: SLF001
         if auth.is_authorized():
-            accounts.append(("your eBay account", auth, None))
+            accounts.append(("the connected eBay account", auth, None))
     except Exception as exc:
         print(f"[sales] operator eBay auth: {exc}", file=sys.stderr)
     try:
@@ -368,7 +368,7 @@ def sync_ebay(days: int = 30) -> dict:
         print(f"[sales] per-user eBay accounts: {exc}", file=sys.stderr)
 
     if not accounts:
-        return {"ok": False, "error": "eBay is not connected. Connect it under Connections."}
+        return {"ok": False, "error": "eBay is not connected. Connect eBay under Connections."}
 
     # eBay can take a while to answer. A second sync started meanwhile would
     # only repeat the same requests, so it is turned away instead of queued.

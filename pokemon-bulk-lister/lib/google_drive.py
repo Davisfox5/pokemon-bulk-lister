@@ -62,7 +62,7 @@ def folder_id_from_link(text: str) -> str:
         return hit.group(1)
     if _ID.match(text) and len(text) >= 10:
         return text
-    raise DriveError("that is not a Google Drive folder link; copy the address of the folder from your browser")
+    raise DriveError("not a Google Drive folder link; copy the address of the folder from the browser")
 
 
 class DriveNotAuthorized(DriveError):
@@ -100,7 +100,7 @@ def exchange_code(client_id: str, client_secret: str, redirect_uri: str, code: s
         "grant_type": "authorization_code", "code": code, "client_id": client_id,
         "client_secret": client_secret, "redirect_uri": redirect_uri}, http, timeout)
     if not body.get("refresh_token"):
-        raise DriveError("Google did not return a refresh token; remove this app's access in your "
+        raise DriveError("Google did not return a refresh token; remove this app's access in the "
                          "Google account and connect again")
     return body
 
@@ -133,7 +133,7 @@ def service_account_token(email: str, private_key_pem: str, http: Any = None, ti
     try:
         key = serialization.load_pem_private_key(pem, password=None)
     except Exception as exc:
-        raise DriveError("the service account private key could not be read (it should be the PEM text "
+        raise DriveError("the service account private key could not be read (expected: the PEM text "
                          "from the key file, starting with -----BEGIN PRIVATE KEY-----)") from exc
     now = int(time.time())
     signing_input = b64(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()) + b"." + b64(json.dumps({
@@ -163,7 +163,7 @@ class Drive:
         if resp.status_code == 401:
             raise DriveNotAuthorized("Google no longer accepts this sign-in; connect Google Drive again")
         if resp.status_code == 404:
-            raise DriveError("that file was not found in your Drive")
+            raise DriveError("that file was not found in the connected Drive")
         if resp.status_code == 403 and ("has not been used in project" in resp.text
                                         or "accessNotConfigured" in resp.text):
             raise DriveError("The Google Drive API is switched off in the Google Cloud project these "
@@ -217,7 +217,7 @@ class Drive:
         id, whoever owns it."""
         info = self.meta(folder_id)
         if info.get("mimeType") != FOLDER:
-            raise DriveError(f"{info.get('name')} is a file, not a folder; paste the link of the folder it is in")
+            raise DriveError(f"{info.get('name')} is a file, not a folder; paste the link of the containing folder")
         return {"id": info["id"], "name": info.get("name") or "Folder"}
 
     def meta(self, file_id: str) -> dict:
