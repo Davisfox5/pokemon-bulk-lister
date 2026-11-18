@@ -291,3 +291,116 @@ def test_a_japanese_card_keeps_its_own_set_and_number_for_ebay(bench):
     en = bench._ebay_spec({"rarity": "Promo", "set_name": "SWSH Black Star Promos"}, "Pikachu",
                           "SWSH Black Star Promos", None, "SWSH020", "holofoil", False)
     assert en.editions == {"promo"} and en.language == "en"
+
+
+# ---------------------------------------------------------------- Nov 18 live test
+
+def radiant_alakazam(**kw):
+    spec = dict(name="Radiant Alakazam", number="59", total="195", set_name="Silver Tempest",
+                set_codes=["SIT"], finish="holofoil", always_holo=eb.inherently_holo("Radiant Alakazam", "Radiant Rare"))
+    spec.update(kw)
+    return CardSpec(**spec)
+
+
+@pytest.mark.parametrize("title", [
+    "Radiant Alakazam 059/195 Silver Tempest",
+    "Radiant Alakazam 59/195 Silver Tempest Pokemon TCG NM",
+    "Pokemon Radiant Alakazam #59 Silver Tempest",
+    "Radiant Alakazam 059 Silver Tempest SIT Near Mint",
+    "Radiant Alakazam 059/195 Silver Tempest Holo Radiant Rare",
+])
+def test_real_title_shapes_count_for_an_always_holo_card(title):
+    assert reject_reason(title, radiant_alakazam()) is None
+
+
+@pytest.mark.parametrize("title, reason", [
+    ("Radiant Alakazam 059/195 Silver Tempest Reverse Holo", "finish"),
+    ("Radiant Alakazam 059/195 Silver Tempest Non-Holo", "finish"),
+    ("Radiant Alakazam 059/196 Silver Tempest", "number"),
+    ("Radiant Alakazam #59/196 Silver Tempest", "number"),
+    ("Radiant Alakazam 159/195 Silver Tempest", "number"),
+    ("Radiant Alakazam 59 Silver Tempest", "number"),          # a bare 59 could be a price
+    ("Radiant Alakazam 059/195 Lost Origin", "set"),
+    ("Radiant Alakazam 059/195 Silver Tempest Japanese", "language"),
+    ("Radiant Alakazam 059/195 Silver Tempest PSA 10", "graded"),
+])
+def test_an_always_holo_card_still_keeps_every_other_rule(title, reason):
+    assert reject_reason(title, radiant_alakazam()) == reason
+
+
+def test_number_forms_with_a_known_total():
+    dedenne = CardSpec(name="Dedenne", number="67", total="172", set_name="Brilliant Stars", set_codes=["BRS"])
+    for title in ("Dedenne 67/172 Brilliant Stars", "Dedenne 067/172 Brilliant Stars Common",
+                  "Dedenne #67 Brilliant Stars", "Dedenne 067 BRS Pokemon"):
+        assert reject_reason(title, dedenne) is None, title
+    assert reject_reason("Dedenne 67/189 Brilliant Stars", dedenne) == "number"
+
+
+def test_only_cards_printed_as_holos_skip_the_holo_word():
+    assert eb.inherently_holo("Radiant Alakazam", "Radiant Rare")
+    assert eb.inherently_holo("Charizard ex", "Double Rare")
+    assert eb.inherently_holo("Pikachu VMAX", "Rare Holo VMAX")
+    assert eb.inherently_holo("Charizard", "Rare Holo")
+    assert not eb.inherently_holo("Togetic", "Uncommon")
+    assert not eb.inherently_holo("Dedenne", "Common")
+    # A holo card that also comes non-holo still needs "holo" in the title.
+    plain_rare = CardSpec(name="Togekiss", number="61", total="189", set_name="Astral Radiance", finish="holofoil")
+    assert reject_reason("Togekiss 061/189 Astral Radiance Rare", plain_rare) == "finish"
+
+
+def test_the_reasons_listings_were_left_out_are_counted():
+    items = _listings(("Radiant Alakazam 059/195 Silver Tempest", 3), ("Radiant Alakazam 059/195 Silver Tempest PSA 10", 80),
+                      ("Radiant Alakazam 059/195 Silver Tempest Japanese", 2), ("Radiant Alakazam 059/195 Lost Origin", 3))
+    stats = eb.match_stats(items, radiant_alakazam(), "price", "q", sold=False)
+    assert stats["count"] == 1 and stats["rejected"] == {"graded": 1, "language": 1, "set": 1}
+
+
+def test_the_ebay_path_is_logged_without_secrets(capsys):
+    client = eb.EbayClient(client_id="the-client-id", client_secret="the-client-secret")
+    client._session = _Session(_listings(("Radiant Alakazam 059/195 Silver Tempest", 3.0),
+                                         ("Radiant Alakazam 059/195 Silver Tempest PSA 10", 90.0)))
+    client.card_stats(radiant_alakazam())
+    logged = capsys.readouterr().err
+    assert "token: asked for api_scope, buy.marketplace.insights, eBay answered 400" in logged
+    assert "asked again for api_scope only, eBay answered 200" in logged
+    assert "token: granted api_scope" in logged
+    assert "insights: skipped" in logged
+    assert "browse: 200 for 'Radiant Alakazam 59/195 holo'" in logged
+    assert "asking: 'Radiant Alakazam 59/195 holo': 2 results, 1 exact matches, left out: graded 1" in logged
+    for secret in ("the-client-id", "the-client-secret", "access_token", "Bearer"):
+        assert secret not in logged
+
+
+def test_an_insights_refusal_is_logged_not_swallowed(capsys):
+    client = eb.EbayClient(client_id="id", client_secret="s")
+    session = _Session(_listings(), insights=True)
+    session.get = lambda url, params=None, **kw: _Resp(403) if "marketplace_insights" in url else _Resp(200, {"itemSummaries": []})
+    client._session = session
+    out = client.card_stats(radiant_alakazam())
+    logged = capsys.readouterr().err
+    assert "insights: 403" in logged and "insights: not used for" in logged
+    assert out["sold"] is None and out["asking"]["count"] == 0 and out["asking"]["results"] == 0
+
+
+def test_once_insights_works_sold_prices_replace_asking_ones():
+    client = eb.EbayClient(client_id="id", client_secret="s")
+    session = _Session(_listings(), insights=True)
+    sales = _sales(*[("Radiant Alakazam 059/195 Silver Tempest", p, "USD") for p in (2.5, 3.0, 3.5)])
+    session.get = lambda url, params=None, **kw: (_Resp(200, {"itemSales": sales}) if "marketplace_insights" in url
+                                                  else (_ for _ in ()).throw(AssertionError("Browse not needed")))
+    client._session = session
+    out = client.card_stats(radiant_alakazam())
+    assert out["sold"]["usable"] and out["sold"]["median"] == 3.0 and out["asking"] is None
+
+
+def test_a_radiant_card_is_marked_always_holo(bench):
+    spec = bench._ebay_spec({"rarity": "Radiant Rare"}, "Radiant Alakazam", "Silver Tempest", None, "59",
+                            "holofoil", False)
+    assert spec.always_holo
+    assert not bench._ebay_spec({"rarity": "Uncommon"}, "Togetic", "Astral Radiance", None, "56",
+                                "normal", False).always_holo
+
+
+def test_a_library_card_skipping_the_saved_match_is_logged(bench, capsys):
+    bench._save_ebay_match({"name": "Togetic"}, {"sold": None, "asking": None, "query": "q"})
+    assert "match not kept for 'Togetic'" in capsys.readouterr().err

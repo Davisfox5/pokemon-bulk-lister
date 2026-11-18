@@ -79,41 +79,69 @@ function fmt(v) {
 // eBay prices count only for the exact card (lib/ebay_client.py). Sold
 // prices with too few matches, and asking prices from active listings, are
 // shown for reference and never go into the price estimate.
+const NO_EBAY_MATCH = "no exact eBay matches";
+
 function ebaySummary(card) {
-  const m = card.ebay_match || {};
-  const sold = m.sold || null, asking = m.asking || null;
-  const lines = [];
-  if (sold && sold.count && !sold.usable) {
-    lines.push(`${fmt(sold.median)} median of ${plural(sold.count, "sale")}, too few to price from`);
-  }
-  if (asking && asking.count) {
-    lines.push(`eBay asking (median) ${fmt(asking.median)}, ${plural(asking.count, "listing")}${asking.usable ? "" : ", too few to rely on"}`);
-  }
-  const shown = (sold && sold.results) ? sold : asking;
-  return { sold, asking, lines, shown };
+  const m = card.ebay_match || null;
+  const sold = (m && m.sold) || null, asking = (m && m.asking) || null;
+  // Sold results once Insights answers; asking ones (Browse) otherwise.
+  const shown = sold && sold.results ? sold : (asking || sold);
+  return { searched: !!(sold || asking), sold, asking, shown };
 }
 
 function ebayCellHtml(card) {
   const ebay = bestEbay(card);
-  const { lines } = ebaySummary(card);
-  const main = ebay.value == null
-    ? `<span class="muted">—</span>`
-    : `${fmt(ebay.value)}<div class="muted small">${ebay.count || 0} sold, ${ebay.window}</div>`;
+  const { searched, sold, asking } = ebaySummary(card);
+  const lines = [];
+  let main;
+  if (ebay.value != null) {
+    main = `${fmt(ebay.value)}<div class="muted small">${ebay.count || 0} sold, ${ebay.window}</div>`;
+  } else if (asking && asking.count) {
+    main = `${fmt(asking.median)}<div class="muted small">eBay asking (median), ${plural(asking.count, "listing")}</div>`;
+  } else if (searched) {
+    main = `<span class="muted small">${NO_EBAY_MATCH}</span>`;
+  } else {
+    main = `<span class="muted">—</span>`;
+  }
+  if (sold && sold.count && !sold.usable) {
+    lines.push(`${fmt(sold.median)} median of ${plural(sold.count, "sale")}, too few to price from`);
+  }
   return main + lines.map(l => `<div class="muted small">${escapeHtml(l)}</div>`).join("");
 }
 
-function ebayModalHtml(card) {
-  const { sold, asking, shown } = ebaySummary(card);
-  const soldText = card.ebay_median_30d != null
-    ? `${fmt(card.ebay_median_30d)}`
+function ebayModalHtml(card, withMatch = true) {
+  const { searched, sold, asking } = ebaySummary(card);
+  const soldText = card.ebay_median_30d != null ? fmt(card.ebay_median_30d)
     : sold && sold.count ? `${plural(sold.count, "sale")}, too few` : "—";
   const rows = [`<div>eBay sold<strong>${soldText}</strong></div>`];
-  if (asking && asking.count) rows.push(`<div>eBay asking (median)<strong>${fmt(asking.median)}</strong></div>`);
-  if (shown) {
-    rows.push(`<div class="ebay-match muted small">${shown.count} matched of ${plural(shown.results, "result")}${
-      shown.url ? ` · <a href="${escapeHtml(shown.url)}" target="_blank" rel="noopener">See this search on eBay</a>` : ""}</div>`);
-  }
+  if (!searched) return rows.join("");
+  const askingText = asking && asking.count ? fmt(asking.median)
+    : `<span class="muted small">${asking ? NO_EBAY_MATCH : "not searched"}</span>`;
+  rows.push(`<div>eBay asking (median)<strong>${askingText}</strong></div>`);
+  if (withMatch) rows.push(ebayMatchHtml(card));
   return rows.join("");
+}
+
+// "46 matched of 84 results" and the same search on eBay's site.
+function ebayMatchHtml(card) {
+  const { shown } = ebaySummary(card);
+  if (!shown) return "";
+  const matched = shown.count ? `${shown.count} matched of ${plural(shown.results || 0, "result")}`
+    : `${NO_EBAY_MATCH} (0 matched of ${plural(shown.results || 0, "result")})`;
+  return `<div class="ebay-match muted small">${matched}${
+    shown.url ? ` · <a href="${escapeHtml(shown.url)}" target="_blank" rel="noopener">See this search on eBay</a>` : ""}</div>`;
+}
+
+// The editor's price block, from a card as the server sent it.
+function modalPricesHtml(card) {
+  return `
+    <div>TCGplayer<strong>${fmt(card.tcgplayer_market)}</strong></div>
+    <div>Cardmarket<strong>${fmt(card.cardmarket_trend_usd)}</strong></div>
+    ${ebayModalHtml(card, false)}
+    <div>Price estimate<strong>${fmt(card.final_price)}</strong></div>
+    ${ebayMatchHtml(card)}
+    <div class="price-note">${card.needs_review ? escapeHtml(reviewWhy(card.pricing_notes)) : ""}</div>
+  `;
 }
 
 function bestEbay(card) {
@@ -829,13 +857,7 @@ function openEdit(id) {
   showListingPreview(id);
   $("#modal-confidence").textContent = `${Math.round((card.id_confidence || 0) * 100)}% identification confidence`;
 
-  $("#modal-prices").innerHTML = `
-    <div>TCGplayer<strong>${fmt(card.tcgplayer_market)}</strong></div>
-    <div>Cardmarket<strong>${fmt(card.cardmarket_trend_usd)}</strong></div>
-    ${ebayModalHtml(card)}
-    <div>Price estimate<strong>${fmt(card.final_price)}</strong></div>
-    <div class="price-note">${card.needs_review ? escapeHtml(reviewWhy(card.pricing_notes)) : ""}</div>
-  `;
+  $("#modal-prices").innerHTML = modalPricesHtml(card);
   $("#modal").classList.remove("hidden");
   form.elements.namedItem("name").focus();
 }
@@ -877,11 +899,16 @@ async function saveEdit({ priceAfter = false } = {}) {
     if (priceAfter) {
       activeBtn.textContent = "Pricing…";
       const updated = await api(`/api/cards/${state.editing}/price`, { method: "POST" });
-      // Refresh the modal body with the new prices before closing.
       const idx = state.cards.findIndex(c => c.id === updated.id);
       if (idx >= 0) state.cards[idx] = updated;
-      activeBtn.textContent = `Priced $${(updated.final_price ?? 0).toFixed(2)}`;
-      await new Promise(r => setTimeout(r, 600));   // brief flash so user sees the new price
+      // Show the new prices, eBay's included, and keep the editor open so
+      // they can be read. The table behind it catches up too.
+      if (state.editing === updated.id) $("#modal-prices").innerHTML = modalPricesHtml(updated);
+      activeBtn.textContent = `Priced ${fmt(updated.final_price)}`;
+      await new Promise(r => setTimeout(r, 900));
+      await loadCards();
+      await offerEbayUpdate([edited]);
+      return;
     } else {
       activeBtn.textContent = "Saved ✓";
       await new Promise(r => setTimeout(r, 350));

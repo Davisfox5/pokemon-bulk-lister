@@ -428,3 +428,6 @@ body.scan-page { padding: 0 0 48px; }
 .listing-preview strong { display: block; font-size: 13px; margin-bottom: 4px; }
 #listing-form { display: grid; gap: 10px; width: 100%; }
 .your-price { color: var(--accent); font-weight: 600; }
+
+/* How many eBay listings matched, with the search: a full row under the prices. */
+.prices-grid .ebay-match { grid-column: 1 / -1; }

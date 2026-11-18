@@ -47,7 +47,8 @@ sys.path.insert(0, str(ROOT))
 
 from lib.cardmarket_client import CardmarketPriceGuide  # noqa: E402
 from lib.ebay_client import CardSpec as EbayCardSpec, EbayAuthError, EbayClient  # noqa: E402
-from lib.ebay_client import editions_in as ebay_editions_in  # noqa: E402
+from lib.ebay_client import editions_in as ebay_editions_in, inherently_holo as ebay_inherently_holo  # noqa: E402
+from lib.ebay_client import log as ebay_log  # noqa: E402
 from lib.printing import of as card_printing
 from lib import price_notes  # noqa: E402
 from lib.pricing import aggregate, far_apart  # noqa: E402
@@ -1019,6 +1020,7 @@ def _ebay_spec(card: dict, name: str, set_name: Optional[str], set_code: Optiona
         finish=printing if printing in ("holofoil", "reverseHolofoil") else "normal",
         language="ja" if japanese else "en",
         editions=ebay_editions_in(" ".join(str(card.get(k) or "") for k in ("name", "set_name", "rarity"))),
+        always_holo=printing == "holofoil" and ebay_inherently_holo(name, card.get("rarity") or ""),
     )
 
 
@@ -1036,11 +1038,16 @@ def _save_ebay_match(card: dict, match: Optional[dict]) -> None:
     matched of how many, the search) for the screens. A row in app_state,
     so the table's columns stay as they are."""
     if not card.get("id") or not card.get("crop_path"):
-        return                                   # a Library card: no bench row to show it on
+        ebay_log(f"match not kept for {card.get('name')!r}: a Library card has no Scan row to show it on")
+        return
     try:
         runtime.state_set(_ebay_key(card["id"]), {"sig": _ebay_sig(card), **match} if match else None)
+        if match:
+            ebay_log(f"match kept for card {card['id']}")
+        else:
+            ebay_log(f"no eBay search for card {card['id']}; any earlier match cleared")
     except Exception as exc:
-        print(f"[ebay] could not keep the match for card {card.get('id')}: {exc}", file=sys.stderr)
+        ebay_log(f"could not keep the match for card {card.get('id')}: {type(exc).__name__}: {exc}")
 
 
 def _attach_ebay(rows: list[dict]) -> None:
@@ -1187,9 +1194,11 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         try:
             ebay_match = ebay.card_stats(ebay_spec, days=30)
         except EbayAuthError as exc:
-            print(f"[ebay auth] {exc}", file=sys.stderr)
+            ebay_log(f"{name}: not searched: {exc}")
         except Exception as exc:
-            print(f"[ebay] {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            ebay_log(f"{name}: search failed: {type(exc).__name__}: {exc}")
+    elif name:
+        ebay_log(f"{name}: not searched (finish not checked)")
     sold = (ebay_match or {}).get("sold") or {}
     if sold.get("usable"):
         ebay_stats = {"median": sold["median"], "max": sold["max"], "count": sold["count"]}

@@ -20,7 +20,9 @@ import base64
 import os
 import re
 import statistics
+import sys
 import time
+from collections import Counter
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -75,6 +77,23 @@ EDITIONS = {
 _STAMP_KINDS = {"staff", "prerelease", "stamped"}
 
 
+def log(message: str) -> None:
+    """One line on the server log. Never a token, secret or credential."""
+    print(f"[ebay] {message}", file=sys.stderr, flush=True)
+
+
+# Cards that only exist as holos: a listing need not say "holo" for them
+# (reverse and non-holo listings are still left out).
+_ALWAYS_HOLO_RARITY = re.compile(
+    r"holo|radiant|ultra|secret|rainbow|double rare|illustration|hyper|shiny|amazing|"
+    r"ace spec|prism|break|legend|\bv\b|vmax|vstar|\bex\b|\bgx\b", re.I)
+_ALWAYS_HOLO_NAME = re.compile(r"^radiant\b|\b(ex|gx|v|vmax|vstar|v-union)$", re.I)
+
+
+def inherently_holo(name: str, rarity: str = "") -> bool:
+    return bool(_ALWAYS_HOLO_RARITY.search(rarity or "") or _ALWAYS_HOLO_NAME.search((name or "").strip()))
+
+
 def _plain(text: str) -> str:
     """Lower case, no accents, '&' as 'and', punctuation as spaces."""
     text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
@@ -97,6 +116,7 @@ class CardSpec:
     finish: str = "normal"           # normal | holofoil | reverseHolofoil
     language: str = "en"             # en | ja
     editions: set[str] = field(default_factory=set)
+    always_holo: bool = False        # only printed as a holo: titles need not say so
 
     def number_text(self) -> str:
         num, total = self.number.split("/")[0].strip(), self.total or ""
@@ -131,11 +151,13 @@ def _number_re(spec: CardSpec) -> Optional[re.Pattern]:
         # Lettered numbers (TG12, SV49, SWSH050) are their own format.
         return re.compile(rf"{head}(?![0-9])", re.I)
     if total:
-        t = total.lstrip("0") or "0"
         t_prefix = re.match(r"[a-zA-Z]*", total).group(0)
         t_digits = total[len(t_prefix):].lstrip("0") or "0"
-        return re.compile(rf"{head}\s*/\s*{re.escape(t_prefix)}0*{t_digits}(?![0-9])" if t_prefix
-                          else rf"{head}\s*/\s*0*{t}(?![0-9])", re.I)
+        fraction = rf"{head}\s*/\s*{re.escape(t_prefix)}0*{t_digits}(?![0-9])"
+        # Also "#59" and a zero-padded "059" on their own, never a fraction
+        # with another total ("059/196") and never a bare "59" (a price, a year).
+        return re.compile(rf"{fraction}|#\s*0*{digits}(?![0-9]|\s*/)"
+                          rf"|(?<![a-z0-9$.#/])0+{digits}(?![0-9]|\s*/)", re.I)
     # No total known: "4/<total>" or "#4".
     return re.compile(rf"{head}\s*/\s*[a-z]*\d+|#\s*0*{digits}(?![0-9])", re.I)
 
@@ -176,7 +198,7 @@ def reject_reason(title: str, spec: CardSpec) -> Optional[str]:
         if not reverse:
             return "finish"
     elif spec.finish == "holofoil":
-        if reverse or non_holo or not holo:
+        if reverse or non_holo or not (holo or spec.always_holo):
             return "finish"
     elif reverse or holo:
         return "finish"
@@ -190,6 +212,12 @@ def reject_reason(title: str, spec: CardSpec) -> Optional[str]:
     return None
 
 
+def _log_stats(kind: str, stats: dict) -> None:
+    reasons = ", ".join(f"{k} {v}" for k, v in sorted(stats.get("rejected", {}).items())) or "none"
+    log(f"{kind}: {stats['query']!r}: {stats['results']} results, {stats['count']} exact matches, "
+        f"left out: {reasons}")
+
+
 def search_link(query: str, sold: bool) -> str:
     """The same search on eBay's site, for a person to check."""
     params = {"_nkw": query, "_sacat": POKEMON_CATEGORY_ID}
@@ -201,8 +229,11 @@ def match_stats(items: list[dict], spec: CardSpec, price_key: str, query: str, s
     """Median, max, min of the exact matches among `items`, with how many
     matched of how many came back."""
     prices: list[float] = []
+    rejected: Counter = Counter()
     for it in items:
-        if reject_reason(it.get("title") or "", spec):
+        reason = reject_reason(it.get("title") or "", spec)
+        if reason:
+            rejected[reason] += 1
             continue
         price = (it.get(price_key) or {})
         if price.get("value") is None or price.get("currency", "USD") != "USD":
@@ -212,7 +243,7 @@ def match_stats(items: list[dict], spec: CardSpec, price_key: str, query: str, s
         except (TypeError, ValueError):
             continue
     out = {"count": len(prices), "results": len(items), "usable": len(prices) >= MIN_MATCHES,
-           "query": query, "url": search_link(query, sold),
+           "query": query, "url": search_link(query, sold), "rejected": dict(rejected),
            "median": None, "max": None, "min": None}
     if prices:
         out.update(median=round(statistics.median(prices), 2), max=round(max(prices), 2),
@@ -222,6 +253,11 @@ def match_stats(items: list[dict], spec: CardSpec, price_key: str, query: str, s
 
 class EbayAuthError(RuntimeError):
     pass
+
+
+def _scope_names(scopes: str) -> str:
+    """'api_scope, buy.marketplace.insights': scope names, nothing secret."""
+    return ", ".join(s.rsplit("/", 1)[-1] for s in (scopes or "").split()) or "none"
 
 
 class EbayClient:
@@ -259,15 +295,20 @@ class EbayClient:
                 data={"grant_type": "client_credentials", "scope": scopes},
                 timeout=self.timeout)
 
-        resp = ask(f"{BASE_SCOPE} {INSIGHTS_SCOPE}") if self.insights else ask(BASE_SCOPE)
+        wanted = f"{BASE_SCOPE} {INSIGHTS_SCOPE}" if self.insights else BASE_SCOPE
+        resp = ask(wanted)
+        log(f"token: asked for {_scope_names(wanted)}, eBay answered {resp.status_code}")
         if resp.status_code != 200 and self.insights:
             # A keyset without the Insights scope is refused a token that asks
             # for it. The base scope still covers the Browse API.
             self.insights = False
-            resp = ask(BASE_SCOPE)
+            wanted = BASE_SCOPE
+            resp = ask(wanted)
+            log(f"token: asked again for {_scope_names(wanted)} only, eBay answered {resp.status_code}")
         if resp.status_code != 200:
             raise EbayAuthError(f"OAuth failed {resp.status_code}")
         payload = resp.json()
+        log(f"token: granted {_scope_names(payload.get('scope') or wanted)}")
         self._token = payload["access_token"]
         self._token_expiry = time.time() + int(payload.get("expires_in", 7200))
         return self._token
@@ -306,6 +347,7 @@ class EbayClient:
             filters.insert(1, f"conditions:{{{condition}}}")
         resp = self._get("/buy/marketplace_insights/v1_beta/item_sales/search",
                          {"q": query, "filter": ",".join(filters), "limit": str(min(limit, 200))})
+        log(f"insights: {resp.status_code} for {query!r}")
         if resp.status_code == 403:
             self.insights = False
             raise EbayAuthError("Marketplace Insights returned 403 (no buy.marketplace.insights scope)")
@@ -317,6 +359,7 @@ class EbayClient:
         resp = self._get("/buy/browse/v1/item_summary/search", {
             "q": query, "category_ids": POKEMON_CATEGORY_ID,
             "filter": "buyingOptions:{FIXED_PRICE},priceCurrency:USD", "limit": str(min(limit, 200))})
+        log(f"browse: {resp.status_code} for {query!r}")
         if resp.status_code in (401, 403):
             raise EbayAuthError(f"Browse API returned {resp.status_code}")
         resp.raise_for_status()
@@ -328,15 +371,22 @@ class EbayClient:
         Asking prices are looked up only when sold ones are not to be had."""
         query = spec.query()
         out: dict = {"sold": None, "asking": None, "query": query}
-        try:
-            out["sold"] = match_stats(self.search_sold(query, days=days), spec, "lastSoldPrice", query, True)
-        except EbayAuthError:
-            pass
+        self._auth_token()           # learns whether this keyset has Insights at all
+        if not self.insights:
+            log(f"insights: skipped for {query!r} (this keyset has no access)")
+        else:
+            try:
+                out["sold"] = match_stats(self.search_sold(query, days=days), spec, "lastSoldPrice", query, True)
+                _log_stats("sold", out["sold"])
+            except EbayAuthError as exc:
+                log(f"insights: not used for {query!r}: {exc}")
         if out["sold"] is None or out["sold"]["count"] == 0:
             out["asking"] = match_stats(self.search_asking(query), spec, "price", query, False)
+            _log_stats("asking", out["asking"])
         return out
 
     # ------------------------------------------------ older, query-only use
+
 
     def sold_stats(self, query: str, days: int = 30, condition: Optional[str] = None) -> dict:
         """Median / max / count of sold raw listings for a free-text query

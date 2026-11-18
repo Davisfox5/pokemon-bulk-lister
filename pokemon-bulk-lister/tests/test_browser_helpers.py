@@ -76,7 +76,7 @@ const card = {ebay_median_30d: null, ebay_match: {
   asking: {count: 4, results: 20, median: 380, usable: true, url: 'https://www.ebay.com/sch/i.html?_nkw=x&LH_BIN=1'}}};
 const cell = context.ebayCellHtml(card);
 assert.match(cell, /\$310\.00 median of 2 sales, too few to price from/);
-assert.match(cell, /eBay asking \(median\) \$380\.00, 4 listings/);
+assert.match(cell, /\$380\.00<div class="muted small">eBay asking \(median\), 4 listings/);
 const modal = context.ebayModalHtml(card);
 assert.match(modal, /eBay sold<strong>2 sales, too few<\/strong>/);
 assert.match(modal, /eBay asking \(median\)<strong>\$380\.00<\/strong>/);
@@ -88,3 +88,50 @@ assert.doesNotMatch(none, /matched of/);
 '''
     done = subprocess.run(['node', '-e', script, str(source)], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='Node is needed for browser helper checks')
+def test_ebay_search_with_no_exact_matches_still_says_so_and_links_the_search():
+    source = Path(__file__).resolve().parents[1] / 'webapp/static/app.js'
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync(process.argv[1], 'utf8').split('// ---------------------------------------------------------------- init')[0];
+const context = {document: {addEventListener() {}}, TextEncoder, URLSearchParams};
+vm.createContext(context);
+vm.runInContext(source, context);
+const zero = {ebay_median_30d: null, ebay_match: {sold: null,
+  asking: {count: 0, results: 12, median: null, usable: false, url: 'https://www.ebay.com/sch/i.html?_nkw=Togetic&LH_BIN=1'}}};
+assert.match(context.ebayCellHtml(zero), /no exact eBay matches/);
+const modal = context.ebayModalHtml(zero);
+assert.match(modal, /eBay asking \(median\)<strong><span class="muted small">no exact eBay matches/);
+assert.match(modal, /no exact eBay matches \(0 matched of 12 results\)/);
+assert.match(modal, /See this search on eBay/);
+// Not searched at all: a dash, no eBay rows.
+assert.match(context.ebayCellHtml({}), /—/);
+assert.doesNotMatch(context.ebayModalHtml({}), /asking/);
+// The live Dedenne result: asking median in the table and the editor.
+const dedenne = {tcgplayer_market: 0.13, cardmarket_trend_usd: 0.09, final_price: 0.11, needs_review: 0,
+  pricing_notes: '', ebay_median_30d: null, ebay_match: {sold: null, asking: {count: 46, results: 84,
+  median: 1.42, usable: true, url: 'https://www.ebay.com/sch/i.html?_nkw=Dedenne+67%2F172&LH_BIN=1'}}};
+assert.match(context.ebayCellHtml(dedenne), /\$1\.42<div class="muted small">eBay asking \(median\), 46 listings/);
+const block = context.modalPricesHtml(dedenne);
+assert.match(block, /eBay asking \(median\)<strong>\$1\.42/);
+assert.match(block, /46 matched of 84 results/);
+assert.match(block, /Price estimate<strong>\$0\.11/);
+// A fresh price reply replaces an old note.
+const stale = context.modalPricesHtml({...dedenne, needs_review: 1, pricing_notes: 'The price lookup failed. Try pricing again.'});
+assert.match(stale, /The price lookup failed/);
+assert.doesNotMatch(context.modalPricesHtml(dedenne), /price lookup failed/);
+"""
+    done = subprocess.run(['node', '-e', script, str(source)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+def test_refresh_price_rewrites_the_editor_and_keeps_it_open():
+    source = (Path(__file__).resolve().parents[1] / 'webapp/static/app.js').read_text()
+    body = source[source.index('async function saveEdit('):source.index('async function aiIdentify(')]
+    priced = body[body.index('if (priceAfter) {'):body.index('} else {')]
+    assert 'modalPricesHtml(updated)' in priced and 'closeEdit()' not in priced and 'return;' in priced
