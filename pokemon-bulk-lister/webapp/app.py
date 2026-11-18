@@ -48,6 +48,7 @@ sys.path.insert(0, str(ROOT))
 from lib.cardmarket_client import CardmarketPriceGuide  # noqa: E402
 from lib.ebay_client import EbayAuthError, EbayClient  # noqa: E402
 from lib.printing import of as card_printing
+from lib import price_notes  # noqa: E402
 from lib.pricing import aggregate  # noqa: E402
 from lib.tcgplayer_client import TCGPlayerClient  # noqa: E402
 from webapp import db  # noqa: E402
@@ -307,6 +308,7 @@ def api_list_cards():
     added = in_library_crops(current_user_id(), [row["crop_path"] for row in rows])
     for row in rows:
         row["in_library"] = row["crop_path"] in added
+        _shown(row)
     return jsonify({"cards": rows, "stats": stats})
 
 
@@ -316,7 +318,7 @@ def api_get_card(card_id: int):
         card = db.get_card(conn, card_id)
     if not card:
         abort(404)
-    return jsonify(card)
+    return jsonify(_shown(card))
 
 
 def _listing_fields(body: dict) -> dict:
@@ -439,7 +441,7 @@ def api_patch_card(card_id: int):
     # the owner asked for one, so a new one is written.
     if before and before.get("description_source") and not card.get("ai_description"):
         _descriptions.enqueue(_cards_payload([card]))
-    return jsonify(card)
+    return jsonify(_shown(card))
 
 
 @app.route("/api/cards/delete", methods=["POST"])
@@ -746,7 +748,7 @@ def api_price_card(card_id: int):
         result = _price_card(card)
         with db.connect(DB_PATH) as conn:
             updated = db.update_card(conn, card_id, result)
-        return jsonify(updated)
+        return jsonify(_shown(updated))
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"error": str(exc)}), 500
@@ -1079,27 +1081,20 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     # dropped), flag it so the user knows the match is approximate. Same if
     # TCG and CM disagree wildly — that's a signal the matched product is
     # not the variant the seller actually has.
-    match_warning: Optional[str] = None
+    # Notes are short sentences a person reads (lib/price_notes.py); no set
+    # ids, ratios or match levels.
+    warnings: list[str] = []
     if tcg_card is not None:
-        matched_set_id = (tcg_card.get("set") or {}).get("id", "")
         if match_level in ("no_set", "name_only"):
-            match_warning = (
-                f"Matched on the name only ({matched_set_id}). Check the set before listing."
-            )
+            warnings.append(price_notes.SET_UNCONFIRMED)
         elif match_level == "no_number":
-            match_warning = (
-                f"The card number was not used ({matched_set_id}). "
-                "This may be a different printing."
-            )
+            warnings.append(price_notes.NUMBER_UNCONFIRMED)
         if japanese:
-            match_warning = "Japanese card. This price is the English printing. Check it before listing."
+            warnings = [price_notes.JAPANESE]
         if tcg_price and cm_usd and tcg_price > 0 and cm_usd > 0:
             ratio = max(tcg_price, cm_usd) / min(tcg_price, cm_usd)
             if ratio > 3.0:
-                match_warning = (
-                    (match_warning + "; " if match_warning else "")
-                    + f"TCGplayer and Cardmarket disagree ({ratio:.1f}×) on {matched_set_id}. Check this printing."
-                )
+                warnings.append(price_notes.disagree([("TCGplayer", tcg_price), ("Cardmarket", cm_usd)]))
 
     ebay_stats: dict[str, Any] = {"median": None, "max": None, "count": 0}
     try:
@@ -1128,23 +1123,21 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     )
 
     if printing == "unknown":
-        match_warning = "Finish not checked. Choose non-holo, holo or reverse holo before pricing."
+        warnings = [price_notes.FINISH]
 
     if card.get("id_confidence") is not None and float(card["id_confidence"] or 0) <= 0.6:
-        match_warning = ((match_warning + "; ") if match_warning else "") + "identification needs review; compare the card to its photo"
+        warnings.append(price_notes.CHECK_ID)
 
-    # Build pricing_notes from all signals so the user has full context.
-    notes_parts = []
-    if result.notes:
-        notes_parts.append(result.notes)
+    # pricing_notes: the short sentences, warnings marked so they hold the
+    # card for review. Technical detail goes to the log, not the screen.
+    notes_parts = [n for n in (result.notes or "").split("; ") if n and n not in warnings]
     if tcg_error and tcg_card is None:
-        notes_parts.append(f"tcg lookup: {tcg_error}")
-    if match_warning:
-        notes_parts.append(f"⚠ {match_warning}")
-    if match_level and match_level != "exact":
-        notes_parts.append(f"match: {match_level}")
-    if cm_fallback_note:
+        print(f"[pricing] {name}: price lookup failed: {tcg_error}", file=sys.stderr)
+        notes_parts.append(price_notes.LOOKUP_FAILED)
+    notes_parts += [price_notes.warn(w) for w in dict.fromkeys(warnings)]
+    if cm_fallback_note == price_notes.CM_ESTIMATE:
         notes_parts.append(cm_fallback_note)
+    match_warning = "; ".join(warnings) or None
 
     # A match warning forces low confidence + review regardless of source agreement,
     # because high source agreement on a wrong card is the worst case (looks reliable
@@ -1152,8 +1145,8 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     final_conf = result.confidence
     final_needs_review = result.needs_review
     if japanese and not match_warning and result.price is not None:
-        match_warning = "Japanese card. This price is the English printing. Check it before listing."
-        notes_parts.append(f"⚠ {match_warning}")
+        match_warning = price_notes.JAPANESE
+        notes_parts.append(price_notes.warn(match_warning))
     if match_warning:
         final_conf = min(final_conf, 0.2)
         final_needs_review = True
@@ -1475,7 +1468,7 @@ def api_identify_card(card_id: int):
     updated["identified_by"] = {"cache": "image cache", "match": "art match"}.get(
         res.get("_source"), "AI"
     )
-    return jsonify(updated)
+    return jsonify(_shown(updated))
 
 
 @app.route("/api/identify/run-all", methods=["POST"])
@@ -1961,6 +1954,15 @@ def api_tcg_catalog_upload():
     return api_tcg_catalog_status()
 
 
+def _shown(row):
+    """A bench row as the page gets it: its pricing note in plain words
+    (lib/price_notes.py), including notes saved by older versions."""
+    if row and row.get("pricing_notes"):
+        row["pricing_notes"] = price_notes.plain(row["pricing_notes"], prices=[
+            ("TCGplayer", row.get("tcgplayer_market")), ("Cardmarket", row.get("cardmarket_trend_usd"))])
+    return row
+
+
 def _cards_payload(cards: list[dict]) -> list[dict]:
     """Coerce DB rows into the dict shape the CSV generator + listers expect."""
     payload = []
@@ -2138,7 +2140,7 @@ def api_upload_card_image(card_id: int):
         url = cloudinary_client.upload(str(crop))
         with db.connect(DB_PATH) as conn:
             updated = db.update_card(conn, card_id, {"image_url": url})
-        return jsonify(updated)
+        return jsonify(_shown(updated))
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"error": str(exc)}), 500

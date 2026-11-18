@@ -68,7 +68,7 @@ def propagate(db_path: str = "output/db.sqlite", dry_run: bool = False) -> int:
                     "UPDATE cards SET set_code = ?, "
                     "id_confidence = MAX(?, COALESCE(id_confidence, 0)), "
                     "pricing_notes = COALESCE(NULLIF(pricing_notes,''),'') || "
-                    "'; set_code propagated from other sheets (unanimous)', "
+                    "'; Set filled in from matching cards.', "
                     "updated_at = datetime('now') WHERE id = ?",
                     (only_code, 0.6, c["id"]),
                 )

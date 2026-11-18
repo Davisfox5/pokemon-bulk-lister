@@ -135,7 +135,10 @@ def test_pricing_keeps_identity_and_printing_disagreements_visible(bench, monkey
     patch = bench._price_card(dict(name='Pikachu', set_code='test', card_number='23', id_confidence=confidence))
     assert patch['needs_review'] and patch['pricing_confidence'] <= 0.2
     assert '⚠' in patch['pricing_notes']
-    assert ('card number was not used' if drop_number else 'identification needs review') in patch['pricing_notes']
+    from lib import price_notes
+    wanted = price_notes.NUMBER_UNCONFIRMED if drop_number else price_notes.CHECK_ID
+    assert price_notes.warn(wanted) in patch['pricing_notes'].split('; ')
+    assert 'match:' not in patch['pricing_notes'] and '—' not in patch['pricing_notes']
 
 
 # ---------------------------------------------------------------- which card is this
@@ -284,3 +287,21 @@ def test_editing_a_card_that_is_live_on_ebay_updates_the_listing_when_asked(benc
     assert out == {"updated": 1, "failed": [], "remaining": 0}
     assert sent == [(live, 1.0, "O1")]                      # only the live one, at the owner's price
     assert client.post("/api/publish/ebay/revise", json={}).status_code == 400
+
+
+def test_the_scan_list_shows_an_old_price_note_in_plain_words(bench):
+    rows, _ = add_cards(bench, 1)
+    stored = ("Cardmarket $7.06 vs TCG $1.06 (7x apart) — dropping CM as likely variant mismatch on "
+              "pokemontcg.io; ⚠ name-only match to swsh45 — set_code was not provided, match may not "
+              "reflect the actual printing; TCG/CM disagree 6.7x on swsh45 — variant mismatch?; match: no_set")
+    with db.connect(bench.DB_PATH) as conn:
+        db.update_card(conn, rows[0]['id'], {'name': 'Pikachu', 'final_price': 1.06, 'tcgplayer_market': 1.06,
+                                             'cardmarket_trend_usd': 7.06, 'pricing_notes': stored,
+                                             'needs_review': True})
+    client = bench.app.test_client()
+    shown = client.get('/api/cards').get_json()['cards'][0]['pricing_notes']
+    assert shown == 'Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Set not confirmed. Check it before listing.'
+    assert client.get(f"/api/cards/{rows[0]['id']}").get_json()['pricing_notes'] == shown
+    # The stored note is untouched: the review hold still reads its marker.
+    with db.connect(bench.DB_PATH) as conn:
+        assert db.get_card(conn, rows[0]['id'])['pricing_notes'] == stored

@@ -58,7 +58,7 @@ function renderStats(stats) {
 }
 
 function reviewWhy(notes) {
-  return (notes || '').replace(/^⚠\s*/, '').trim() || 'Check the card identity, finish and price before listing.';
+  return (notes || '').replace(/⚠\s*/g, '').trim() || 'Check the card, finish and price before listing.';
 }
 
 function fmt(v) {
@@ -87,12 +87,15 @@ function priceBasis(card) {
     ["eBay", bestEbay(card).value],
   ].filter(([, value]) => value != null && value > 0);
   const notes = reviewWhy(card.pricing_notes);
+  // A short badge for the first thing to check; the sentence itself is in
+  // the details (lib/price_notes.py writes them).
   let issue = "Check price";
-  if (/Japanese/i.test(notes)) issue = "Japanese card · English price";
-  else if (/finish.*(unknown|check|uncertain)|printing.*unknown/i.test(notes)) issue = "Check finish";
+  if (/Japanese/i.test(notes)) issue = "Japanese card, English price";
+  else if (/finish/i.test(notes)) issue = "Check finish";
+  else if (/matches its photo/i.test(notes)) issue = "Check card match";
+  else if (/Prices disagree/i.test(notes)) issue = "Prices disagree";
+  else if (/Set not confirmed/i.test(notes)) issue = "Check set";
   else if (/number/i.test(notes)) issue = "Check card number";
-  else if (/disagree|outlier/i.test(notes)) issue = "Prices disagree";
-  else if (/identity|identif/i.test(notes)) issue = "Check card match";
   if (card.final_price == null && !card.pricing_notes) return '<span class="src">Not priced yet</span>';
   const basis = sources.length ? sources.map(([name]) => name).join(" · ") : "No market source";
   return `<span class="price-source-line">${escapeHtml(basis)}</span>

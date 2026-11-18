@@ -5,8 +5,12 @@ import statistics
 from dataclasses import dataclass
 from typing import Optional
 
+from lib import price_notes
+
 
 OUTLIER_MULTIPLIER = 2.5
+# The order of the price list in aggregate(), for naming sources in notes.
+_SOURCE_NAMES = ("TCGplayer", "eBay", "Cardmarket", "Terapeak")
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
 # Confidence considers BOTH relative spread (%) and absolute spread ($) between
@@ -83,18 +87,13 @@ def aggregate(
     if tcg and cm and tcg > 0 and cm > 0:
         ratio = max(tcg, cm) / min(tcg, cm)
         if ratio > 5.0:
+            # The note says what disagreed, in words a person reads
+            # (lib/price_notes.py); which one was dropped shows in the price.
+            data_correction_note = price_notes.disagree([("TCGplayer", tcg), ("Cardmarket", cm)])
             if cm > tcg:
                 cardmarket_trend_usd = None
-                data_correction_note = (
-                    f"Cardmarket ${cm:.2f} vs TCG ${tcg:.2f} ({ratio:.0f}x apart) — "
-                    f"dropping CM as likely variant mismatch on pokemontcg.io"
-                )
             else:
                 tcgplayer_market = None
-                data_correction_note = (
-                    f"TCG ${tcg:.2f} vs Cardmarket ${cm:.2f} ({ratio:.0f}x apart) — "
-                    f"dropping TCG as likely variant mismatch"
-                )
 
     prices = [
         tcgplayer_market,
@@ -111,7 +110,7 @@ def aggregate(
             confidence=0.0,
             outlier_flag=False,
             needs_review=True,
-            notes="no price sources available",
+            notes=price_notes.NO_PRICE,
         )
 
     median = statistics.median(valid)
@@ -125,7 +124,7 @@ def aggregate(
         used = sorted(valid)[:-1]
         price = statistics.median(used)
         outlier_flag = True
-        extra = f"max {hi:.2f} > {OUTLIER_MULTIPLIER}x median {median:.2f}; dropped from aggregate"
+        extra = price_notes.HIGH_LEFT_OUT
         notes = f"{notes}; {extra}" if notes else extra
     elif (
         len(valid) == 2
@@ -135,7 +134,7 @@ def aggregate(
         used = [lo]
         price = lo
         outlier_flag = True
-        extra = f"two sources disagree >{OUTLIER_MULTIPLIER}x ({lo:.2f} vs {hi:.2f}); using lower"
+        extra = price_notes.disagree([(name, v) for name, v in zip(_SOURCE_NAMES, prices) if v in (lo, hi)])
         notes = f"{notes}; {extra}" if notes else extra
     else:
         price = median

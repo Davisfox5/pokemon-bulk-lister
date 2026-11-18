@@ -52,7 +52,7 @@ def test_tcg_cm_variant_mismatch_drops_smaller():
     # >5x apart: CM larger → CM dropped, TCG kept.
     r = aggregate(0.08, None, None, cardmarket_trend_usd=7.96)
     assert r.price == 0.08
-    assert "variant mismatch" in r.notes
+    assert r.notes == "Prices disagree: TCGplayer $0.08, Cardmarket $7.96."
 
 
 def test_cheap_card_noise_floor_full_confidence():

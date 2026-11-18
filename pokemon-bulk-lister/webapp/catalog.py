@@ -15,6 +15,7 @@ from pathlib import Path
 
 from flask import Blueprint, abort, jsonify, request
 
+from lib import price_notes
 from webapp import db as bench_db
 from webapp.auth import current_user_id, login_required
 from webapp.models import (
@@ -164,7 +165,9 @@ def price_provenance(cc: CatalogCard) -> dict:
         "confidence": cc.pricing_confidence,
         "priced_at": cc.last_priced_at.isoformat() + "Z" if cc.last_priced_at else None,
         "outlier": bool(cc.outlier_flag),
-        "notes": cc.pricing_notes,
+        # In plain words, including notes saved by older versions.
+        "notes": price_notes.plain(cc.pricing_notes, prices=[
+            ("TCGplayer", cc.tcgplayer_market), ("Cardmarket", cc.cardmarket_trend_usd)]) or None,
         # Same bar the bench uses for "needs a human look".
         "flagged": bool(
             cc.final_price is not None
