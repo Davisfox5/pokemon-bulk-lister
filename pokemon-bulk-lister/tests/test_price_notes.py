@@ -161,3 +161,28 @@ def test_an_older_note_about_a_few_cents_no_longer_says_they_disagree():
     assert price_notes.plain("two sources disagree >2.5x (0.40 vs 2.10); using lower") == price_notes.CLOSE
     # With something else to say, that is what shows.
     assert price_notes.plain(old + "; ⚠ Matched on the name only (sv1).", prices=close) == price_notes.SET_UNCONFIRMED
+
+
+def test_a_failed_lookup_keeps_the_price_a_card_already_had(monkeypatch):
+    from webapp import app as bench
+
+    class Down:
+        def lookup_prices(self, **kw):
+            raise RuntimeError("500 Server Error")
+
+    class Ebay:
+        def build_query(self, **kw):
+            return "q"
+
+        def sold_stats(self, **kw):
+            return dict(median=None, max=None, count=0)
+
+    monkeypatch.setattr(bench, "get_tcg", Down)
+    monkeypatch.setattr(bench, "get_ebay", Ebay)
+    monkeypatch.setattr(bench.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bench, "CARDMARKET_FALLBACK", False)
+    card = dict(name="Dewott", set_code="t", card_number="23", id_confidence=0.97, final_price=0.11)
+    assert bench._price_card(card) == {}
+    # A card with no price yet is told the lookup failed.
+    patch = bench._price_card({**card, "final_price": None})
+    assert patch["final_price"] is None and price_notes.plain(patch["pricing_notes"]) == price_notes.LOOKUP_FAILED

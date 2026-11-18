@@ -1173,6 +1173,12 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         patch["tcgplayer_product_id"] = tcg_card.get("id")
         patch["tcgplayer_url"] = (tcg_card.get("tcgplayer") or {}).get("url")
         patch["cardmarket_url"] = (tcg_card.get("cardmarket") or {}).get("url")
+    # A lookup that failed (the price service down) gives no price; the card
+    # keeps the one it had, as a Library refresh does (scheduler.refresh_cards).
+    # A known finish problem still clears it.
+    if (tcg_error and tcg_card is None and patch.get("final_price") is None
+            and card.get("final_price") is not None and not patch.get("printing_unavailable")):
+        patch = {}
     if return_card:
         return patch, tcg_card
     return patch

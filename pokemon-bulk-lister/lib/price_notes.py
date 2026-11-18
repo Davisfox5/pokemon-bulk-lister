@@ -187,5 +187,7 @@ def plain(notes: Optional[str], shown: int = SHOWN, prices: Optional[Prices] = N
 
     if len(found) > 1:
         found = [s for s in found if s != CLOSE]
+    if LOOKUP_FAILED in found:
+        found = [s for s in found if s != NO_PRICE]     # the failure is the reason
     found.sort(key=rank)
     return " ".join(found[:shown])
