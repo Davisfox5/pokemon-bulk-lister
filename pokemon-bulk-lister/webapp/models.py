@@ -461,7 +461,9 @@ class DescriptionJob(Base):
     """A scanned card waiting for, or given, an AI-written listing
     description (webapp/descriptions.py). owner_id is the scan bench's owner
     (None on a local install), sku the card's photo stem, card_id its bench
-    row. status: waiting (queued), sent (in an eBay batch, task_id), done,
+    row, or 0 for a Library card listed with the account's own eBay keys
+    (its card JSON then carries inventory_item_id, user_id and the offer).
+    status: waiting (queued), sent (in an eBay batch, task_id), done,
     failed. source: 'ebay' or 'ours'. use_ours: eBay could not write it, so
     ours does. applied: the description is on the card and on its live
     eBay listing."""

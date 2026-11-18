@@ -190,6 +190,13 @@ runtime routing audit. This section covers what the tool calls when it runs.
   result, never sent. Changing which card it is drops the AI text and queues a
   new one. The page asks the server to move them along only while eBay is
   working on a batch.
+- The Library's "List on eBay" (the account's own eBay keys, `webapp/settings.py`)
+  has the same unticked box. Those cards have no bench row: the job's `card_id`
+  is 0 and its card JSON carries `inventory_item_id`, `user_id` and the offer;
+  the text goes onto the listing only while its `Listing` is live. eBay's writer
+  runs on the account's own eBay connection; the install's eBay is used only for
+  the operator's (or a local) bench, so one account never spends the operator's
+  daily allowance.
 - `cards.list_price` is the owner's own price and overrides `final_price`
   wherever a card is listed or exported (`_cards_payload`,
   `ebay_lister.listing_price`); a card with one is not held back as flagged.

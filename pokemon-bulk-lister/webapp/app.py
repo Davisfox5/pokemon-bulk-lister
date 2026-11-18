@@ -2548,22 +2548,56 @@ _descriptions.use_bench(lambda: DB_PATH)
 
 
 def _pump_descriptions(flush: bool = False, seconds: float = 20.0) -> dict:
-    """Move this bench's AI descriptions along (webapp/descriptions.py), with
-    the install's eBay connection when there is one."""
+    """Move this bench's AI descriptions along (webapp/descriptions.py).
+
+    eBay's writer runs on the account's own eBay connection when it has one
+    (Library listings use it). The install's eBay is used only for the
+    operator's bench, or a local one, so one account never spends the
+    operator's daily allowance."""
     from lib.ebay_lister import EbayLister
     from lib.ebay_mapping import EbayMapping
     from webapp import connections
+    from webapp import settings as user_settings
 
+    owner = db.owner()
     mapping = None
-    if all(os.getenv(n) for n in ("EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET")):
-        try:
+    own = user_settings.own_ebay(owner) if owner and owner > 0 else None
+    try:
+        if own:
+            mapping = EbayMapping(own[0], env=own[1])
+        elif all(os.getenv(n) for n in ("EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET")) and _owner_is_operator(owner):
             mapping = EbayMapping(connections._ebay_auth())   # noqa: SLF001
-        except Exception as exc:
-            print(f"[descriptions] eBay not usable: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[descriptions] eBay not usable: {exc}", file=sys.stderr)
+
+    def item_lister(uid: int):
+        found = user_settings.own_ebay(uid)
+        return EbayLister(auth=found[0], env=found[1]) if found else None
+
     return _descriptions.pump(
         flush=flush, mapping=mapping, seconds=seconds,
         shape=lambda row: _cards_payload([row])[0],
-        lister_factory=lambda: EbayLister(auth=connections._ebay_auth()))   # noqa: SLF001
+        lister_factory=lambda: EbayLister(auth=connections._ebay_auth()),   # noqa: SLF001
+        item_lister=item_lister)
+
+
+def _owner_is_operator(owner: Optional[int]) -> bool:
+    """A local bench (no owner) or the operator's own."""
+    if owner is None:
+        return True
+    if owner < 1:
+        return False
+    from webapp.auth import is_operator
+    from webapp.models import get_session
+
+    s = get_session()
+    try:
+        return bool(is_operator(s, owner))
+    finally:
+        s.close()
+
+
+_descriptions.use_pump(_pump_descriptions)
 
 
 @app.route("/api/publish/descriptions", methods=["GET", "POST"])

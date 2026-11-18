@@ -82,6 +82,24 @@ def _auth_for(uid: int, keys: UserEbayKeys) -> EbayUserAuth:
     )
 
 
+def own_ebay(uid: int):
+    """(auth, env) for this account's own connected eBay, or None."""
+    s = get_session()
+    try:
+        keys = _get_keys(s, uid)
+    finally:
+        s.close()
+    if keys is None:
+        return None
+    auth = _auth_for(uid, keys)
+    try:
+        if not auth.is_authorized():
+            return None
+    except Exception:
+        return None
+    return auth, keys.env
+
+
 def _hint(client_id: str) -> str:
     if len(client_id) <= 8:
         return "…"
@@ -239,6 +257,7 @@ def ebay_list_item():
         price = float(price) if price is not None else cc.final_price
         card = {
             "id": f"inv{item.id}",
+            "inventory_item_id": item.id,
             "name": cc.name,
             "set_name": cc.set_name,
             "card_number": cc.card_number,
@@ -278,7 +297,10 @@ def ebay_list_item():
             rec.listing_id = result.get("listing_id")
             rec.status = "dry_run" if result.get("dry_run") else "live"
             s.commit()
-            return jsonify({"listing": result, "status": rec.status})
+            out = {"listing": result, "status": rec.status}
+            if body.get("ai_description") and rec.status == "live":
+                out["ai_description"] = _queue_description(card, uid, rec.offer_id)
+            return jsonify(out)
         except (EbayListingError, EbayUserAuthError) as exc:
             rec.status = "error"
             rec.error = str(exc)
@@ -286,3 +308,23 @@ def ebay_list_item():
             return jsonify({"error": str(exc)}), 502
     finally:
         s.close()
+
+
+def _queue_description(card: dict, uid: int, offer_id: Optional[str]) -> Optional[str]:
+    """The owner ticked "Write the description with AI": queue the card and
+    move the queue along once. Returns where its description stands
+    (waiting, sent or done), or None when it could not be queued. The
+    listing is already live with the built description either way."""
+    import traceback
+
+    from webapp import descriptions
+
+    try:
+        sku = descriptions.enqueue_item(card, uid, offer_id)
+        if not sku:
+            return None
+        descriptions.pump_now(seconds=15.0)
+        return descriptions.status_for(sku)
+    except Exception:
+        traceback.print_exc()
+        return None

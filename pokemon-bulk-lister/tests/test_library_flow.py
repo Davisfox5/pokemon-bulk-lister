@@ -480,3 +480,62 @@ def test_removing_or_editing_quantity_by_hand_goes_in_the_ledger(app):
     assert totals["added_cards"] - totals["removed_cards"] - totals["sold_cards"] == 0
     assert c.get("/api/inventory").get_json()["items"] == []
     assert [e["kind"] for e in _events(c, "removed")["events"]] == ["removed", "removed"]
+
+
+def test_list_on_ebay_from_the_library_can_ask_for_an_ai_description(app, monkeypatch):
+    from webapp import descriptions, settings
+
+    app.register_blueprint(settings.settings_bp)
+    settings.ensure_settings_tables()
+    published = []
+
+    class Auth:
+        def is_authorized(self):
+            return True
+
+    class Lister:
+        def __init__(self, auth=None, env=None):
+            pass
+
+        def publish_card(self, card, dry_run=False):
+            published.append(card)
+            return {"sku": "pk", "offer_id": "OF9", "listing_id": "L9", "url": "https://ebay.example/L9"}
+
+    monkeypatch.setattr(settings, "_auth_for", lambda uid, keys: Auth())
+    monkeypatch.setattr(settings, "EbayLister", Lister)
+    monkeypatch.setattr(descriptions, "_pump_fn", None)
+    c = _user(app, "lister@example.com")
+    assert c.post("/api/settings/ebay", json={"client_id": "id", "client_secret": "s",
+                                              "ru_name": "ru"}).status_code == 200
+    _add(c)
+    s = models.get_session()
+    try:
+        inv = s.query(models.InventoryItem).one()
+        inv.image_url = "https://img.example/d.jpg"
+        item_id = inv.id
+        s.commit()
+    finally:
+        s.close()
+
+    # Unticked: listed with the built description, nothing queued.
+    r = c.post("/api/settings/ebay/list-item", json={"item_id": item_id, "price": 3.5})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert "ai_description" not in r.get_json()
+    s = models.get_session()
+    try:
+        assert s.query(models.DescriptionJob).count() == 0
+    finally:
+        s.close()
+
+    # Ticked: still live straight away, and the card waits for its AI text.
+    r = c.post("/api/settings/ebay/list-item", json={"item_id": item_id, "price": 3.5, "ai_description": True})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["status"] == "live" and r.get_json()["ai_description"] == "waiting"
+    s = models.get_session()
+    try:
+        job = s.query(models.DescriptionJob).one()
+        import json as _json
+        data = _json.loads(job.card)
+        assert (job.card_id, data["inventory_item_id"], data["ebay_offer_id"]) == (0, item_id, "OF9")
+    finally:
+        s.close()

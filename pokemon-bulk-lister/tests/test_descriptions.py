@@ -288,3 +288,57 @@ def test_our_writer_sends_only_facts_and_keeps_only_the_cards_asked_for(monkeypa
     assert out == {"a": "Pikachu from Base."}
     assert seen["model"] == listing_ai.DEFAULT_MODEL
     assert "An Eevee card from Jungle." in seen["system"] and "secret note" not in json.dumps(seen)
+
+
+def library_listing(status="live"):
+    """A Library card listed with the account's own eBay keys: its user,
+    inventory item and eBay listing record. Returns (user id, the card dict
+    the listing was published from)."""
+    s = models.get_session()
+    try:
+        user = models.User(email="seller@example.com", password_hash="x")
+        s.add(user)
+        s.flush()
+        cc = models.get_or_create_catalog_card(s, {"name": "Pikachu", "set_name": "Base", "card_number": "58"})
+        item = models.InventoryItem(user_id=user.id, catalog_card_id=cc.id, source_crop_path="output/crops/pk.jpg")
+        s.add(item)
+        s.flush()
+        s.add(models.Listing(user_id=user.id, inventory_item_id=item.id, marketplace="ebay",
+                             sku="pk", offer_id="OF1", status=status, price=4.0))
+        s.commit()
+        card = {"id": f"inv{item.id}", "inventory_item_id": item.id, "name": "Pikachu", "set_name": "Base",
+                "card_number": "58", "rarity": "Common", "condition_guess": "NM",
+                "crop_path": "output/crops/pk.jpg", "image_url": "https://img.example/pk.jpg", "final_price": 4.0}
+        return user.id, card
+    finally:
+        s.close()
+
+
+def test_a_library_listing_gets_its_ai_description_through_the_accounts_own_ebay(bench):
+    uid, card = library_listing()
+    assert descriptions.enqueue_item(card, uid, "OF1") == "pk"
+    ebay, writer, lister = FakeEbay(ready=False), FakeWriter(), FakeLister()
+    asked = []
+
+    def item_lister(user_id):
+        asked.append(user_id)
+        return lister
+
+    out = descriptions.pump(mapping=ebay, writer=writer, item_lister=item_lister)
+    assert (out["written_by_us"], out["applied"]) == (1, 1)
+    assert asked == [uid]
+    # The live listing now reads the AI text, at the price it was listed for.
+    assert lister.revised == [(card["id"], "Ours for Pikachu.", "OF1")]
+    assert jobs()["pk"].applied and jobs()["pk"].card_id == 0
+    # The bench is untouched: a Library card has no bench row.
+    with db.connect(bench.DB_PATH) as conn:
+        assert db.list_cards(conn) == []
+
+
+def test_a_library_listing_no_longer_live_keeps_its_listing_as_it_is(bench):
+    uid, card = library_listing(status="ended")
+    descriptions.enqueue_item(card, uid, "OF1")
+    lister = FakeLister()
+    out = descriptions.pump(mapping=None, writer=FakeWriter(), item_lister=lambda _uid: lister)
+    assert out["written_by_us"] == 1 and out["applied"] == 0
+    assert lister.revised == [] and jobs()["pk"].applied

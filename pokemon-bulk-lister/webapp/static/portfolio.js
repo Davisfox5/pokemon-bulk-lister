@@ -1402,17 +1402,27 @@ $("#ebay-authorize").addEventListener("click", async () => {
 async function listOnEbay(item, btn) {
   const price = item.price;
   if (!price) { toast("This card has no market price yet. Refresh prices first.", "err"); return; }
-  const { ok } = await askConfirm({
+  const { ok, checked: ai } = await askConfirm({
     title: "List on your eBay account?",
     html: `<p>This publishes 1 live eBay listing: <strong>${esc(item.name)}</strong> at ${fmtUsd(price)}.</p>
-           <p>${provenanceHtml(item.provenance)}</p>`,
+           <p>${provenanceHtml(item.provenance)}</p>
+           <p class="muted">It goes live now with a description built from the card's facts. With the box
+             ticked, that switches to an AI-written one when it is ready: eBay writes them in batches of 10,
+             and a short batch goes within 12 hours.</p>`,
     confirm: `Publish at ${fmtUsd(price)}`,
+    checkbox: "Write the description with AI",
   });
   if (!ok) return;
   btn.disabled = true;
   try {
-    const res = await postJson("/api/settings/ebay/list-item", { item_id: item.id, price });
-    toast(res.listing && res.listing.url ? `Live on eBay: ${res.listing.url}` : `Published (status: ${res.status}).`);
+    const res = await postJson("/api/settings/ebay/list-item", { item_id: item.id, price, ai_description: ai });
+    let said = res.listing && res.listing.url ? `Live on eBay: ${res.listing.url}` : `Published (status: ${res.status}).`;
+    if (ai) {
+      said += res.ai_description === "done" ? " Its AI description is on the listing."
+        : res.ai_description ? " Its AI description will replace the built one when it is ready."
+        : " The AI description could not be queued; the listing keeps the built one.";
+    }
+    toast(said, ai && !res.ai_description ? "err" : undefined);
   } catch (err) {
     toast(`eBay listing failed: ${err.message}`, "err");
   } finally {

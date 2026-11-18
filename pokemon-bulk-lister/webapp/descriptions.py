@@ -20,6 +20,11 @@ Ours is shown descriptions eBay wrote for other cards, so it writes like
 eBay. Only the card's facts go to either writer; the owner's notes are
 added under the result, never sent.
 
+Cards listed from the Library ("List on eBay", the account's own eBay
+keys) are queued the same way with enqueue_item(). They have no bench row:
+the job carries what the listing needs, and the description goes onto the
+live listing only, through the account's own eBay connection.
+
 Everything is a row in description_jobs and is moved along by pump(),
 called after publishing, by the page while eBay is working, and by the two
 scheduled runs. No thread outlives a request.
@@ -61,6 +66,25 @@ def _batches_key(owner: Optional[int]) -> str:
     return f"descriptions:ebay-batches:{owner}:{_today_start():%Y-%m-%d}"
 
 
+def _queue(s, owner: Optional[int], sku: str, card_id: int, card: dict, payload: dict) -> bool:
+    """Put one card in the queue. False when it is already queued or written
+    for the same facts."""
+    facts = json.dumps(card_facts(card), sort_keys=True, ensure_ascii=False)
+    job = _mine(s.query(DescriptionJob), owner).filter(DescriptionJob.sku == sku).first()
+    if job is not None and job.facts == facts and job.status in ("waiting", "sent", "done"):
+        return False
+    if job is None:
+        job = DescriptionJob(owner_id=owner, sku=sku)
+        s.add(job)
+    job.card_id = card_id
+    job.facts = facts
+    job.card = json.dumps(payload, ensure_ascii=False)
+    job.status, job.source, job.use_ours, job.task_id = "waiting", None, False, None
+    job.description, job.error, job.applied = None, None, False
+    job.queued_at, job.sent_at, job.done_at = utcnow(), None, None
+    return True
+
+
 def enqueue(cards: list[dict]) -> int:
     """Queue cards (bench rows shaped by app._cards_payload) for an AI
     description. A card already queued or written for the same facts is
@@ -73,24 +97,32 @@ def enqueue(cards: list[dict]) -> int:
             if not card.get("crop_path") or not card.get("name"):
                 continue
             sku = Path(card["crop_path"]).stem
-            facts = json.dumps(card_facts(card), sort_keys=True, ensure_ascii=False)
-            job = _mine(s.query(DescriptionJob), owner).filter(DescriptionJob.sku == sku).first()
-            if job is not None and job.facts == facts and job.status in ("waiting", "sent", "done"):
-                continue
-            if job is None:
-                job = DescriptionJob(owner_id=owner, sku=sku)
-                s.add(job)
-            job.card_id = int(card["id"])
-            job.facts = facts
-            job.card = json.dumps({k: card.get(k) for k in _CARD_KEYS}, ensure_ascii=False)
-            job.status, job.source, job.use_ours, job.task_id = "waiting", None, False, None
-            job.description, job.error, job.applied = None, None, False
-            job.queued_at, job.sent_at, job.done_at = utcnow(), None, None
-            queued += 1
+            queued += _queue(s, owner, sku, int(card["id"]), card, {k: card.get(k) for k in _CARD_KEYS})
         s.commit()
     finally:
         s.close()
     return queued
+
+
+def enqueue_item(card: dict, user_id: int, offer_id: Optional[str]) -> Optional[str]:
+    """Queue a Library card just listed on eBay with the account's own keys.
+    `card` is the dict the listing was published from. Returns its sku, or
+    None when it was not queued."""
+    from lib.ebay_lister import EbayLister
+
+    if not card.get("name") or not card.get("inventory_item_id"):
+        return None
+    sku = EbayLister.card_sku(card)
+    payload = {k: card.get(k) for k in _CARD_KEYS}
+    payload.update(final_price=card.get("final_price"), inventory_item_id=card["inventory_item_id"],
+                   user_id=user_id, ebay_offer_id=offer_id)
+    s = get_session()
+    try:
+        _queue(s, db.owner(), sku, 0, card, payload)
+        s.commit()
+    finally:
+        s.close()
+    return sku
 
 
 def counts(owner: Optional[int] = None, use_current: bool = True) -> dict:
@@ -142,13 +174,15 @@ def _examples(s, n: int = 4) -> list[dict]:
 
 def pump(*, flush: bool = False, mapping: Any = None, writer: Optional[Callable] = None,
          shape: Optional[Callable[[dict], dict]] = None, lister_factory: Optional[Callable] = None,
-         seconds: float = 20.0) -> dict:
+         item_lister: Optional[Callable[[int], Any]] = None, seconds: float = 20.0) -> dict:
     """Move this owner's descriptions along as far as `seconds` allows.
 
     mapping: an EbayMapping, or None when eBay is not set up.
     writer:  lib.listing_ai.describe, or a stand-in.
     shape:   turns a bench row into the dict the eBay lister takes.
     lister_factory: makes an EbayLister, for updating live listings.
+    item_lister: user id -> that account's EbayLister (or None), for
+             Library cards listed with the account's own eBay keys.
     flush:   also send a batch of fewer than 10 (the twice-daily runs)."""
     from lib import listing_ai
     from webapp import runtime
@@ -247,6 +281,13 @@ def pump(*, flush: bool = False, mapping: Any = None, writer: Optional[Callable]
         for j in mine().filter(DescriptionJob.status == "done", DescriptionJob.applied.is_(False)).all():
             if time.monotonic() > end:
                 break
+            data = json.loads(j.card)
+            if data.get("inventory_item_id"):
+                j.applied = True
+                if _apply_to_item(s, j, data, item_lister):
+                    out["applied"] += 1
+                s.commit()
+                continue
             with db.connect(_bench_path()) as conn:
                 row = db.get_card(conn, j.card_id)
                 if row is not None and Path(row["crop_path"]).stem == j.sku:
@@ -270,6 +311,30 @@ def pump(*, flush: bool = False, mapping: Any = None, writer: Optional[Callable]
     return {**out, **counts(owner, use_current=False)}
 
 
+def _apply_to_item(s, job: DescriptionJob, data: dict, item_lister: Optional[Callable]) -> bool:
+    """Put a Library card's finished description on its eBay listing, if
+    that listing is still live. True when the listing was updated."""
+    from webapp.models import Listing
+
+    offer = data.get("ebay_offer_id")
+    live = offer and s.query(Listing).filter(
+        Listing.user_id == data.get("user_id"), Listing.offer_id == offer,
+        Listing.status == "live").first()
+    if not live or item_lister is None:
+        return False
+    try:
+        lister = item_lister(int(data["user_id"]))
+        if lister is None:
+            job.error = "the account's eBay connection is gone; the listing keeps its built description"
+            return False
+        lister.revise_card({**data, "ai_description": job.description})
+        return True
+    except Exception as exc:
+        job.error = f"updating the eBay listing: {exc}"[:300]
+        print(f"[descriptions] revise {job.sku}: {exc}", file=sys.stderr)
+        return False
+
+
 _bench_path_fn: Optional[Callable[[], str]] = None
 
 
@@ -283,3 +348,17 @@ def _bench_path() -> str:
     if _bench_path_fn is None:
         raise RuntimeError("descriptions.use_bench was not called")
     return _bench_path_fn()
+
+
+_pump_fn: Optional[Callable[..., dict]] = None
+
+
+def use_pump(fn: Callable[..., dict]) -> None:
+    """The app's pump, with its eBay connections (app._pump_descriptions),
+    so a blueprint can move the queue along without importing the app."""
+    global _pump_fn
+    _pump_fn = fn
+
+
+def pump_now(seconds: float = 15.0) -> Optional[dict]:
+    return _pump_fn(seconds=seconds) if _pump_fn else None
