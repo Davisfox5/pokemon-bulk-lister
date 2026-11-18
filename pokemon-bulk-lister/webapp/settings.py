@@ -254,7 +254,10 @@ def ebay_list_item():
         item_id = item.id
         cc = item.catalog_card
         price = body.get("price")
-        price = float(price) if price is not None else cc.final_price
+        if price is None:                          # your own price, else the market price
+            from webapp.catalog import your_prices
+            price = your_prices(s, [item.id]).get(item.id) or cc.final_price
+        price = float(price) if price is not None else None
         card = {
             "id": f"inv{item.id}",
             "inventory_item_id": item.id,
@@ -266,11 +269,18 @@ def ebay_list_item():
             "printing": cc.printing,
             "condition_guess": item.condition or "NM",
             "crop_path": item.source_crop_path or "",
-            "image_url": item.image_url or cc.image_url,
+            "image_url": item.image_url,
             "final_price": price,
         }
+        stock_image = cc.image_url
     finally:
         s.close()
+    # The listing shows the owner's own photo of the card: a hosted copy if
+    # there is one, else the scan photo where the site stores it publicly.
+    # The catalog's stock picture is the last resort.
+    if not card["image_url"] and card["crop_path"]:
+        card["image_url"] = runtime.add_photo_urls([dict(card)])[0].get("photo_url")
+    card["image_url"] = card["image_url"] or stock_image
 
     if not price or price <= 0:
         return jsonify({"error": "no price — refresh prices or pass one explicitly"}), 400

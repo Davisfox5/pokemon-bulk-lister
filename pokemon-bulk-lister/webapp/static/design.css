@@ -238,6 +238,11 @@ td.thumb img { border-radius: 6px; box-shadow: 0 2px 6px rgb(0 0 0 / 12%); objec
 }
 .menu-actions .btn, .menu-actions button, .menu-actions a { text-align: left; justify-content: flex-start; width: 100%; white-space: nowrap; }
 .row-more .menu-actions { position: static; margin-top: 6px; min-width: 150px; box-shadow: none; }
+/* An open menu sits above the bar of actions for the ticked cards. */
+.add-menu[open], .row-more[open] { z-index: 30; }
+.add-menu .menu-actions { z-index: 30; }
+.prov.your-price, .your-price { color: var(--accent); font-weight: 600; }
+.row-actions { align-items: flex-start; }
 .form-details { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .form-details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; font-weight: 600; }
 .form-details[open] > summary { margin-bottom: 12px; }

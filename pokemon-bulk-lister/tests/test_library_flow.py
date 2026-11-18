@@ -539,3 +539,54 @@ def test_list_on_ebay_from_the_library_can_ask_for_an_ai_description(app, monkey
         assert (job.card_id, data["inventory_item_id"], data["ebay_offer_id"]) == (0, item_id, "OF9")
     finally:
         s.close()
+
+
+def test_a_price_set_on_scan_follows_the_card_into_the_library_and_back(app, monkeypatch):
+    c = _user(app, "pricer@example.com")
+    uid = 1
+    with bench_db.connect(app.bench_path) as conn:
+        bench_db.set_owner(None)
+        gid = bench_db.get_or_create_grid(conn, "photo", "input/grids/photo.jpg")
+        cid = bench_db.insert_card_stub(conn, gid, "output/crops/a_r0c0.jpg", 0, 0)
+        bench_db.update_card(conn, cid, {"name": "Alcremie", "set_name": "Stellar Crown", "set_code": "sv7",
+                                         "card_number": "65", "id_confidence": 0.97})
+        bench_db.update_card(conn, cid, {"final_price": 0.17, "list_price": 1.0})
+    r = c.post("/api/inventory/promote", json={"card_ids": [cid]})
+    assert r.get_json()["promoted"] == 1
+    item = c.get("/api/inventory").get_json()
+    item = (item.get("items") if isinstance(item, dict) else item)[0]
+    # Both are shown: the owner's price, and the market price it sits beside.
+    assert (item["your_price"], item["price"]) == (1.0, 0.17)
+
+    # Changed on Scan after the card is in the Library: the Library follows.
+    assert catalog.sync_your_price(item_owner(item["id"]), ["output/crops/a_r0c0.jpg"], 2.5) == 1
+    assert _inventory(c)[0]["your_price"] == 2.5
+    # Changed in the Library: Scan follows, and clearing goes back to market.
+    assert c.patch(f"/api/inventory/{item['id']}", json={"your_price": 3}).get_json()["your_price"] == 3.0
+    with bench_db.connect(app.bench_path) as conn:
+        assert bench_db.get_card(conn, cid, any_owner=True)["list_price"] == 3.0
+    assert c.patch(f"/api/inventory/{item['id']}", json={"your_price": ""}).get_json()["your_price"] is None
+    assert c.patch(f"/api/inventory/{item['id']}", json={"your_price": -1}).status_code == 400
+
+    # Listing with no price typed uses the owner's price, not the market's.
+    c.patch(f"/api/inventory/{item['id']}", json={"your_price": 4})
+    r = c.post(f"/api/inventory/{item['id']}/list-for-sale", json={})
+    assert r.status_code in (200, 201), r.get_data(as_text=True)
+    s = models.get_session()
+    try:
+        assert s.query(models.MarketListing).one().price == 4.0
+    finally:
+        s.close()
+
+
+def item_owner(item_id):
+    s = models.get_session()
+    try:
+        return s.get(models.InventoryItem, item_id).user_id
+    finally:
+        s.close()
+
+
+def _inventory(c):
+    out = c.get("/api/inventory").get_json()
+    return out.get("items") if isinstance(out, dict) else out

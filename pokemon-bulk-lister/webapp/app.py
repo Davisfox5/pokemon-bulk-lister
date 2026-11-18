@@ -324,6 +324,15 @@ def api_get_card(card_id: int):
     return jsonify(_shown(card))
 
 
+def _price_in_library(crop_paths: list, price) -> None:
+    """A list price set on Scan goes with the card into the Library."""
+    try:
+        from webapp.catalog import sync_your_price
+        sync_your_price(db.owner(), crop_paths, price)
+    except Exception as exc:
+        print(f"[scan] could not carry the price to the Library: {exc}", file=sys.stderr)
+
+
 def _listing_fields(body: dict) -> dict:
     """The owner's own listing price and notes from a request body, checked.
     Only the keys present are returned. A blank price means "use the
@@ -383,14 +392,17 @@ def api_set_listing():
         return jsonify({"error": str(exc)}), 400
     if not fields:
         return jsonify({"error": "list_price or listing_notes required"}), 400
-    changed, live = 0, []
+    changed, live, crops = 0, [], []
     with db.connect(DB_PATH) as conn:
         for raw in ids:
             card = db.update_card(conn, int(raw), fields)
             if card:
                 changed += 1
+                crops.append(card["crop_path"])
                 if card.get("ebay_listing_id") and card.get("ebay_listing_status") == "listed":
                     live.append(card["id"])
+    if "list_price" in fields:
+        _price_in_library(crops, fields["list_price"])
     return jsonify({"changed": changed, "on_ebay": live})
 
 
@@ -440,6 +452,8 @@ def api_patch_card(card_id: int):
         card = db.update_card(conn, card_id, patch)
     if not card:
         abort(404)
+    if "list_price" in patch:
+        _price_in_library([card["crop_path"]], card.get("list_price"))
     # The change made its AI description wrong (db.update_card dropped it):
     # the owner asked for one, so a new one is written.
     if before and before.get("description_source") and not card.get("ai_description"):

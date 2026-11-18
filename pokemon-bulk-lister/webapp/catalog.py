@@ -12,6 +12,7 @@ import math
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Optional
 
 from flask import Blueprint, abort, jsonify, request
 
@@ -106,14 +107,18 @@ def promote():
                 continue
 
             condition = (card.get("condition_guess") or "NM").upper()
-            s.add(InventoryItem(
+            item = InventoryItem(
                 user_id=uid,
                 catalog_card_id=cc.id,
                 quantity=1,
                 condition=condition,
                 source_crop_path=crop,
                 image_url=card.get("image_url"),
-            ))
+            )
+            s.add(item)
+            if card.get("list_price"):
+                s.flush()                      # the price the owner set on Scan comes with the card
+                set_your_price(s, item.id, card["list_price"])
             log_event(
                 s, uid, cc.id, "added", channel="scan", condition=condition,
                 image_url=card.get("image_url"), crop_path=crop,
@@ -198,9 +203,67 @@ def item_valuation(item: InventoryItem) -> tuple:
     return price, provenance
 
 
-def _item_dict(s, item: InventoryItem) -> dict:
+def your_prices(s, item_ids: list) -> dict:
+    """{inventory item id: the owner's own price} for the items that have one."""
+    from webapp.models import InventoryPrice
+
+    ids = [i for i in item_ids if i]
+    if not ids:
+        return {}
+    return {r.inventory_item_id: r.price
+            for r in s.query(InventoryPrice).filter(InventoryPrice.inventory_item_id.in_(ids)).all()}
+
+
+def set_your_price(s, item_id: int, price: Optional[float]) -> None:
+    """Set or (None) clear the owner's own price on a Library card."""
+    from webapp.models import InventoryPrice
+
+    row = s.get(InventoryPrice, item_id)
+    if price is None:
+        if row is not None:
+            s.delete(row)
+    elif row is None:
+        s.add(InventoryPrice(inventory_item_id=item_id, price=round(float(price), 2)))
+    else:
+        row.price = round(float(price), 2)
+
+
+def sync_your_price(uid: Optional[int], crop_paths: list, price: Optional[float]) -> int:
+    """A list price set on Scan follows the card into the Library: the
+    account's Library cards that came from these scan photos take it."""
+    crops = [c for c in crop_paths if c]
+    if not uid or uid < 1 or not crops:
+        return 0
+    s = get_session()
+    try:
+        items = s.query(InventoryItem).filter(InventoryItem.user_id == uid,
+                                              InventoryItem.source_crop_path.in_(crops)).all()
+        for item in items:
+            set_your_price(s, item.id, price)
+        s.commit()
+        return len(items)
+    finally:
+        s.close()
+
+
+def _price_on_scan(crop_path: Optional[str], price: Optional[float]) -> None:
+    """Keep the Scan card this Library card came from on the same price, so
+    the two pages never disagree."""
+    if not crop_path:
+        return
+    try:
+        with bench_db.connect(BENCH_DB_PATH) as conn:
+            card_id = bench_db.card_id_by_crop(conn, crop_path)
+            if card_id:
+                bench_db.update_card(conn, card_id, {"list_price": price})
+    except Exception as exc:                        # the Library change still stands
+        print(f"[library] could not set the price on Scan: {exc}")
+
+
+def _item_dict(s, item: InventoryItem, yours: Optional[dict] = None) -> dict:
     cc = item.catalog_card
     price, provenance = item_valuation(item)
+    yours = your_prices(s, [item.id]) if yours is None else yours
     week_ago = price_at(s, cc.id, utcnow() - timedelta(days=7))
     change_7d = None
     if price is not None and week_ago and not provenance.get("estimate"):
@@ -222,6 +285,9 @@ def _item_dict(s, item: InventoryItem) -> dict:
         "image_url": item.image_url or cc.image_url,
         "crop_path": item.source_crop_path,
         "price": price,
+        # The owner's own price: what the card lists at. The market price
+        # above still values the collection.
+        "your_price": yours.get(item.id),
         "value": round(price * item.quantity, 2) if price is not None else None,
         "pricing_confidence": provenance["confidence"],
         "last_priced_at": provenance["priced_at"],
@@ -242,7 +308,8 @@ def list_inventory():
             .join(CatalogCard)
             .all()
         )
-        payload = [_item_dict(s, i) for i in items]
+        yours = your_prices(s, [i.id for i in items])
+        payload = [_item_dict(s, i, yours) for i in items]
         from webapp import runtime
         runtime.add_photo_urls(payload)
         from webapp.listing_import import listed_on
@@ -301,6 +368,16 @@ def patch_inventory(item_id: int):
             if paid is not None and not (math.isfinite(paid) and 0 <= paid <= 1_000_000):
                 return jsonify({"error": "price paid must be between 0 and 1,000,000"}), 400
             item.acquired_price = paid
+        if "your_price" in patch:
+            raw = patch["your_price"]
+            try:
+                yours = round(float(raw), 2) if raw not in (None, "") else None
+            except (TypeError, ValueError):
+                return jsonify({"error": "your price must be a number"}), 400
+            if yours is not None and not (math.isfinite(yours) and 0 < yours <= 100_000):
+                return jsonify({"error": "your price must be more than 0"}), 400
+            set_your_price(s, item.id, yours)
+            _price_on_scan(item.source_crop_path, yours)
         s.commit()
         out = _item_dict(s, item)
     finally:

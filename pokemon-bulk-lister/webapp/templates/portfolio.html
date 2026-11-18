@@ -67,11 +67,32 @@
         <input id="lib-search" type="search" placeholder="Search name, set, or number" aria-label="Search library">
         <span id="have-controls" class="controls-group">
           <select id="lib-sort" aria-label="Sort">
-            <option value="flagged">Needs review first</option>
-            <option value="value" selected>Value, high to low</option>
-            <option value="change">7-day change</option>
-            <option value="name">Name</option>
-            <option value="newest">Newest</option>
+            <optgroup label="Value">
+              <option value="value" selected>Value, high to low</option>
+              <option value="value_low">Value, low to high</option>
+              <option value="price">Price each, high to low</option>
+              <option value="price_low">Price each, low to high</option>
+              <option value="yours">Your price set first</option>
+            </optgroup>
+            <optgroup label="Price movement">
+              <option value="gain">7-day change, biggest rise</option>
+              <option value="drop">7-day change, biggest drop</option>
+              <option value="change">7-day change, biggest move</option>
+            </optgroup>
+            <optgroup label="Card">
+              <option value="name">Name, A to Z</option>
+              <option value="name_z">Name, Z to A</option>
+              <option value="set">Set, then card number</option>
+              <option value="rarity">Rarity</option>
+              <option value="condition">Condition, best first</option>
+              <option value="quantity">Quantity, most first</option>
+            </optgroup>
+            <optgroup label="Status">
+              <option value="flagged">Needs review first</option>
+              <option value="unlisted">Not listed first</option>
+              <option value="newest">Newest added</option>
+              <option value="oldest">Oldest added</option>
+            </optgroup>
           </select>
           <label class="check"><input type="checkbox" id="lib-flagged"> Needs review</label>
           <label class="check"><input type="checkbox" id="lib-unlisted"> Not listed</label>
@@ -82,8 +103,9 @@
 
       <div id="bulk-bar" class="bulk-bar hidden" role="toolbar" aria-label="Selected cards">
         <strong id="bulk-count"></strong>
-        <label class="bulk-price">Price each <input id="bulk-price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Market price" aria-label="Price for each selected card. Leave empty for market price."></label>
+        <label class="bulk-price">Price each <input id="bulk-price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Your or market price" aria-label="Price for each selected card. Leave empty for your price, or market price where you set none."></label>
         <button id="btn-bulk-list" class="btn btn-primary" title="List the selected cards on the marketplace, at the price entered or at market price">List for sale</button>
+        <button id="btn-bulk-ebay" class="btn" title="Publish each selected card as a listing on your own eBay account, at the price entered, your price, or market price">List on eBay</button>
         <button id="btn-bulk-remove" class="btn" title="Remove the selected cards from your library">Remove</button>
         <button id="btn-bulk-clear" class="btn btn-ghost">Clear</button>
       </div>

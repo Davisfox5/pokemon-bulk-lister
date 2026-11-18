@@ -85,6 +85,41 @@ function matches(row, q) {
   return q.split(/\s+/).every((w) => hay.includes(w));
 }
 
+// Ways to order the Library. A card with nothing to sort by goes last.
+const libVal = (it) => (it.value == null ? -1 : it.value);
+const libEach = (it) => (it.price == null ? -1 : it.price);
+const libYours = (it) => (it.your_price == null ? -1 : it.your_price);
+const libChange = (it) => it.change_7d_pct;
+const libNum = (it) => { const n = parseInt(String(it.card_number || "").replace(/^\D+/, ""), 10); return Number.isNaN(n) ? 1e9 : n; };
+const libText = (a, b) => String(a || "").localeCompare(String(b || ""), undefined, { numeric: true, sensitivity: "base" });
+const COND_RANK = { NM: 0, LP: 1, MP: 2, HP: 3, DMG: 4 };
+const libCond = (it) => COND_RANK[String(it.condition || "").toUpperCase()] ?? 9;
+const lastWith = (get, cmp) => (a, b) => {
+  const x = get(a), y = get(b);
+  if (x == null || y == null) return (x == null) - (y == null);
+  return cmp(x, y);
+};
+const LIB_SORTERS = {
+  value: (a, b) => libVal(b) - libVal(a),
+  value_low: lastWith((it) => it.value, (x, y) => x - y),
+  price: (a, b) => libEach(b) - libEach(a),
+  price_low: lastWith((it) => it.price, (x, y) => x - y),
+  yours: (a, b) => libYours(b) - libYours(a) || libVal(b) - libVal(a),
+  flagged: (a, b) => (b.provenance.flagged - a.provenance.flagged) || libVal(b) - libVal(a),
+  change: (a, b) => Math.abs(libChange(b) ?? 0) - Math.abs(libChange(a) ?? 0),
+  gain: lastWith(libChange, (x, y) => y - x),
+  drop: lastWith(libChange, (x, y) => x - y),
+  name: (a, b) => libText(a.name, b.name) || libText(a.set_name, b.set_name),
+  name_z: (a, b) => libText(b.name, a.name),
+  set: (a, b) => libText(a.set_name, b.set_name) || libNum(a) - libNum(b) || libText(a.card_number, b.card_number),
+  rarity: (a, b) => libText(a.rarity || "\uffff", b.rarity || "\uffff") || libText(a.name, b.name),
+  condition: (a, b) => libCond(a) - libCond(b) || libText(a.name, b.name),
+  quantity: (a, b) => b.quantity - a.quantity || libVal(b) - libVal(a),
+  unlisted: (a, b) => (!!lib.listings[a.id] - !!lib.listings[b.id]) || libVal(b) - libVal(a),
+  newest: (a, b) => b.id - a.id,
+  oldest: (a, b) => a.id - b.id,
+};
+
 function visibleItems() {
   const q = $("#lib-search").value.trim().toLowerCase();
   const flaggedOnly = $("#lib-flagged").checked || lib.tab === "review";
@@ -94,15 +129,7 @@ function visibleItems() {
     && (!flaggedOnly || it.provenance.flagged)
     && (!unlistedOnly || !lib.listings[it.id]));
   const by = $("#lib-sort").value;
-  const val = (it) => (it.value == null ? -1 : it.value);
-  const sorters = {
-    value: (a, b) => val(b) - val(a),
-    flagged: (a, b) => (b.provenance.flagged - a.provenance.flagged) || val(b) - val(a),
-    change: (a, b) => Math.abs(b.change_7d_pct ?? 0) - Math.abs(a.change_7d_pct ?? 0),
-    name: (a, b) => a.name.localeCompare(b.name),
-    newest: (a, b) => b.id - a.id,
-  };
-  return rows.sort(sorters[by] || sorters.value);
+  return rows.sort(LIB_SORTERS[by] || LIB_SORTERS.value);
 }
 
 function renderLibrary() {
@@ -216,6 +243,17 @@ function renderHave() {
   syncSelection(rows);
 }
 
+// Your own price leads when you set one; the market price stays beside it
+// with where it came from.
+function priceCell(it) {
+  if (it.your_price == null) return `${fmtUsd(it.price)}${provenanceHtml(it.provenance)}`;
+  return `<strong>${fmtUsd(it.your_price)}</strong><span class="prov your-price">Your price</span>
+    <span class="prov">Market ${fmtUsd(it.price)}</span>${provenanceHtml(it.provenance)}`;
+}
+
+// What a card lists at: your own price, else the market price.
+const askPrice = (it) => (it.your_price != null ? it.your_price : it.price);
+
 function haveRow(it) {
   const chg = it.change_7d_pct;
   const chgTxt = chg == null ? "—" : `${chg > 0 ? "+" : ""}${chg}%`;
@@ -236,7 +274,7 @@ function haveRow(it) {
       <div class="m-meta phone-only">${esc(it.condition)} · ×${it.quantity}</div></td>
     <td>${esc(it.condition)}</td>
     <td class="num">${it.quantity}</td>
-    <td class="num price-cell">${fmtUsd(it.price)}${provenanceHtml(it.provenance)}</td>
+    <td class="num price-cell">${priceCell(it)}</td>
     <td class="num"><span class="chg ${chgCls}">${chgTxt}</span></td>
     <td class="num">${fmtUsd(it.value)}</td>
     <td>
@@ -246,8 +284,10 @@ function haveRow(it) {
           <summary class="btn btn-ghost" aria-label="More actions for ${esc(it.name)}">More</summary>
           <div class="menu-actions">
             ${listing ? '<button class="btn btn-ghost" data-act="unlist">Unlist</button>' : ""}
+            <button class="btn btn-ghost" data-act="yours">${it.your_price == null ? "Set your price" : "Change your price"}</button>
             <button class="btn btn-ghost" data-act="sold">Record sale</button>
-            ${ebayStatus.authorized ? '<button class="btn btn-ghost" data-act="ebay">List on eBay</button>' : ""}
+            ${ebayStatus.authorized ? '<button class="btn btn-ghost" data-act="ebay">List on eBay</button>'
+              : '<button class="btn btn-ghost" data-act="ebay-connect">List on eBay…</button>'}
             <button class="btn btn-ghost" data-act="remove">Remove from library</button>
           </div>
         </details>
@@ -413,6 +453,10 @@ $("#inv-body").addEventListener("click", async (e) => {
       openSale(item);
     } else if (act === "ebay") {
       await listOnEbay(item, el);
+    } else if (act === "ebay-connect") {
+      showEbaySetup();
+    } else if (act === "yours") {
+      await setYourPrice(item);
     } else if (act === "remove") {
       const { ok } = await askConfirm({
         title: "Remove from library?",
@@ -447,9 +491,9 @@ function openSell(item, listing) {
   $("#sell-title").textContent = listing ? `Reprice ${item.name}` : `List ${item.name} for sale`;
   $("#sell-submit").textContent = listing ? "Update price" : "List for sale";
   $("#sell-prov").innerHTML = `
-    <p>Market price ${fmtUsd(item.price)}<br>${provenanceHtml(item.provenance)}</p>
+    <p>${item.your_price != null ? `Your price ${fmtUsd(item.your_price)} · ` : ""}Market price ${fmtUsd(item.price)}<br>${provenanceHtml(item.provenance)}</p>
     ${item.quantity > 1 ? `<p class="muted">You have ${item.quantity}. A listing sells one copy.</p>` : ""}`;
-  form.price.value = (listing ? listing.price : item.price) ?? "";
+  form.price.value = (listing ? listing.price : askPrice(item)) ?? "";
   updateSellNet();
   openDialog($("#sell-dialog"));
   form.price.select();
@@ -1399,16 +1443,18 @@ $("#ebay-authorize").addEventListener("click", async () => {
   }
 });
 
+const AI_NOTE = `<p class="muted">Listings go live now with a description built from the card's facts. With the box
+  ticked, each switches to an AI-written one when it is ready: eBay writes them in batches of 10,
+  and a short batch goes within 12 hours.</p>`;
+
 async function listOnEbay(item, btn) {
-  const price = item.price;
-  if (!price) { toast("This card has no market price yet. Refresh prices first.", "err"); return; }
+  const price = askPrice(item);
+  if (!price) { toast("This card has no price yet. Set your price or refresh prices first.", "err"); return; }
   const { ok, checked: ai } = await askConfirm({
     title: "List on your eBay account?",
-    html: `<p>This publishes 1 live eBay listing: <strong>${esc(item.name)}</strong> at ${fmtUsd(price)}.</p>
-           <p>${provenanceHtml(item.provenance)}</p>
-           <p class="muted">It goes live now with a description built from the card's facts. With the box
-             ticked, that switches to an AI-written one when it is ready: eBay writes them in batches of 10,
-             and a short batch goes within 12 hours.</p>`,
+    html: `<p>This publishes 1 live eBay listing: <strong>${esc(item.name)}</strong> at ${fmtUsd(price)}${
+             item.your_price != null ? " (your price)" : ""}.</p>
+           <p>${provenanceHtml(item.provenance)}</p>${AI_NOTE}`,
     confirm: `Publish at ${fmtUsd(price)}`,
     checkbox: "Write the description with AI",
   });
@@ -1428,6 +1474,80 @@ async function listOnEbay(item, btn) {
   } finally {
     btn.disabled = false;
   }
+}
+
+// Where eBay is connected: Advanced settings, opened and scrolled to.
+function showEbaySetup() {
+  const form = $("#ebay-keys-form");
+  $("#advanced-panel").classList.remove("hidden");
+  $("#btn-advanced").setAttribute("aria-expanded", "true");
+  form.scrollIntoView({ behavior: "smooth", block: "center" });
+  toast(ebayStatus.configured ? "Connect your eBay account here to list on eBay."
+    : "Add your eBay keys here to list on eBay.");
+}
+
+// The ticked cards, each as its own eBay listing, at your price or market.
+async function listSelectedOnEbay() {
+  if (!ebayStatus.authorized) { showEbaySetup(); return; }
+  const typed = parseFloat($("#bulk-price").value);
+  const each = typed > 0 ? Math.round(typed * 100) / 100 : null;
+  const picked = lib.items.filter((it) => lib.selected.has(it.id));
+  const ready = picked.filter((it) => (each ?? askPrice(it)) > 0 && (it.image_url || it.photo_url));
+  const noPrice = picked.filter((it) => !((each ?? askPrice(it)) > 0)).length;
+  const noPhoto = picked.filter((it) => (each ?? askPrice(it)) > 0 && !(it.image_url || it.photo_url)).length;
+  if (!ready.length) {
+    toast(noPrice ? "None of the selected cards has a price. Enter a price for each, or set your price."
+      : "The selected cards have no photo eBay can show.", "err");
+    return;
+  }
+  const total = ready.reduce((sum, it) => sum + (each ?? askPrice(it)), 0);
+  const { ok, checked: ai } = await askConfirm({
+    title: `List ${ready.length === 1 ? "1 card" : ready.length + " cards"} on your eBay account?`,
+    html: `<p>This publishes <strong>${ready.length}</strong> live eBay ${ready.length === 1 ? "listing" : "listings"},
+             ${fmtUsd(total)} in total, ${each != null ? `each at ${fmtUsd(each)}` : "each at your price, or its market price where you set none"}.</p>
+           ${noPrice ? `<p class="muted">${noPrice} left out: no price.</p>` : ""}
+           ${noPhoto ? `<p class="muted">${noPhoto} left out: no photo eBay can show.</p>` : ""}${AI_NOTE}`,
+    confirm: `Publish ${ready.length} to eBay`,
+    checkbox: "Write descriptions with AI",
+  });
+  if (!ok) return;
+  const btn = $("#btn-bulk-ebay");
+  btn.disabled = true;
+  let listed = 0, firstError = "";
+  for (const [i, it] of ready.entries()) {
+    btn.textContent = `Listing ${i + 1} of ${ready.length}…`;
+    try {
+      await postJson("/api/settings/ebay/list-item", { item_id: it.id, price: each ?? askPrice(it), ai_description: ai });
+      listed += 1;
+      lib.selected.delete(it.id);
+    } catch (err) {
+      firstError = firstError || `${it.name}: ${err.message}`;
+    }
+  }
+  btn.disabled = false;
+  btn.textContent = "List on eBay";
+  const failed = ready.length - listed;
+  toast(`${listed} of ${ready.length} listed on eBay.${failed ? ` ${failed} failed. First error: ${firstError}` : ""}`,
+    failed ? "err" : undefined);
+  refreshAll();
+}
+$("#btn-bulk-ebay").addEventListener("click", listSelectedOnEbay);
+
+// Your own price for a card: what it lists at. Empty goes back to market.
+async function setYourPrice(item) {
+  const { ok } = await askConfirm({
+    title: `Your price for ${item.name}`,
+    html: `<p>Market price ${fmtUsd(item.price)}. Your price is what the card lists at; the market price stays
+             shown beside it.</p>
+           <label>Your price <input id="your-price-input" type="number" min="0.01" step="0.01" inputmode="decimal"
+             value="${item.your_price ?? ""}" placeholder="Empty uses the market price"></label>`,
+    confirm: "Save price",
+  });
+  if (!ok) return;
+  const raw = $("#your-price-input").value.trim();
+  await api(`/api/inventory/${item.id}`, { method: "PATCH", body: JSON.stringify({ your_price: raw === "" ? null : raw }) });
+  toast(raw === "" ? `${item.name} uses the market price again.` : `${item.name}: your price is ${fmtUsd(parseFloat(raw))}.`);
+  refreshAll();
 }
 
 /* ---------------- account: email confirmation ---------------- */

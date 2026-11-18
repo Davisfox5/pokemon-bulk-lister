@@ -167,6 +167,16 @@ class InventoryValuation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class InventoryPrice(Base):
+    """The owner's own price for a card they hold (set on Scan as the list
+    price, or in the Library). What the card is listed at; the market price
+    is still shown beside it and still values the collection."""
+    __tablename__ = "inventory_prices"
+    inventory_item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), primary_key=True)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 Index("idx_inventory_user", InventoryItem.user_id)
 
 

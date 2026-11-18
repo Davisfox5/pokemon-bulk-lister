@@ -130,7 +130,9 @@ def list_for_sale(item_id: int):
             return jsonify({"error": "already listed", "listing_id": existing.id}), 409
 
         if body.get("price") in (None, ""):
-            price = _parse_price(item_valuation(item)[0])
+            # The owner's own price when they set one, else the market price.
+            from webapp.catalog import your_prices
+            price = _parse_price(your_prices(s, [item.id]).get(item.id) or item_valuation(item)[0])
             if price is None:
                 return jsonify({"error": "no market price known for this card, enter a price"}), 400
         else:
@@ -189,15 +191,20 @@ def bulk_list_for_sale():
                       .filter_by(seller_id=uid, status="active").all()}
         out = {"to_list": 0, "total": 0.0, "skipped_no_price": 0,
                "skipped_already_listed": 0, "skipped_flagged": 0}
+        from webapp.catalog import your_prices
+        yours = your_prices(s, [i.id for i in items])
         for item in items:
             cc = item.catalog_card
             value, provenance = item_valuation(item)
-            price = own_price if own_price is not None else _parse_price(value)
+            # The price typed for all of them, else the card's own price the
+            # owner set, else the market price.
+            set_by_owner = own_price if own_price is not None else yours.get(item.id)
+            price = set_by_owner if set_by_owner is not None else _parse_price(value)
             if item.id in listed_ids:
                 out["skipped_already_listed"] += 1
             elif price is None:
                 out["skipped_no_price"] += 1
-            elif own_price is None and provenance["flagged"] and not include_flagged:
+            elif set_by_owner is None and provenance["flagged"] and not include_flagged:
                 out["skipped_flagged"] += 1
             else:
                 if not dry_run:

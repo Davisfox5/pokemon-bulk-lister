@@ -218,6 +218,13 @@ runtime routing audit. This section covers what the tool calls when it runs.
   `ebay_lister.listing_price`); a card with one is not held back as flagged.
   `POST /api/cards/listing` sets price and notes on many cards at once; the
   Library's bulk "List for sale" takes one `price` for all the same way.
+- The owner's price follows the card into the Library as `inventory_prices`
+  (`InventoryPrice`, `catalog.your_prices` / `set_your_price`): carried on promote,
+  kept in step both ways (`catalog.sync_your_price` from Scan, `_price_on_scan` from the
+  Library's "Set your price"). The Library shows it as "Your price" with the market
+  price beside it; the collection is still valued at market. It is the default price
+  for a marketplace or eBay listing. The Library's selection bar lists the ticked
+  cards on the account's own eBay (`listSelectedOnEbay`), one confirmation with counts.
 - Editing a card that is live on eBay offers to update the listing
   (`POST /api/publish/ebay/revise`, `EbayLister.revise_card`: the inventory item
   and the offer are replaced in place). A listing only changes after a yes.
