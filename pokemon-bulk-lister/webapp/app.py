@@ -2658,6 +2658,11 @@ from webapp.connections import connections_bp  # noqa: E402
 
 app.register_blueprint(connections_bp)
 
+# eBay marketplace account deletion notices (public, signature-checked).
+from webapp.ebay_deletion import ebay_deletion_bp  # noqa: E402
+
+app.register_blueprint(ebay_deletion_bp)
+
 # Sales read back from eBay (API) and Whatnot / TCGplayer (CSV exports), and
 # automatic seller payouts through Stripe Connect.
 from webapp import sales_sync  # noqa: E402
