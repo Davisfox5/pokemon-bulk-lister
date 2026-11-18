@@ -140,11 +140,8 @@ def test_pricing_a_card_with_close_sources_raises_no_warning(monkeypatch):
                     "tcgplayer_market_usd": 0.07, "cardmarket_trend_eur": 0.30 / bench.EUR_USD_RATE}
 
     class Ebay:
-        def build_query(self, **kw):
-            return "q"
-
-        def sold_stats(self, **kw):
-            return dict(median=None, max=None, count=0)
+        def card_stats(self, spec, **kw):
+            return {"sold": None, "asking": None, "query": "q"}
 
     monkeypatch.setattr(bench, "get_tcg", TCG)
     monkeypatch.setattr(bench, "get_ebay", Ebay)
@@ -171,11 +168,8 @@ def test_a_failed_lookup_keeps_the_price_a_card_already_had(monkeypatch):
             raise RuntimeError("500 Server Error")
 
     class Ebay:
-        def build_query(self, **kw):
-            return "q"
-
-        def sold_stats(self, **kw):
-            return dict(median=None, max=None, count=0)
+        def card_stats(self, spec, **kw):
+            return {"sold": None, "asking": None, "query": "q"}
 
     monkeypatch.setattr(bench, "get_tcg", Down)
     monkeypatch.setattr(bench, "get_ebay", Ebay)

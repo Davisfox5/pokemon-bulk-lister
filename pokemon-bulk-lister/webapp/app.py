@@ -46,7 +46,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from lib.cardmarket_client import CardmarketPriceGuide  # noqa: E402
-from lib.ebay_client import EbayAuthError, EbayClient  # noqa: E402
+from lib.ebay_client import CardSpec as EbayCardSpec, EbayAuthError, EbayClient  # noqa: E402
+from lib.ebay_client import editions_in as ebay_editions_in  # noqa: E402
 from lib.printing import of as card_printing
 from lib import price_notes  # noqa: E402
 from lib.pricing import aggregate, far_apart  # noqa: E402
@@ -308,7 +309,8 @@ def api_list_cards():
     added = in_library_crops(current_user_id(), [row["crop_path"] for row in rows])
     for row in rows:
         row["in_library"] = row["crop_path"] in added
-        _shown(row)
+        _shown(row, ebay=False)
+    _attach_ebay(rows)
     return jsonify({"cards": rows, "stats": stats})
 
 
@@ -990,6 +992,81 @@ def api_pricing_status():
     return jsonify(_mine_job(_job_state))
 
 
+def _ebay_spec(card: dict, name: str, set_name: Optional[str], set_code: Optional[str],
+               card_number: Optional[str], printing: str, japanese: bool) -> EbayCardSpec:
+    """The exact card an eBay listing has to be: its own set, number, finish,
+    edition or stamp and language. A Japanese card keeps its Japanese set and
+    number and is matched against Japanese listings."""
+    total, codes, plain_set = "", [], (set_name or "").replace(_card_catalog.JAPANESE, "").strip()
+    if japanese:
+        ja = _card_catalog.japanese_set_named(set_name) or {}
+        total = str(ja.get("total") or "")
+        codes = [k for k, row in (_card_catalog._ja_sets or {}).items() if row is ja]   # noqa: SLF001
+    elif set_code:
+        try:
+            found = next((s for s in _card_catalog.sets() if s.get("id") == set_code), {})
+        except Exception:
+            found = {}
+        total = str(found.get("printedTotal") or "")
+        codes = [c for c in (found.get("ptcgoCode"),) if c]
+        plain_set = plain_set or found.get("name") or ""
+    # The catalog's printed total first; what was read off the card otherwise.
+    read = _id_read(card) if isinstance(card.get("id_read"), str) else {}
+    printed_code = (read.get("set_code_printed") or "").strip()
+    return EbayCardSpec(
+        name=name, number=str(card_number or ""), total=str(total or read.get("number_total") or ""),
+        set_name=plain_set, set_codes=codes + ([printed_code] if printed_code and printed_code not in codes else []),
+        finish=printing if printing in ("holofoil", "reverseHolofoil") else "normal",
+        language="ja" if japanese else "en",
+        editions=ebay_editions_in(" ".join(str(card.get(k) or "") for k in ("name", "set_name", "rarity"))),
+    )
+
+
+def _ebay_key(card_id) -> str:
+    return f"ebay:card:{card_id}"
+
+
+def _ebay_sig(card: dict) -> list:
+    """Which card an eBay match was for: a changed card does not show it."""
+    return [card.get(k) or "" for k in ("name", "set_name", "card_number")] + [card_printing(card)]
+
+
+def _save_ebay_match(card: dict, match: Optional[dict]) -> None:
+    """Keep a Scan card's eBay match (sold and asking medians, how many
+    matched of how many, the search) for the screens. A row in app_state,
+    so the table's columns stay as they are."""
+    if not card.get("id") or not card.get("crop_path"):
+        return                                   # a Library card: no bench row to show it on
+    try:
+        runtime.state_set(_ebay_key(card["id"]), {"sig": _ebay_sig(card), **match} if match else None)
+    except Exception as exc:
+        print(f"[ebay] could not keep the match for card {card.get('id')}: {exc}", file=sys.stderr)
+
+
+def _attach_ebay(rows: list[dict]) -> None:
+    """Add each Scan row's eBay match ("ebay_match") in one read."""
+    rows = [r for r in rows if r and r.get("id")]
+    if not rows:
+        return
+    try:
+        from webapp.models import AppState, get_session
+        s = get_session()
+        try:
+            found = {a.key: a.value for a in s.query(AppState).filter(
+                AppState.key.in_([_ebay_key(r["id"]) for r in rows])).all()}
+        finally:
+            s.close()
+    except Exception:
+        return
+    for r in rows:
+        raw = found.get(_ebay_key(r["id"]))
+        try:
+            match = json.loads(raw) if raw else None
+        except ValueError:
+            match = None
+        r["ebay_match"] = match if match and match.get("sig") == _ebay_sig(r) else None
+
+
 def _price_card_pass1(card: dict) -> tuple[dict, Optional[dict]]:
     """Pass-1 pricing wrapper: returns (patch, resolved_card)."""
     return _price_card(card, terapeak=None, return_card=True)
@@ -1008,6 +1085,9 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     # A Japanese card has no price source of its own here. The English
     # printing's price is shown as a guide and always flagged for a look.
     japanese = (set_name or "").endswith(_card_catalog.JAPANESE)
+    # eBay is searched for this exact card, Japanese ones included, before the
+    # English twin replaces set and number for the price catalog below.
+    ebay_spec = _ebay_spec(card, name, set_name, set_code, card_number, printing, japanese)
     if japanese:
         twin = (_card_catalog.japanese_set_named(set_name) or {}).get("twin")
         set_name, set_code, card_number = None, twin, None      # the English set numbers its cards differently
@@ -1097,13 +1177,25 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
             if far_apart(tcg_price, cm_usd, 3.0):
                 warnings.append(price_notes.disagree([("TCGplayer", tcg_price), ("Cardmarket", cm_usd)]))
 
+    # eBay: listings of this exact card only (lib/ebay_client.reject_reason).
+    # Sold prices count toward the price only with MIN_MATCHES or more exact
+    # matches; asking prices (active listings) never do. Both are kept for
+    # the screens with how many matched (_save_ebay_match).
     ebay_stats: dict[str, Any] = {"median": None, "max": None, "count": 0}
-    try:
-        query = ebay.build_query(name=name, set_name=set_name, card_number=card_number)
-        if printing == "normal":
-            ebay_stats = ebay.sold_stats(query=query, days=30)
-    except EbayAuthError as exc:
-        print(f"[ebay auth] {exc}", file=sys.stderr)
+    ebay_match: Optional[dict] = None
+    if name and printing != "unknown":
+        try:
+            ebay_match = ebay.card_stats(ebay_spec, days=30)
+        except EbayAuthError as exc:
+            print(f"[ebay auth] {exc}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[ebay] {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+    sold = (ebay_match or {}).get("sold") or {}
+    if sold.get("usable"):
+        ebay_stats = {"median": sold["median"], "max": sold["max"], "count": sold["count"]}
+    else:
+        ebay_stats["count"] = sold.get("count", 0)
+    _save_ebay_match(card, ebay_match)
 
     terapeak_stats: dict[str, Any] = {"median": None, "count": 0}
     if terapeak is not None and printing == "normal":
@@ -1969,9 +2061,12 @@ def _source_prices(row) -> list:
             ("eBay", ebay)]
 
 
-def _shown(row):
+def _shown(row, ebay: bool = True):
     """A bench row as the page gets it: its pricing note in plain words
-    (lib/price_notes.py), including notes saved by older versions."""
+    (lib/price_notes.py), including notes saved by older versions, and its
+    eBay match."""
+    if ebay and row:
+        _attach_ebay([row])
     if row and (row.get("pricing_notes") or row.get("outlier_flag")):
         row["pricing_notes"] = price_notes.plain(
             row["pricing_notes"], prices=_source_prices(row), using=row.get("final_price"),

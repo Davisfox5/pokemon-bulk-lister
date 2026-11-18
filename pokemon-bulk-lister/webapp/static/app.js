@@ -76,6 +76,46 @@ function fmt(v) {
   return v;
 }
 
+// eBay prices count only for the exact card (lib/ebay_client.py). Sold
+// prices with too few matches, and asking prices from active listings, are
+// shown for reference and never go into the price estimate.
+function ebaySummary(card) {
+  const m = card.ebay_match || {};
+  const sold = m.sold || null, asking = m.asking || null;
+  const lines = [];
+  if (sold && sold.count && !sold.usable) {
+    lines.push(`${fmt(sold.median)} median of ${plural(sold.count, "sale")}, too few to price from`);
+  }
+  if (asking && asking.count) {
+    lines.push(`eBay asking (median) ${fmt(asking.median)}, ${plural(asking.count, "listing")}${asking.usable ? "" : ", too few to rely on"}`);
+  }
+  const shown = (sold && sold.results) ? sold : asking;
+  return { sold, asking, lines, shown };
+}
+
+function ebayCellHtml(card) {
+  const ebay = bestEbay(card);
+  const { lines } = ebaySummary(card);
+  const main = ebay.value == null
+    ? `<span class="muted">—</span>`
+    : `${fmt(ebay.value)}<div class="muted small">${ebay.count || 0} sold, ${ebay.window}</div>`;
+  return main + lines.map(l => `<div class="muted small">${escapeHtml(l)}</div>`).join("");
+}
+
+function ebayModalHtml(card) {
+  const { sold, asking, shown } = ebaySummary(card);
+  const soldText = card.ebay_median_30d != null
+    ? `${fmt(card.ebay_median_30d)}`
+    : sold && sold.count ? `${plural(sold.count, "sale")}, too few` : "—";
+  const rows = [`<div>eBay sold<strong>${soldText}</strong></div>`];
+  if (asking && asking.count) rows.push(`<div>eBay asking (median)<strong>${fmt(asking.median)}</strong></div>`);
+  if (shown) {
+    rows.push(`<div class="ebay-match muted small">${shown.count} matched of ${plural(shown.results, "result")}${
+      shown.url ? ` · <a href="${escapeHtml(shown.url)}" target="_blank" rel="noopener">See this search on eBay</a>` : ""}</div>`);
+  }
+  return rows.join("");
+}
+
 function bestEbay(card) {
   // Prefer Terapeak's 365-day median when present (deeper signal),
   // otherwise fall back to the 30-day MI median.
@@ -174,10 +214,7 @@ function renderRow(card) {
   const setBits = [card.set_name, card.card_number ? `#${card.card_number}` : ""]
     .filter(Boolean)
     .join(" · ");
-  const ebay = bestEbay(card);
-  const ebayCell = ebay.value == null
-    ? `<span class="muted">—</span>`
-    : `${fmt(ebay.value)}<div class="muted small">${ebay.count || 0} sold, ${ebay.window}</div>`;
+  const ebayCell = ebayCellHtml(card);
   const checked = state.selected.has(card.id) ? "checked" : "";
   return `
     <tr class="${flagClass}" data-id="${card.id}">
@@ -795,7 +832,7 @@ function openEdit(id) {
   $("#modal-prices").innerHTML = `
     <div>TCGplayer<strong>${fmt(card.tcgplayer_market)}</strong></div>
     <div>Cardmarket<strong>${fmt(card.cardmarket_trend_usd)}</strong></div>
-    <div>eBay sold<strong>${fmt(card.ebay_median_30d)}</strong></div>
+    ${ebayModalHtml(card)}
     <div>Price estimate<strong>${fmt(card.final_price)}</strong></div>
     <div class="price-note">${card.needs_review ? escapeHtml(reviewWhy(card.pricing_notes)) : ""}</div>
   `;

@@ -126,10 +126,9 @@ def test_pricing_keeps_identity_and_printing_disagreements_visible(bench, monkey
             return {'card': {'id': 'test-23', 'set': {'id': 'test'}},
                     'tcgplayer_market_usd': 10, 'cardmarket_trend_eur': 10 / bench.EUR_USD_RATE}
     class Ebay:
-        def build_query(self, **kw):
-            return 'query'
-        def sold_stats(self, **kw):
-            return dict(median=10, max=10, count=50)
+        def card_stats(self, spec, **kw):
+            sold = dict(median=10, max=10, min=10, count=50, results=60, usable=True, query='q', url='')
+            return {'sold': sold, 'asking': None, 'query': 'q'}
     monkeypatch.setattr(bench, 'get_tcg', TCG)
     monkeypatch.setattr(bench, 'get_ebay', Ebay)
     patch = bench._price_card(dict(name='Pikachu', set_code='test', card_number='23', id_confidence=confidence))

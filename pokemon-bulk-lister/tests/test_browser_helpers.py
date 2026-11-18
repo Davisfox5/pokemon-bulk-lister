@@ -58,3 +58,33 @@ assert(context.cardLine({name:'Pikachu',printing:'reverseHolofoil',is_holo:false
 '''
     done = subprocess.run(['node', '-e', script, str(source)], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='Node is needed for browser helper checks')
+def test_scan_shows_ebay_asking_and_thin_sold_prices_apart_from_the_estimate():
+    source = Path(__file__).resolve().parents[1] / 'webapp/static/app.js'
+    script = r'''
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync(process.argv[1], 'utf8').split('// ---------------------------------------------------------------- init')[0];
+const context = {document: {addEventListener() {}}, TextEncoder, URLSearchParams};
+vm.createContext(context);
+vm.runInContext(source, context);
+const card = {ebay_median_30d: null, ebay_match: {
+  sold: {count: 2, results: 9, median: 310, usable: false, url: 'https://www.ebay.com/sch/i.html?_nkw=x&LH_Sold=1'},
+  asking: {count: 4, results: 20, median: 380, usable: true, url: 'https://www.ebay.com/sch/i.html?_nkw=x&LH_BIN=1'}}};
+const cell = context.ebayCellHtml(card);
+assert.match(cell, /\$310\.00 median of 2 sales, too few to price from/);
+assert.match(cell, /eBay asking \(median\) \$380\.00, 4 listings/);
+const modal = context.ebayModalHtml(card);
+assert.match(modal, /eBay sold<strong>2 sales, too few<\/strong>/);
+assert.match(modal, /eBay asking \(median\)<strong>\$380\.00<\/strong>/);
+assert.match(modal, /2 matched of 9 results/);
+assert.match(modal, /See this search on eBay/);
+const none = context.ebayModalHtml({ebay_median_30d: 12.5});
+assert.match(none, /eBay sold<strong>\$12\.50<\/strong>/);
+assert.doesNotMatch(none, /matched of/);
+'''
+    done = subprocess.run(['node', '-e', script, str(source)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
