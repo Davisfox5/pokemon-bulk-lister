@@ -9,8 +9,6 @@ from lib import price_notes
 
 
 OUTLIER_MULTIPLIER = 2.5
-# The order of the price list in aggregate(), for naming sources in notes.
-_SOURCE_NAMES = ("TCGplayer", "eBay", "Cardmarket", "Terapeak")
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
 # Confidence considers BOTH relative spread (%) and absolute spread ($) between
@@ -115,6 +113,10 @@ def aggregate(
         terapeak_median_usd,
     ]
     valid = _non_null(prices)
+    # The sources as a disagreement names them (lib/price_notes.py), the
+    # way the screens do: eBay is the year of sales when there is one.
+    named = [("TCGplayer", tcgplayer_market), ("Cardmarket", cardmarket_trend_usd),
+             ("eBay", terapeak_median_usd or ebay_median_30d)]
 
     if not valid:
         return PricingResult(
@@ -137,13 +139,13 @@ def aggregate(
         used = sorted(valid)[:-1]
         price = statistics.median(used)
         outlier_flag = True
-        extra = price_notes.HIGH_LEFT_OUT
+        extra = price_notes.disagree(named)
         notes = f"{notes}; {extra}" if notes else extra
     elif len(valid) == 2 and far_apart(lo, hi, OUTLIER_MULTIPLIER):
         used = [lo]
         price = lo
         outlier_flag = True
-        extra = price_notes.disagree([(name, v) for name, v in zip(_SOURCE_NAMES, prices) if v in (lo, hi)])
+        extra = price_notes.disagree(named)
         notes = f"{notes}; {extra}" if notes else extra
     else:
         price = median

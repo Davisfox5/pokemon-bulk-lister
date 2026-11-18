@@ -1955,12 +1955,21 @@ def api_tcg_catalog_upload():
     return api_tcg_catalog_status()
 
 
+def _source_prices(row) -> list:
+    """A bench card's source prices as the screens name them. eBay is the
+    year of sold listings when there is one, else the last 30 days."""
+    ebay = row.get("terapeak_median_usd") or row.get("ebay_median_30d")
+    return [("TCGplayer", row.get("tcgplayer_market")), ("Cardmarket", row.get("cardmarket_trend_usd")),
+            ("eBay", ebay)]
+
+
 def _shown(row):
     """A bench row as the page gets it: its pricing note in plain words
     (lib/price_notes.py), including notes saved by older versions."""
-    if row and row.get("pricing_notes"):
-        row["pricing_notes"] = price_notes.plain(row["pricing_notes"], prices=[
-            ("TCGplayer", row.get("tcgplayer_market")), ("Cardmarket", row.get("cardmarket_trend_usd"))])
+    if row and (row.get("pricing_notes") or row.get("outlier_flag")):
+        row["pricing_notes"] = price_notes.plain(
+            row["pricing_notes"], prices=_source_prices(row), using=row.get("final_price"),
+            outlier=bool(row.get("outlier_flag")))
     return row
 
 

@@ -166,8 +166,10 @@ def price_provenance(cc: CatalogCard) -> dict:
         "priced_at": cc.last_priced_at.isoformat() + "Z" if cc.last_priced_at else None,
         "outlier": bool(cc.outlier_flag),
         # In plain words, including notes saved by older versions.
-        "notes": price_notes.plain(cc.pricing_notes, prices=[
-            ("TCGplayer", cc.tcgplayer_market), ("Cardmarket", cc.cardmarket_trend_usd)]) or None,
+        "notes": price_notes.plain(
+            cc.pricing_notes, prices=[("TCGplayer", cc.tcgplayer_market), ("Cardmarket", cc.cardmarket_trend_usd),
+                                      ("eBay", cc.ebay_median_30d)],
+            using=cc.final_price, outlier=bool(cc.outlier_flag)) or None,
         # Same bar the bench uses for "needs a human look".
         "flagged": bool(
             cc.final_price is not None

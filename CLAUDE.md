@@ -122,6 +122,12 @@ This is a working tool for one operator, not a product surface.
   Never store or show source codes, set ids, ratios, match levels, URLs or dashes in a
   note; technical detail goes to the log. Screens show at most two sentences, through
   `price_notes.plain()`, which also rewrites notes saved by older versions.
+- A price disagreement always reads exactly one way, built by
+  `price_notes.disagreement()` from the card's own source prices at display time:
+  "Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06." Sources in the
+  fixed order TCGplayer, Cardmarket, eBay (the year of sales when there is one), each
+  to the cent, then the price used. Every older wording maps to it; do not write
+  another.
 - Prices within `pricing.MIN_DISAGREEMENT_USD` ($2) of each other never disagree,
   whatever their ratio (7 cents vs 30 cents is 4x but 23 cents). Every disagreement
   check goes through `pricing.far_apart(a, b, ratio)`. Below the gap the price is the

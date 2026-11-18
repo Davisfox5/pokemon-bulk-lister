@@ -78,7 +78,8 @@ function provenanceHtml(p) {
     ? `<span class="price-range">Range ${fmtUsd(lo)} to ${fmtUsd(hi)}</span>` : "";
   // Preserve the actual reason: a generic "Check" would hide a Japanese
   // proxy, a missing number or a different finish behind the same badge.
-  const note = p.notes || (p.outlier ? "Prices disagree. Check the printing." : "Check the price before listing.");
+  // The server words every note (lib/price_notes.py), disagreements included.
+  const note = p.notes || "Check the price before listing.";
   const warning = own ? "Spreadsheet estimate. Check the price." : note;
   const why = p.flagged ? `<span class="flag-note">${esc(warning)}</span>` : "";
   if (!p.priced_at && !p.notes && !keys.length) return `<span class="prov price-source-line">${esc(line)}</span>${why}`;
