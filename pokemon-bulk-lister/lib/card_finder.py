@@ -45,6 +45,7 @@ import numpy as np
 
 CARD_ASPECT = 6.3 / 8.8            # short side / long side
 OUT_W, OUT_H = 480, 671            # size of a squared-up crop
+CROP_MARGIN = 0.04                 # kept round the found outline, as a share of each side
 
 _WORK_SIDE = 1100                  # detection runs on a copy this long on its long side
 _ASPECT_LO, _ASPECT_HI = 0.60, 0.84    # a card seen at a moderate angle
@@ -72,11 +73,18 @@ def _portrait(quad: np.ndarray) -> np.ndarray:
     return np.roll(q, -1, axis=0) if top > side else q
 
 
-def crop(img: np.ndarray, quad: np.ndarray) -> np.ndarray:
-    """One card, squared up to an upright OUT_W x OUT_H image."""
+def crop(img: np.ndarray, quad: np.ndarray, margin: float = CROP_MARGIN) -> np.ndarray:
+    """One card, squared up to an upright OUT_W x OUT_H image.
+
+    The found outline is an estimate and tends to sit a little inside the
+    card, so the crop takes a margin round it: the outline lands `margin` in
+    from each edge and what lies beyond comes from the photo."""
     src = _portrait(quad)
-    dst = np.array([[0, 0], [OUT_W - 1, 0], [OUT_W - 1, OUT_H - 1], [0, OUT_H - 1]], dtype=np.float32)
-    return cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (OUT_W, OUT_H))
+    mx, my = (OUT_W - 1) * margin, (OUT_H - 1) * margin
+    dst = np.array([[mx, my], [OUT_W - 1 - mx, my], [OUT_W - 1 - mx, OUT_H - 1 - my], [mx, OUT_H - 1 - my]],
+                   dtype=np.float32)
+    return cv2.warpPerspective(img, cv2.getPerspectiveTransform(src, dst), (OUT_W, OUT_H),
+                               borderMode=cv2.BORDER_REPLICATE)
 
 
 def _sides(quad: np.ndarray) -> tuple[float, float]:

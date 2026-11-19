@@ -179,3 +179,20 @@ def test_an_empty_pocket_is_not_filled_in():
     found = card_finder.find_cards(photo)
     assert len(found) == 8
     assert max(_overlap(hole, f["quad"], photo.shape) for f in found) < 0.2
+
+
+def test_a_crop_keeps_a_margin_round_the_found_outline():
+    # A white card on black, with the outline found exactly: the crop shows
+    # the whole card with background on every side, not a card cut at its edge.
+    img = np.zeros((900, 700, 3), np.uint8)
+    cv2.rectangle(img, (200, 200), (500, 619), (255, 255, 255), -1)
+    quad = np.array([[200, 200], [500, 200], [500, 619], [200, 619]], np.float32)
+    out = card_finder.crop(img, quad)
+    assert out.shape[:2] == (card_finder.OUT_H, card_finder.OUT_W)
+    mx, my = int(card_finder.OUT_W * card_finder.CROP_MARGIN), int(card_finder.OUT_H * card_finder.CROP_MARGIN)
+    assert out[card_finder.OUT_H // 2, mx // 2].max() < 40 and out[my // 2, card_finder.OUT_W // 2].max() < 40
+    assert out[card_finder.OUT_H // 2, -1 - mx // 2].max() < 40 and out[-1 - my // 2, card_finder.OUT_W // 2].max() < 40
+    assert out[card_finder.OUT_H // 2, mx + 6].min() > 215 and out[my + 6, card_finder.OUT_W // 2].min() > 215
+    # At the photo's own edge there is nothing beyond: the edge is repeated, not black bars.
+    full = np.full((671, 480, 3), 200, np.uint8)
+    assert card_finder.crop(full, np.array([[0, 0], [479, 0], [479, 670], [0, 670]], np.float32)).min() > 190
