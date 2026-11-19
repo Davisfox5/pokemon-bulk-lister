@@ -304,3 +304,69 @@ def test_the_scan_list_shows_an_old_price_note_in_plain_words(bench):
     # The stored note is untouched: the review hold still reads its marker.
     with db.connect(bench.DB_PATH) as conn:
         assert db.get_card(conn, rows[0]['id'])['pricing_notes'] == stored
+
+
+def test_a_number_never_turns_one_real_name_into_another(monkeypatch):
+    from lib import card_catalog as cc
+    # Latias and Latios are a letter apart and both real: reading "Latias"
+    # with Latios's number is not Latios.
+    assert not cc._same_name("Latias", "Latios")
+    assert cc._same_name("Goldengo", "Gholdengo")          # a misread of one real name still matches
+    monkeypatch.setattr(cc, "sets", lambda: [{"id": "ssp", "name": "Sparks", "printedTotal": 191, "ptcgoCode": "SSP"}])
+    monkeypatch.setattr(cc, "set_cards", lambda sid: [{"id": "ssp-76", "name": "Latias", "number": "76", "rarity": "Rare"},
+                                                       {"id": "ssp-77", "name": "Latios", "number": "77", "rarity": "Rare"}])
+    found = cc.resolve("Latias", "077", total=191, printed_code="SSP")
+    assert found["status"] == "probable" and (found["card"]["name"], found["card"]["card_number"]) == ("Latias", "76")
+
+
+def test_with_no_set_read_every_printing_of_the_name_is_a_choice(monkeypatch):
+    from lib import card_catalog as cc
+    monkeypatch.setattr(cc, "sets", lambda: [{"id": "s142", "name": "Crown", "printedTotal": 142, "ptcgoCode": "SCR"}])
+    monkeypatch.setattr(cc, "set_cards", lambda sid: [{"id": "s142-1", "name": "Oddish", "number": "1", "rarity": "Common"}])
+    saved = {}
+    monkeypatch.setattr(cc, "_store", type("S", (), {"get": staticmethod(saved.get),
+                                                    "set": staticmethod(saved.__setitem__)})())
+    asked = []
+
+    def pages(path, params):
+        asked.append(params["q"])
+        return [{"name": "Mewtwo", "number": "58", "rarity": "Rare", "set": {"id": "new", "name": "Newest", "printedTotal": 191}},
+                {"name": "Mewtwo", "number": "39", "rarity": "Rare", "set": {"id": "mid", "name": "Middle", "printedTotal": 142}},
+                {"name": "Mewtwo ex", "number": "150", "rarity": "Double Rare", "set": {"id": "mid", "name": "Middle"}}]
+
+    monkeypatch.setattr(cc, "_all_pages", pages)
+    # Nothing read but the name: every printing, newest first, and not "Mewtwo ex".
+    picks = cc.choices("Mewtwo")
+    assert [(c["set_code"], c["card_number"], c["why"]) for c in picks] == [("new", "58", "same name"),
+                                                                            ("mid", "39", "same name")]
+    # A total that was read puts the set of that size first, and the lookup is kept.
+    picks = cc.choices("Mewtwo", total=142)
+    assert [(c["set_code"], c["why"]) for c in picks] == [("mid", "same name, set total matches"), ("new", "same name")]
+    assert asked == ['!name:"Mewtwo"']
+    # The source down and the name never looked up: no choices, no error.
+    monkeypatch.setattr(cc, "_all_pages", lambda *a: (_ for _ in ()).throw(RuntimeError("down")))
+    assert cc.choices("Sigilyph") == []
+
+
+def test_a_card_with_no_set_is_not_priced_by_its_name(bench, monkeypatch):
+    from lib import price_notes
+
+    class TCG:
+        def lookup_prices(self, **kw):
+            pytest.fail("a card with no set must not be looked up by name")
+
+    class Ebay:
+        def card_stats(self, spec, **kw):
+            pytest.fail("eBay must not be searched for a card with no set")
+
+    class Cardmarket:
+        def lookup_trend_eur(self, *a, **kw):
+            pytest.fail("no name-only Cardmarket estimate either")
+
+    monkeypatch.setattr(bench, "get_tcg", TCG)
+    monkeypatch.setattr(bench, "get_ebay", Ebay)
+    monkeypatch.setattr(bench, "get_cardmarket", Cardmarket)
+    monkeypatch.setattr(bench, "CARDMARKET_FALLBACK", True)
+    patch = bench._price_card(dict(name="Mewtwo", set_code="", card_number="", id_confidence=0.97, printing="normal"))
+    assert patch["final_price"] is None and patch["needs_review"]
+    assert price_notes.plain(patch["pricing_notes"]) == price_notes.SET_NEEDED

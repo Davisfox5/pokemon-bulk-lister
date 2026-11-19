@@ -27,6 +27,7 @@ WARN = "⚠ "
 FINISH = "Choose the finish (non-holo, holo or reverse holo) to price this card."
 JAPANESE = "Japanese card, priced from the English version."
 CHECK_ID = "Check the card against the photo."
+SET_NEEDED = "Choose the set to price this card."
 SET_UNCONFIRMED = "Set not confirmed. Check the set before listing."
 NUMBER_UNCONFIRMED = "Card number not confirmed. Check the printing."
 DISAGREE = "Prices disagree."            # stored marker when no prices are known
@@ -40,7 +41,7 @@ CLOSE = "The prices are close together."
 SOURCE_ORDER = ("TCGplayer", "Cardmarket", "eBay")
 _KIND_DISAGREE = "disagree"
 # Most important first: the first one or two are what a person sees.
-_ORDER = [FINISH, JAPANESE, CHECK_ID, _KIND_DISAGREE, SET_UNCONFIRMED, NUMBER_UNCONFIRMED,
+_ORDER = [FINISH, SET_NEEDED, JAPANESE, CHECK_ID, _KIND_DISAGREE, SET_UNCONFIRMED, NUMBER_UNCONFIRMED,
           NO_PRICE, LOOKUP_FAILED, CM_ESTIMATE, SET_FILLED, CLOSE]
 SHOWN = 2
 
@@ -88,6 +89,7 @@ _NAMED = re.compile(r"(TCGplayer|Cardmarket|eBay|Terapeak) \$(\d[\d,]*(?:\.\d+)?
 _TWO = re.compile(r"two sources disagree\D*[\d.]+x \(([\d.]+) vs ([\d.]+)\)")
 _LEGACY = [
     (re.compile(r"finish not checked|choose non-holo|choose the finish", re.I), FINISH),
+    (re.compile(r"choose the set", re.I), SET_NEEDED),
     (re.compile(r"japanese", re.I), JAPANESE),
     (re.compile(r"identification needs review|compare the card to its photo|matches its photo|against the photo", re.I), CHECK_ID),
     (re.compile(r"name-only match|matched on the name only|name only|set not confirmed", re.I), SET_UNCONFIRMED),
@@ -191,6 +193,8 @@ def plain(notes: Optional[str], shown: int = SHOWN, prices: Optional[Prices] = N
 
     if len(found) > 1:
         found = [s for s in found if s != CLOSE]
+    if SET_NEEDED in found:
+        found = [s for s in found if s != NO_PRICE]     # the missing set is the reason
     if LOOKUP_FAILED in found:
         found = [s for s in found if s != NO_PRICE]     # the failure is the reason
     found.sort(key=rank)

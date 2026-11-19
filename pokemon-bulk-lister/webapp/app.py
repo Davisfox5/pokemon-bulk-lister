@@ -1121,11 +1121,13 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     # Try the most specific query first; if it 404s or returns nothing,
     # progressively drop fields. pokemontcg.io has been observed 404-ing
     # narrow queries under load.
-    attempts: list[tuple[dict, str]] = [
+    # A card is never priced by its name alone: with no set, the match is
+    # some printing of that name, and its price says nothing about this card
+    # (a $27 Mewtwo for a 10 cent one). It waits for a person to choose the set.
+    no_set = not japanese and not set_code
+    attempts: list[tuple[dict, str]] = [] if no_set else [
         ({"set_code": set_code, "card_number": card_number}, "exact"),
         ({"set_code": set_code, "card_number": None},        "no_number"),
-        ({"set_code": None, "card_number": card_number},     "no_set"),
-        ({"set_code": None, "card_number": None},            "name_only"),
     ]
     if japanese:
         # Only the English set that reprints this one. A match by name alone
@@ -1168,7 +1170,7 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     # Cardmarket daily price-guide fallback: only when pokemontcg.io gave no
     # Cardmarket price. Name-only match, so the guide refuses ambiguous cards.
     cm_fallback_note: Optional[str] = None
-    if cm_eur is None and CARDMARKET_FALLBACK and name and not japanese and printing == "normal":
+    if cm_eur is None and CARDMARKET_FALLBACK and name and not japanese and not no_set and printing == "normal":
         try:
             cm_eur, cm_fallback_note = get_cardmarket().lookup_trend_eur(name, is_holo=is_holo)
             if cm_eur is None:
@@ -1204,7 +1206,9 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
     # the screens with how many matched (_save_ebay_match).
     ebay_stats: dict[str, Any] = {"median": None, "max": None, "count": 0}
     ebay_match: Optional[dict] = None
-    if name and printing != "unknown":
+    if no_set:
+        ebay_log(f"{name}: not searched (set not known)")
+    elif name and printing != "unknown":
         try:
             ebay_match = ebay.card_stats(ebay_spec, days=30)
         except EbayAuthError as exc:
@@ -1238,6 +1242,8 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
         terapeak_median_usd=terapeak_stats.get("median"),
     )
 
+    if no_set and name:
+        warnings = [price_notes.SET_NEEDED]
     if printing == "unknown":
         warnings = [price_notes.FINISH]
 

@@ -174,6 +174,12 @@ runtime routing audit. This section covers what the tool calls when it runs.
   the catalog could not settle gets a Choose button on Scan: `GET
   /api/cards/<id>/choices` lists the real cards it could be (no model call), or
   the person types it in or has the photo read again.
+  When the sets that fit what was read hold no card of that name (or no set
+  was read), the choices are every printing of the name (`card_catalog.printings`,
+  one catalog search per name, cached). Two real names a letter apart (Latias,
+  Latios) never match each other, whatever the number (`_same_name`).
+- A card with no set is never priced by its name: `_price_card` makes no lookup
+  and notes "Choose the set to price this card." (`price_notes.SET_NEEDED`).
 - The Scan table keeps itself current with no timer: rows update from a job's
   progress and from each price as it lands, and the list is read once when the
   tab comes back into view. An idle open tab must make no requests (each one

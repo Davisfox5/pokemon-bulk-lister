@@ -182,6 +182,38 @@ def set_cards(set_id: str) -> list[dict]:
     return fresh
 
 
+NAME_MAX_AGE = 7 * 24 * 3600
+
+
+def printings(name: str) -> list[dict]:
+    """Every card with exactly this name, across all sets, newest set first:
+    name, set_name, set_code, card_number, rarity, total. For a card whose
+    set could not be read, so a person can pick the printing. Raises when the
+    name has never been looked up and the source cannot be reached."""
+    wanted = _norm(name)
+    if not wanted:
+        return []
+    key = f"name-cards:{wanted.replace(' ', '-')}"
+    saved = _store.get(key) or {}
+    cards = saved.get("cards")
+    if cards is not None and time.time() - float(saved.get("at") or 0) <= NAME_MAX_AGE:
+        return cards
+    try:
+        quoted = name.strip().replace('"', "")
+        rows = _all_pages("/cards", {"q": f'!name:"{quoted}"', "select": "id,name,number,rarity,set",
+                                     "orderBy": "-set.releaseDate"})
+    except Exception:
+        if cards is not None:
+            return cards
+        raise
+    fresh = [{"name": c.get("name") or "", "set_name": (c.get("set") or {}).get("name"),
+              "set_code": (c.get("set") or {}).get("id"), "card_number": str(c.get("number") or ""),
+              "rarity": c.get("rarity"), "total": (c.get("set") or {}).get("printedTotal")}
+             for c in rows if _norm(c.get("name")) == wanted and (c.get("set") or {}).get("id")]
+    _store.set(key, {"at": time.time(), "cards": fresh})
+    return fresh
+
+
 MIRROR = "https://raw.githubusercontent.com/PokemonTCG/pokemon-tcg-data/master/cards/en"
 
 
@@ -348,6 +380,17 @@ def _total(text: Any) -> Optional[int]:
     return int(m.group(0)) if m else None
 
 
+_species_names: Optional[set] = None
+
+
+def _species() -> set:
+    """Every Pokemon's English name, normalised (from the bundled name table)."""
+    global _species_names
+    if _species_names is None:
+        _species_names = {_norm(v) for v in _ja_table().values()}
+    return _species_names
+
+
 def _same_name(read: str, real: str) -> bool:
     """The name read off a card against the catalog's. Exact after
     normalising, or one a short slip from the other ("Goldengo" for
@@ -357,6 +400,10 @@ def _same_name(read: str, real: str) -> bool:
         return False
     if a == b or a.replace(" ", "") == b.replace(" ", ""):
         return True
+    # Two real names a letter apart (Latias, Latios) are two cards, not one
+    # name misread: a number never turns one into the other.
+    if a in _species() and b in _species():
+        return False
     # These marks name different products, even when only a character apart.
     variants = {"ex", "gx", "v", "vmax", "vstar", "lv", "x", "star", "delta", "male", "female"}
     if (set(a.split()) & variants) != (set(b.split()) & variants):
@@ -464,10 +511,14 @@ def resolve(name: str, number: Optional[str] = None, total: Any = None, printed_
 
 def choices(name: str, number: Optional[str] = None, total: Any = None, printed_code: Optional[str] = None,
             set_code: Optional[str] = None, set_name: Optional[str] = None, max_sets: int = 8,
-            limit: int = 8) -> list[dict]:
+            limit: int = 8, every_printing: int = 40) -> list[dict]:
     """The real cards a doubtful reading could be, best first, for a person
     to pick from. Each is a catalog record (name, set_name, set_code,
-    card_number, rarity) with "why": how it fits what was read."""
+    card_number, rarity) with "why": how it fits what was read.
+
+    When the sets that fit what was read hold no card of this name (or nothing
+    was read to name a set), every printing of the name is listed, newest
+    first, those whose set total matches the one read ahead of the rest."""
     num = _number(number)
     total_n = _total(total) if total not in (None, "") else (
         _total(str(number).split("/")[1]) if number and "/" in str(number) else None)
@@ -488,7 +539,23 @@ def choices(name: str, number: Optional[str] = None, total: Any = None, printed_
             found.append((rank, order, {"name": c["name"], "set_name": s.get("name"), "set_code": s["id"],
                                         "card_number": c["number"], "rarity": c.get("rarity"), "why": why}))
     found.sort(key=lambda row: (row[0], row[1]))
-    return [row[2] for row in found[:limit]]
+    out = [row[2] for row in found[:limit]]
+    if not any(row[0] <= 1 for row in found) and _norm(name):
+        try:
+            everywhere = printings(name)
+        except Exception:
+            everywhere = []
+        have = {(c["set_code"], _number(c["card_number"])) for c in out}
+        fits = [c for c in everywhere if total_n and c.get("total") == total_n]
+        rest = [c for c in everywhere if c not in fits]
+        for c in (fits + rest)[:every_printing]:
+            if (c["set_code"], _number(c["card_number"])) in have:
+                continue
+            why = ("same name and number" if num and _number(c["card_number"]) == num else
+                   "same name, set total matches" if c in fits else "same name")
+            out.append({"name": c["name"], "set_name": c["set_name"], "set_code": c["set_code"],
+                        "card_number": c["card_number"], "rarity": c.get("rarity"), "why": why})
+    return out
 
 
 def prompt_reference(n: int = 60) -> str:
