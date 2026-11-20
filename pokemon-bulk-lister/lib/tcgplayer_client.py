@@ -49,12 +49,26 @@ class TCGPlayerClient:
             if resp.status_code == 429:
                 time.sleep(2 ** attempt)
                 continue
+            if resp.status_code >= 500 and attempt < 2:      # it answers 5xx about as often as not
+                time.sleep(0.6 * (attempt + 1))
+                continue
             resp.raise_for_status()
             return resp.json()
         if last_exc is not None:
             raise last_exc
         resp.raise_for_status()
         return {}
+
+    @staticmethod
+    def plain_set_name(set_name: Optional[str]) -> Optional[str]:
+        """A set name as the catalog spells it. Sheets and listings often
+        write "Pokémon TCG: 30th Celebration (30C)"; the catalog calls that
+        set "30th Celebration"."""
+        import re
+
+        text = re.sub(r"^\s*pok[eé]mon(\s+tcg|\s+trading\s+card\s+game)?\s*[:\-–]\s*", "", set_name or "", flags=re.I)
+        text = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
+        return text or (set_name or None)
 
     def find_card(
         self,
@@ -70,7 +84,7 @@ class TCGPlayerClient:
         if set_code:
             clauses.append(f'set.id:{_escape(set_code)}')
         elif set_name:
-            clauses.append(f'set.name:"{_escape(set_name)}"')
+            clauses.append(f'set.name:"{_escape(self.plain_set_name(set_name))}"')
         if card_number:
             clauses.append(f'number:{_escape(card_number)}')
 
@@ -83,12 +97,22 @@ class TCGPlayerClient:
             return None
 
         if card_number:
+            want = _same_number(card_number)
             for c in cards:
-                if str(c.get("number", "")).lstrip("0") == str(card_number).lstrip("0"):
+                if _same_number(c.get("number")) == want:
                     return c
+            return None
+        if set_code and not card_number:
+            # Several printings of one name in a set: the ordinary one has
+            # the lowest number, the full-art ones come after the printed total.
+            def order(c: dict) -> tuple:
+                digits = "".join(ch for ch in str(c.get("number", "")) if ch.isdigit())
+                return (0, int(digits)) if str(c.get("number", "")).isdigit() else (1, int(digits or 0))
+            exact = [c for c in cards if (c.get("name") or "").lower() == (name or "").lower()]
+            return min(exact or cards, key=order)
         return cards[0]
 
-    def market_price(self, card: dict, prefer_holo: bool = False) -> Optional[float]:
+    def market_price(self, card: dict, prefer_holo: bool = False, printing: Optional[str] = None) -> Optional[float]:
         """Pull TCGPlayer market price (USD) from the card payload.
 
         pokemontcg.io exposes TCGPlayer prices under
@@ -99,23 +123,13 @@ class TCGPlayerClient:
         if not prices:
             return None
 
-        priority = (
-            ["holofoil", "reverseHolofoil", "normal", "1stEditionHolofoil", "unlimitedHolofoil"]
-            if prefer_holo
-            else ["normal", "holofoil", "reverseHolofoil", "1stEdition", "unlimited"]
-        )
+        from lib.printing import normalize
+        key = _variant_key(prices, normalize(printing, prefer_holo))
+        variant = prices.get(key) or {} if key else {}
+        value = variant.get("market") if isinstance(variant, dict) else None
+        return float(value) if value is not None and value > 0 else None
 
-        for variant in priority:
-            v = prices.get(variant)
-            if v and isinstance(v, dict) and v.get("market"):
-                return float(v["market"])
-
-        for variant_data in prices.values():
-            if isinstance(variant_data, dict) and variant_data.get("market"):
-                return float(variant_data["market"])
-        return None
-
-    def cardmarket_trend_eur(self, card: dict, prefer_holo: bool = False) -> Optional[float]:
+    def cardmarket_trend_eur(self, card: dict, prefer_holo: bool = False, printing: Optional[str] = None) -> Optional[float]:
         """Pull Cardmarket trend price (EUR) from the card payload.
 
         pokemontcg.io exposes Cardmarket prices under
@@ -127,16 +141,21 @@ class TCGPlayerClient:
         if not prices:
             return None
 
-        if prefer_holo:
-            for key in ("reverseHoloTrend", "trendPrice", "reverseHoloSell", "averageSellPrice"):
-                v = prices.get(key)
-                if v:
-                    return float(v)
-        else:
-            for key in ("trendPrice", "averageSellPrice", "reverseHoloTrend", "reverseHoloSell"):
-                v = prices.get(key)
-                if v:
-                    return float(v)
+        from lib.printing import normalize
+        finish = normalize(printing, prefer_holo)
+        keys = ("reverseHoloTrend", "reverseHoloSell") if finish == "reverseHolofoil" else ("trendPrice", "averageSellPrice")
+        if finish == "unknown":
+            return None
+        # trendPrice is the ordinary (non-reverse) product. When the product
+        # lists its finishes and none of them stands for this card, it is not
+        # this card's price.
+        variants = ((card or {}).get("tcgplayer") or {}).get("prices") or {}
+        if finish != "reverseHolofoil" and variants and _variant_key(variants, finish) is None:
+            return None
+        for key in keys:
+            value = prices.get(key)
+            if value is not None and value > 0:
+                return float(value)
         return None
 
     def lookup_price(
@@ -146,12 +165,13 @@ class TCGPlayerClient:
         set_code: Optional[str] = None,
         card_number: Optional[str] = None,
         is_holo: bool = False,
+        printing: Optional[str] = None,
     ) -> tuple[Optional[float], Optional[dict]]:
         """Backward-compatible: returns (tcgplayer_market_usd, card)."""
         card = self.find_card(name=name, set_name=set_name, set_code=set_code, card_number=card_number)
         if not card:
             return None, None
-        return self.market_price(card, prefer_holo=is_holo), card
+        return self.market_price(card, prefer_holo=is_holo, printing=printing), card
 
     def lookup_prices(
         self,
@@ -160,6 +180,7 @@ class TCGPlayerClient:
         set_code: Optional[str] = None,
         card_number: Optional[str] = None,
         is_holo: bool = False,
+        printing: Optional[str] = None,
     ) -> dict:
         """One pokemontcg.io call -> both TCGPlayer (USD) and Cardmarket (EUR) prices.
 
@@ -178,9 +199,48 @@ class TCGPlayerClient:
             return {"card": None, "tcgplayer_market_usd": None, "cardmarket_trend_eur": None}
         return {
             "card": card,
-            "tcgplayer_market_usd": self.market_price(card, prefer_holo=is_holo),
-            "cardmarket_trend_eur": self.cardmarket_trend_eur(card, prefer_holo=is_holo),
+            "tcgplayer_market_usd": self.market_price(card, prefer_holo=is_holo, printing=printing),
+            "cardmarket_trend_eur": self.cardmarket_trend_eur(card, prefer_holo=is_holo, printing=printing),
         }
+
+
+# A finish as the price source names it. Sets before 2003 have no "normal" or
+# "holofoil": theirs are "unlimited" and "unlimitedHolofoil". A 1st Edition
+# card is a different, dearer product and never stands in for one.
+_VARIANTS = {
+    "normal": ("normal", "unlimited"),
+    "holofoil": ("holofoil", "unlimitedHolofoil"),
+    "reverseHolofoil": ("reverseHolofoil",),
+}
+
+
+def _variant_key(prices: dict, finish: str) -> Optional[str]:
+    """Which of a product's price variants stands for this finish, or None.
+
+    A card printed in one ordinary finish only (a holo rare has no non-holo
+    printing) takes that one, whichever of holo / non-holo the photo was read
+    as: the reader gets that wrong often, and there is no other card it could
+    be. A reverse holo never stands in for anything else, nor the other way."""
+    def has(key: str) -> bool:
+        v = prices.get(key)
+        return isinstance(v, dict) and (v.get("market") or 0) > 0
+
+    for key in _VARIANTS.get(finish, ()):
+        if has(key):
+            return key
+    if finish in ("normal", "holofoil"):
+        other = "holofoil" if finish == "normal" else "normal"
+        if not any(k in prices for k in _VARIANTS[finish]):
+            for key in _VARIANTS[other]:
+                if has(key):
+                    return key
+    return None
+
+
+def _same_number(text) -> str:
+    """'023', 'TG05' and 'tg5' are the same collector number."""
+    from lib.card_catalog import _number
+    return _number(None if text is None else str(text))
 
 
 def _escape(value: str) -> str:

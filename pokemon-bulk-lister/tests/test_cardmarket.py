@@ -73,7 +73,8 @@ def test_bulk_name_gets_conservative_p25():
     )
     price, note = g.lookup_trend_eur("Charcadet")
     assert price == 0.08  # p25 of 4 sorted values -> index 1
-    assert "bulk-floor" in note
+    from lib import price_notes
+    assert note == price_notes.CM_ESTIMATE
 
 
 def test_holo_prefers_holo_trend():

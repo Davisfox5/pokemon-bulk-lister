@@ -1,0 +1,8 @@
+tests/
+docs/
+input/
+output/
+_demo/
+.pytest_cache/
+__pycache__/
+.env

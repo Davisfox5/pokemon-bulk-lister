@@ -24,11 +24,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from lib.ebay_lister import EbayLister, EbayListingError
 from lib.ebay_oauth import EbayUserAuth, EbayUserAuthError
-from webapp.auth import current_user_id, login_required
+from webapp.auth import current_user_id, login_required, verified_required
 from webapp.models import Base, InventoryItem, Listing, get_session, utcnow
 
 ROOT = Path(__file__).resolve().parent.parent
-TOKENS_DIR = ROOT / "output" / "cache" / "ebay_user_tokens"
+from webapp import runtime  # noqa: E402
+
+TOKENS_DIR = runtime.DATA_ROOT / "output" / "cache" / "ebay_user_tokens"
 
 settings_bp = Blueprint("settings", __name__)
 
@@ -69,13 +71,33 @@ def _get_keys(s, uid: int) -> Optional[UserEbayKeys]:
 
 
 def _auth_for(uid: int, keys: UserEbayKeys) -> EbayUserAuth:
-    return EbayUserAuth(
+    # The refresh token is a file here and a sealed database row on a
+    # serverless host (see runtime.make_ebay_auth).
+    return runtime.make_ebay_auth(
+        f"user-{uid}", _token_path(uid),
         client_id=keys.client_id,
         client_secret=keys.client_secret,
         redirect_uri=keys.ru_name,
         env=keys.env,
-        token_path=str(_token_path(uid)),
     )
+
+
+def own_ebay(uid: int):
+    """(auth, env) for this account's own connected eBay, or None."""
+    s = get_session()
+    try:
+        keys = _get_keys(s, uid)
+    finally:
+        s.close()
+    if keys is None:
+        return None
+    auth = _auth_for(uid, keys)
+    try:
+        if not auth.is_authorized():
+            return None
+    except Exception:
+        return None
+    return auth, keys.env
 
 
 def _hint(client_id: str) -> str:
@@ -112,7 +134,7 @@ def ebay_status():
 
 
 @settings_bp.route("/api/settings/ebay", methods=["POST"])
-@login_required
+@verified_required
 def ebay_save_keys():
     body = request.get_json(silent=True) or {}
     client_id = (body.get("client_id") or "").strip()
@@ -141,7 +163,7 @@ def ebay_save_keys():
         s.close()
     # A consent granted to a different app id is useless — drop it.
     if changed_app:
-        _token_path(uid).unlink(missing_ok=True)
+        runtime.forget_ebay_token(f"user-{uid}", _token_path(uid))
     return jsonify(_status(uid))
 
 
@@ -157,7 +179,7 @@ def ebay_remove_keys():
             s.commit()
     finally:
         s.close()
-    _token_path(uid).unlink(missing_ok=True)
+    runtime.forget_ebay_token(f"user-{uid}", _token_path(uid))
     return jsonify(_status(uid))
 
 
@@ -175,7 +197,7 @@ def ebay_consent_url():
     finally:
         s.close()
     if keys is None:
-        return jsonify({"error": "save your eBay API keys first"}), 400
+        return jsonify({"error": "save the eBay API keys first"}), 400
     try:
         return jsonify({"url": _auth_for(uid, keys).build_consent_url()})
     except EbayUserAuthError as exc:
@@ -183,12 +205,12 @@ def ebay_consent_url():
 
 
 @settings_bp.route("/api/settings/ebay/authorize", methods=["POST"])
-@login_required
+@verified_required
 def ebay_authorize():
     body = request.get_json(silent=True) or {}
     pasted = (body.get("redirect") or "").strip()
     if not pasted:
-        return jsonify({"error": "paste the URL eBay redirected you to (or the code)"}), 400
+        return jsonify({"error": "paste the URL eBay redirected to (or the code)"}), 400
     uid = current_user_id()
     s = get_session()
     try:
@@ -196,7 +218,7 @@ def ebay_authorize():
     finally:
         s.close()
     if keys is None:
-        return jsonify({"error": "save your eBay API keys first"}), 400
+        return jsonify({"error": "save the eBay API keys first"}), 400
     auth = _auth_for(uid, keys)
     try:
         code = auth.extract_code(pasted)
@@ -211,7 +233,7 @@ def ebay_authorize():
 # ----------------------------------------------------------------------
 
 @settings_bp.route("/api/settings/ebay/list-item", methods=["POST"])
-@login_required
+@verified_required
 def ebay_list_item():
     body = request.get_json(silent=True) or {}
     uid = current_user_id()
@@ -226,31 +248,44 @@ def ebay_list_item():
             .filter_by(id=int(body.get("item_id") or 0), user_id=uid)
             .one_or_none()
         )
-        if item is None:
+        if item is None or item.quantity < 1:
+            # quantity 0 is a card that has sold; it must not be listed again
             return jsonify({"error": "no such inventory item"}), 404
         item_id = item.id
         cc = item.catalog_card
         price = body.get("price")
-        price = float(price) if price is not None else cc.final_price
+        if price is None:                          # your own price, else the market price
+            from webapp.catalog import your_prices
+            price = your_prices(s, [item.id]).get(item.id) or cc.final_price
+        price = float(price) if price is not None else None
         card = {
             "id": f"inv{item.id}",
+            "inventory_item_id": item.id,
             "name": cc.name,
             "set_name": cc.set_name,
             "card_number": cc.card_number,
             "rarity": cc.rarity,
             "is_holo": cc.is_holo,
+            "printing": cc.printing,
             "condition_guess": item.condition or "NM",
             "crop_path": item.source_crop_path or "",
-            "image_url": item.image_url or cc.image_url,
+            "image_url": item.image_url,
             "final_price": price,
         }
+        stock_image = cc.image_url
     finally:
         s.close()
+    # The listing shows the owner's own photo of the card: a hosted copy if
+    # there is one, else the scan photo where the site stores it publicly.
+    # The catalog's stock picture is the last resort.
+    if not card["image_url"] and card["crop_path"]:
+        card["image_url"] = runtime.add_photo_urls([dict(card)])[0].get("photo_url")
+    card["image_url"] = card["image_url"] or stock_image
 
     if not price or price <= 0:
         return jsonify({"error": "no price — refresh prices or pass one explicitly"}), 400
     if not card["image_url"]:
-        return jsonify({"error": "item has no image URL — upload its photo first"}), 400
+        return jsonify({"error": "item has no image URL; upload a photo first"}), 400
 
     auth = _auth_for(uid, keys)
     if not auth.is_authorized():
@@ -272,7 +307,10 @@ def ebay_list_item():
             rec.listing_id = result.get("listing_id")
             rec.status = "dry_run" if result.get("dry_run") else "live"
             s.commit()
-            return jsonify({"listing": result, "status": rec.status})
+            out = {"listing": result, "status": rec.status}
+            if body.get("ai_description") and rec.status == "live":
+                out["ai_description"] = _queue_description(card, uid, rec.offer_id)
+            return jsonify(out)
         except (EbayListingError, EbayUserAuthError) as exc:
             rec.status = "error"
             rec.error = str(exc)
@@ -280,3 +318,23 @@ def ebay_list_item():
             return jsonify({"error": str(exc)}), 502
     finally:
         s.close()
+
+
+def _queue_description(card: dict, uid: int, offer_id: Optional[str]) -> Optional[str]:
+    """The owner ticked "Write the description with AI": queue the card and
+    move the queue along once. Returns where its description stands
+    (waiting, sent or done), or None when it could not be queued. The
+    listing is already live with the built description either way."""
+    import traceback
+
+    from webapp import descriptions
+
+    try:
+        sku = descriptions.enqueue_item(card, uid, offer_id)
+        if not sku:
+            return None
+        descriptions.pump_now(seconds=15.0)
+        return descriptions.status_for(sku)
+    except Exception:
+        traceback.print_exc()
+        return None

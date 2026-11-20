@@ -13,6 +13,12 @@ schema-validated JSON — no prose to parse. Model defaults to Haiku
 (identification is constrained extraction; Haiku handles the overwhelming
 majority of cards) and can be overridden with VISION_MODEL.
 
+The model reads what is printed on the card (name, "023/128", the small set
+code) and is told not to name a set from memory: sets newer than the model
+exist, and the caller checks what was read against the real catalog
+(lib/card_catalog) without another model call. The newest sets are listed in
+the prompt so a set the model has never seen can still be named.
+
 Credentials come from the standard Anthropic SDK resolution (ANTHROPIC_API_KEY
 env var, auth token, or an `ant auth login` profile).
 """
@@ -25,7 +31,10 @@ from typing import Any, Optional
 
 import cv2
 
-DEFAULT_MODEL = "claude-haiku-4-5"
+DEFAULT_MODEL = "claude-haiku-5-5"
+# Used when the default is refused outright (an account without access to it,
+# a parameter it does not take): identification still runs.
+FALLBACK_MODEL = "claude-haiku-4-5"
 
 # Haiku's max useful image size is 1568px on the long edge — larger inputs are
 # downscaled server-side anyway, so resizing client-side just saves tokens.
@@ -36,14 +45,19 @@ JPEG_QUALITY = 85
 _CARD_PROPS = {
     "row": {"type": "integer", "description": "0-indexed row in the grid, top to bottom"},
     "col": {"type": "integer", "description": "0-indexed column in the grid, left to right"},
-    "name": {"type": "string", "description": "Card name as printed, e.g. 'Pikachu ex'. Empty string if unreadable."},
+    "name": {"type": "string", "description": "Card name in English, e.g. 'Pikachu ex'. For a card printed in another language, its English name. Empty string if unreadable."},
+    "name_printed": {"type": "string", "description": "The card name exactly as printed, in the card's own script, e.g. 'ロケット団のニドラン♂'. Same as name for an English card."},
+    "language": {"type": "string", "description": "Language the card is printed in: 'en', 'ja', or another two-letter code."},
     "set_name": {"type": "string", "description": "Set name, e.g. 'Surging Sparks'. Empty string if unknown."},
     "set_code": {
         "type": "string",
         "description": "pokemontcg.io set id, e.g. 'base1', 'swsh12', 'sv8'. Empty string if unsure — do NOT guess.",
     },
     "card_number": {"type": "string", "description": "Printed collector number numerator only, e.g. '057' from '057/191'. Empty string if unreadable."},
+    "number_total": {"type": "string", "description": "The number after the slash in the printed collector number, e.g. '191' from '057/191'. Empty string if there is no slash or it is unreadable."},
+    "set_code_printed": {"type": "string", "description": "The short set code printed next to the collector number at the bottom of the card, e.g. 'SVI', 'MEW', '30C'. Empty string if none is printed or it is unreadable. Read it, do not infer it."},
     "rarity": {"type": "string", "description": "e.g. 'Common', 'Rare Holo', 'Double Rare'. Empty string if unknown."},
+    "printing": {"type": "string", "enum": ["normal", "holofoil", "reverseHolofoil", "unknown"], "description": "Visible finish. Holofoil has shiny artwork; reverse holo has a shiny card body around the artwork. Use unknown when glare or the photo makes this unclear."},
     "is_holo": {"type": "boolean", "description": "True if the card has a holographic treatment"},
     "confidence": {"type": "number", "description": "0.0-1.0 confidence in this identification overall"},
 }
@@ -65,17 +79,43 @@ _PAGE_SCHEMA = {
 _SYSTEM = (
     "You identify Pokémon TCG cards from photos for a bulk-listing tool. "
     "Read the card name, set symbol/name, collector number, and rarity as printed. "
+    "Read what is printed: the collector number at the bottom of the card looks like "
+    "'023/128' (card_number '023', number_total '128'), and modern cards print a short "
+    "set code beside it (set_code_printed). Those two are how the set is found, so read "
+    "them carefully and never fill them in from memory. "
     "For set_code use the pokemontcg.io set id (examples: base1, neo4, xy7, sm115, "
-    "swsh12, sv3pt5, sv8). Accuracy matters more than completeness: leave a field "
-    "as an empty string rather than guessing, and reflect any uncertainty in the "
-    "confidence score. Glare, sleeves, and partial occlusion are common — do your best."
+    "swsh12, sv3pt5, sv8), and only when the printed code or total identifies the set, "
+    "or the list of recent sets below does. Sets newer than your training exist: do not "
+    "assign a card to a set you remember just because the Pokémon matches. "
+    "Cards in other languages turn up, Japanese most often. Copy the printed name "
+    "character for character into name_printed and set language; the printed name is "
+    "translated from a table afterwards, so an exact copy matters more than your own "
+    "translation. Japanese cards print their set code in a small box at the bottom left "
+    "(for example 'sv10', 'sv11W'): put that in set_code_printed and leave set_code empty. "
+    "Accuracy matters more than completeness: leave a field as an empty string rather "
+    "than guessing, and reflect any uncertainty in the confidence score. Glare, sleeves, "
+    "and partial occlusion are common — do your best."
 )
 
 
-def _client():
-    import anthropic  # deferred so the webapp can start without the SDK installed
+def _system() -> str:
+    """The instructions, plus the newest sets from the catalog."""
+    try:
+        from lib import card_catalog
 
-    return anthropic.Anthropic()
+        reference = card_catalog.prompt_reference()
+    except Exception:
+        reference = ""
+    if not reference:
+        return _SYSTEM
+    return (_SYSTEM + "\n\nRecent sets, newest first (name | pokemontcg.io id | printed code | "
+            "cards printed | release date):\n" + reference)
+
+
+def _client():
+    from lib import anthropic_auth
+
+    return anthropic_auth.client()
 
 
 def _encode_image(image_path: str, max_edge: int) -> str:
@@ -93,20 +133,40 @@ def _encode_image(image_path: str, max_edge: int) -> str:
 
 
 def _vision_request(image_b64: str, prompt: str, schema: dict, max_tokens: int, model: Optional[str]) -> Any:
+    import anthropic
+
     client = _client()
-    response = client.messages.create(
-        model=model or os.getenv("VISION_MODEL", DEFAULT_MODEL),
-        max_tokens=max_tokens,
-        system=_SYSTEM,
-        output_config={"format": {"type": "json_schema", "schema": schema}},
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
-                {"type": "text", "text": prompt},
-            ],
-        }],
-    )
+    chosen = model or os.getenv("VISION_MODEL", DEFAULT_MODEL)
+
+    def ask(name: str) -> Any:
+        output: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        budget = max_tokens
+        if name != FALLBACK_MODEL:
+            # The current Haiku thinks before answering unless told how much
+            # to. Reading a card needs little, and thinking counts toward
+            # max_tokens, so leave room for it.
+            output["effort"] = "low"
+            budget = max_tokens * 2
+        return client.messages.create(
+            model=name,
+            max_tokens=budget,
+            system=_system(),
+            output_config=output,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+
+    try:
+        response = ask(chosen)
+    except (anthropic.BadRequestError, anthropic.NotFoundError, anthropic.PermissionDeniedError):
+        if chosen == FALLBACK_MODEL:
+            raise
+        response = ask(FALLBACK_MODEL)
     if response.stop_reason == "refusal":
         raise RuntimeError("model declined to process the image")
     text = next(b.text for b in response.content if b.type == "text")
@@ -118,10 +178,10 @@ def identify_page(image_path: str, rows: int = 3, cols: int = 3, model: Optional
     with 0-indexed row/col matching the splitter's grid positions."""
     image_b64 = _encode_image(image_path, PAGE_MAX_EDGE)
     prompt = (
-        f"This photo shows a binder page holding Pokémon cards in a {rows}x{cols} grid "
-        f"(up to {rows * cols} pockets; some may be empty). Identify each card that is "
-        "present. Use 0-indexed row (top to bottom) and col (left to right). "
-        "Skip empty pockets entirely."
+        f"This image is a grid of Pokémon cards, {rows} rows by {cols} columns. "
+        "It may be a binder page or a sheet of upright card photos. "
+        "Identify each card that is there. Use 0-indexed row (top to bottom) and "
+        "col (left to right). Skip empty cells."
     )
     result = _vision_request(image_b64, prompt, _PAGE_SCHEMA, max_tokens=4096, model=model)
     return result.get("cards", [])

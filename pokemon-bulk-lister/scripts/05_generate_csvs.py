@@ -26,6 +26,23 @@ import pandas as pd
 # condition or rarity claim here is a factual claim about the item.
 
 
+def _load_tcg_catalog():
+    """The seller's TCGplayer export, if one was saved (web UI: Connections,
+    or drop it at output/cache/tcgplayer_catalog.csv)."""
+    import os
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from lib.tcgplayer_catalog import TcgCatalog
+
+    path = Path(os.getenv("OUTPUT_DIR", "output")) / "cache" / "tcgplayer_catalog.csv"
+    catalog = TcgCatalog.load(path)
+    if catalog is None:
+        print(f"[tcgplayer] no TCGplayer export at {path}; tcgplayer_bulk.csv will be empty. "
+              "Export your pricing CSV from the TCGplayer seller portal and save it there.",
+              file=sys.stderr)
+    return catalog
+
+
 def _condition_full(short: str) -> str:
     return {
         "NM": "Near Mint",
@@ -44,20 +61,32 @@ def _title(card: dict) -> str:
         parts.append(f"#{number}")
     if set_name:
         parts.append(set_name)
-    if card.get("is_holo"):
+    if card.get("printing") == "reverseHolofoil":
+        parts.append("Reverse Holo")
+    elif card.get("is_holo"):
         parts.append("Holo")
     parts.append("Pokemon TCG")
     return " ".join(p for p in parts if p)
 
 
-def tcgplayer_rows(cards: list[dict]) -> list[dict]:
+def tcgplayer_rows(cards: list[dict], catalog=None) -> list[dict]:
+    """Rows for TCGplayer's bulk upload. `catalog` is a
+    lib.tcgplayer_catalog.TcgCatalog built from the seller's own TCGplayer
+    export; it supplies the real TCGplayer Id for each card. A card with no
+    unambiguous match is left out, and with no catalog there are no rows at
+    all: an upload with made-up Ids would list the wrong products."""
     rows: list[dict] = []
+    if catalog is None:
+        return rows
     for c in cards:
-        if not c.get("price") or not c.get("tcgplayer_product_id"):
+        if not c.get("price"):
+            continue
+        tcg_id = catalog.match(c)
+        if not tcg_id:
             continue
         rows.append(
             {
-                "TCGplayer Id": c["tcgplayer_product_id"],
+                "TCGplayer Id": tcg_id,
                 "Product Line": "Pokemon",
                 "Set Name": c.get("set_name", ""),
                 "Product Name": c.get("name", ""),
@@ -143,7 +172,7 @@ def ebay_rows(cards: list[dict]) -> list[dict]:
                 "C:Set": c.get("set_name", ""),
                 "C:Card Number": c.get("card_number", ""),
                 "C:Rarity": c.get("rarity", ""),
-                "C:Features": "Holo" if c.get("is_holo") else "",
+                "C:Features": "Reverse Holo" if c.get("printing") == "reverseHolofoil" else "Holo" if c.get("is_holo") else "",
                 "C:Language": "English",
                 "C:Country/Region of Manufacture": "United States",
                 "Shipping type": "Calculated",
@@ -316,7 +345,9 @@ def _description(c: dict) -> str:
         bits.append(f"(#{c['card_number']})")
     if c.get("rarity"):
         bits.append(str(c["rarity"]))
-    if c.get("is_holo"):
+    if c.get("printing") == "reverseHolofoil":
+        bits.append("Reverse Holo")
+    elif c.get("is_holo"):
         bits.append("Holo")
     bits.append(f"in {_condition_full(c.get('condition_guess', 'NM'))} condition.")
     if c.get("is_bulk"):
@@ -344,7 +375,7 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     targets = [
-        ("tcgplayer_bulk.csv", tcgplayer_rows(cards)),
+        ("tcgplayer_bulk.csv", tcgplayer_rows(cards, _load_tcg_catalog())),
         ("whatnot_seller_hub.csv", whatnot_rows(cards)),
         ("ebay_bulk.csv", ebay_rows(cards)),
     ]

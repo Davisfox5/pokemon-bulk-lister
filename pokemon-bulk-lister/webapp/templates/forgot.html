@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forgot password · Pokémon bulk lister</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design.css') }}">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <a class="auth-brand" href="/">Pokémon <span>bulk lister</span></a>
+    <h1>Forgot password?</h1>
+    {% if error %}<p class="auth-error">{{ error }}</p>{% endif %}
+    {% if sent %}
+      <p class="auth-sub">{{ sent }}</p>
+      {% if mail == "console" %}
+        <p class="auth-sub">This install has no mail server set up, so the link is printed in the
+          console window the app runs in.</p>
+      {% endif %}
+    {% else %}
+      <p class="auth-sub">Enter the account email to get a link for choosing a new password.</p>
+      <form method="post" action="/forgot-password">
+        <label>Email
+          <input type="email" name="email" required autocomplete="email" autofocus>
+        </label>
+        <button type="submit" class="btn btn-primary">Send the link</button>
+      </form>
+    {% endif %}
+    <p class="auth-alt"><a href="/login">Back to log in</a></p>
+  </main>
+</body>
+</html>

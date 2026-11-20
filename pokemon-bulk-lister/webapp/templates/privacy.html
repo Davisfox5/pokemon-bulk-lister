@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy policy — Pokémon bulk lister</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design.css') }}">
+  <style>
+    .policy { max-width: 46rem; margin: 0 auto; padding: 32px 16px 48px; line-height: 1.6; }
+    .policy h2 { margin-top: 1.6em; font-size: 1.15rem; }
+    .policy p, .policy li { font-size: 15px; }
+  </style>
+</head>
+<body>
+  <main class="policy" id="main-content">
+    <h1>Privacy policy</h1>
+    <p>Pokémon Bulk Lister is run by DTF Services LLC, St. Augustine, Florida.
+       This policy took effect on 18 November 2026.</p>
+
+    <h2>What the app is for</h2>
+    <p>The app is used by the operator to list the operator's own Pokémon cards for sale on eBay and
+       other marketplaces. The app identifies cards from photos, prices the cards, and creates and updates the
+       operator's listings.</p>
+
+    <h2>What the app stores</h2>
+    <ul>
+      <li>The operator's eBay OAuth tokens, so the app can call eBay's Sell APIs on the operator's
+          behalf (creating, updating and reading the operator's own listings and orders). The tokens
+          are encrypted at rest and are never shown to anyone or sent anywhere except eBay.</li>
+      <li>The operator's card photos, card details, prices and listing records.</li>
+    </ul>
+    <p>The app does not store eBay buyers' personal data. Sales read back from eBay are recorded
+       against the card that sold, without buyer names, addresses or contact details.</p>
+
+    <h2>Sharing</h2>
+    <p>DTF Services LLC does not sell user data and does not share user data with anyone. Data goes to a marketplace only
+       when the operator lists or updates a card there.</p>
+
+    <h2>eBay account deletion</h2>
+    <p>The app is subscribed to eBay's marketplace account deletion notifications at
+       <code>/api/ebay/deletion</code>. When eBay reports that a user has asked for data deletion,
+       the app removes anything held about that user. The app holds no data keyed to eBay buyers or
+       other eBay users, so in practice there is nothing to remove, and the notice is acknowledged.</p>
+
+    <h2>Questions and deletion requests</h2>
+    <p>Email <a href="mailto:davisfox5@gmail.com">davisfox5@gmail.com</a> with any question about
+       this policy, or to ask DTF Services LLC to delete personal data.</p>
+  </main>
+</body>
+</html>

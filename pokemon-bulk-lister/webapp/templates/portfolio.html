@@ -3,31 +3,34 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Portfolio — Pokémon Card Portfolio</title>
+  <title>Library · Pokémon bulk lister</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design.css') }}">
 </head>
 <body>
-  <header class="topbar">
-    <div class="topbar-left">
-      <span class="brand">Card Portfolio</span>
-      <nav>
-        <a href="/">Processing bench</a>
-        <a href="/portfolio" class="active">Portfolio</a>
-        <a href="/market">Marketplace</a>
-      </nav>
-    </div>
-    <div class="topbar-right">
-      <button id="btn-refresh" class="btn">Refresh prices</button>
-      <button id="btn-advanced" class="btn btn-ghost" title="Advanced settings">⚙ Advanced</button>
-      <a href="/logout" class="btn btn-ghost">Log out</a>
-    </div>
-  </header>
+  {% include '_navigation.html' %}
 
-  <main class="wrap">
+  <main class="wrap wide" id="main-content">
+    <div class="page-intro">
+      <h1>Library</h1>
+      <div class="page-actions">
+        <button id="btn-refresh" class="btn btn-ghost">Refresh prices</button>
+        <button id="btn-advanced" class="btn btn-ghost" aria-controls="advanced-panel" aria-expanded="false">Settings</button>
+      </div>
+    </div>
+    <!-- Shown until the account's email address is confirmed -->
+    <section class="panel notice hidden" id="verify-banner" role="status">
+      <div>
+        <strong>Confirm the email address.</strong>
+        <span id="verify-text"></span>
+      </div>
+      <button id="btn-resend" class="btn">Resend link</button>
+    </section>
+
     <!-- Stat tiles -->
-    <section class="tiles">
+    <section class="library-summary" aria-label="Collection summary">
       <div class="tile">
-        <div class="tile-label">Portfolio value</div>
+        <div class="tile-label">Collection value</div>
         <div class="tile-value" id="t-value">—</div>
         <div class="tile-sub" id="t-value-sub"></div>
       </div>
@@ -36,103 +39,208 @@
         <div class="tile-value" id="t-cards">—</div>
         <div class="tile-sub" id="t-cards-sub"></div>
       </div>
-      <div class="tile">
-        <div class="tile-label">Cost basis</div>
-        <div class="tile-value" id="t-cost">—</div>
-        <div class="tile-sub" id="t-cost-sub"></div>
-      </div>
-      <div class="tile">
-        <div class="tile-label">Sales balance</div>
-        <div class="tile-value" id="t-balance">—</div>
-        <div class="tile-sub" id="t-balance-sub"></div>
-      </div>
     </section>
 
-    <!-- Value-over-time chart -->
-    <section class="panel">
+    <!-- Library: what I have, what I sold, what I bought -->
+    <section class="panel" id="library">
       <div class="panel-head">
-        <h2>Portfolio value over time</h2>
+        <div class="tabs" role="tablist" aria-label="Library">
+          <button class="tab active" role="tab" data-tab="have" title="Cards still held">Unsold <span id="n-have" class="count"></span></button>
+          <button class="tab" role="tab" data-tab="review" title="Unsold cards whose price needs review">Needs review <span id="n-review" class="count"></span></button>
+          <button class="tab" role="tab" data-tab="sold">Sold <span id="n-sold" class="count"></span></button>
+          <button class="tab" role="tab" data-tab="purchased">Purchased <span id="n-purchased" class="count"></span></button>
+          <button class="tab" role="tab" data-tab="insights" title="What sells, where, and how fast">Insights</button>
+          <button class="tab" role="tab" data-tab="activity" title="Every card added, bought, sold or removed">Activity</button>
+        </div>
+        <details class="add-menu" id="add-menu">
+          <summary class="btn btn-primary">Add cards</summary>
+          <div class="menu-actions">
+            <a href="/" class="btn btn-ghost">Scan photos</a>
+            <button id="btn-add" class="btn btn-ghost">Search for a card</button>
+            <button id="btn-import-listings" class="btn btn-ghost">Import a spreadsheet or listings</button>
+            <button id="btn-promote" class="btn hidden" disabled>Add scanned cards</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="controls">
+        <input id="lib-search" type="search" placeholder="Search name, set, or number" aria-label="Search library">
+        <span id="have-controls" class="controls-group">
+          <select id="lib-sort" aria-label="Sort">
+            <optgroup label="Value">
+              <option value="value" selected>Value, high to low</option>
+              <option value="value_low">Value, low to high</option>
+              <option value="price">Price each, high to low</option>
+              <option value="price_low">Price each, low to high</option>
+              <option value="yours">With a set price first</option>
+            </optgroup>
+            <optgroup label="Price movement">
+              <option value="gain">7-day change, biggest rise</option>
+              <option value="drop">7-day change, biggest drop</option>
+              <option value="change">7-day change, biggest move</option>
+            </optgroup>
+            <optgroup label="Card">
+              <option value="name">Name, A to Z</option>
+              <option value="name_z">Name, Z to A</option>
+              <option value="set">Set, then card number</option>
+              <option value="rarity">Rarity</option>
+              <option value="condition">Condition, best first</option>
+              <option value="quantity">Quantity, most first</option>
+            </optgroup>
+            <optgroup label="Status">
+              <option value="flagged">Needs review first</option>
+              <option value="unlisted">Not listed first</option>
+              <option value="newest">Newest added</option>
+              <option value="oldest">Oldest added</option>
+            </optgroup>
+          </select>
+          <label class="check"><input type="checkbox" id="lib-flagged"> Needs review</label>
+          <label class="check"><input type="checkbox" id="lib-unlisted"> Not listed</label>
+          <button id="btn-select-all-m" type="button" class="btn btn-ghost phone-only">Select all</button>
+        </span>
+        <span id="lib-count" class="muted"></span>
+      </div>
+
+      <div id="bulk-bar" class="bulk-bar hidden" role="toolbar" aria-label="Selected cards">
+        <strong id="bulk-count"></strong>
+        <label class="bulk-price">Price each <input id="bulk-price" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Set or market price" aria-label="Price for each selected card. Leave empty for the set price, or market price where none is set."></label>
+        <button id="btn-bulk-list" class="btn btn-primary" title="List the selected cards on the marketplace, at the price entered or at market price">List for sale</button>
+        <button id="btn-bulk-ebay" class="btn" title="Publish each selected card as a listing on the connected eBay account, at the price entered, the set price, or market price">List on eBay</button>
+        <button id="btn-bulk-remove" class="btn" title="Remove the selected cards from the library">Remove</button>
+        <button id="btn-bulk-clear" class="btn btn-ghost">Clear</button>
+      </div>
+      <div id="ledger-totals" class="totals-strip hidden"></div>
+
+      <div class="table-scroll">
+        <table class="inv-table" id="have-table">
+          <thead>
+            <tr>
+              <th class="sel"><input type="checkbox" id="lib-select-all" aria-label="Select all shown"></th>
+              <th></th><th>Card</th><th>Cond.</th><th class="num">Qty</th>
+              <th class="num">Price each</th><th class="num">7d</th><th class="num">Value</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="inv-body">
+            <tr><td colspan="9" class="muted">Loading…</td></tr>
+          </tbody>
+        </table>
+        <table class="inv-table hidden" id="ledger-table">
+          <thead id="ledger-head"></thead>
+          <tbody id="ledger-body"></tbody>
+        </table>
+      </div>
+      <div id="insights" class="insights hidden"></div>
+    </section>
+
+    <!-- Open listings and orders that need an action -->
+    <details class="panel section-disclosure" id="orders-panel">
+      <summary>Listings &amp; orders <span id="orders-count" class="count"></span></summary>
+      <div class="disclosure-body">
+      <p id="fee-note" class="muted"></p>
+      <div id="money-line" class="totals-strip hidden"></div>
+      <div id="payout-line" class="totals-strip hidden"></div>
+      <ul id="market-list" class="rules-list"><li class="muted">Nothing yet.</li></ul>
+      </div>
+    </details>
+
+    <details class="panel section-disclosure summary-extra">
+      <summary>Purchase &amp; sale totals</summary>
+      <div class="disclosure-body tiles">
+        <div class="tile">
+          <div class="tile-label">Amount paid</div>
+          <div class="tile-value" id="t-cost">—</div>
+          <div class="tile-sub" id="t-cost-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="tile-label">Sold</div>
+          <div class="tile-value" id="t-balance">—</div>
+          <div class="tile-sub" id="t-balance-sub"></div>
+        </div>
+      </div>
+    </details>
+
+    <!-- Value-over-time chart -->
+    <details class="panel section-disclosure" id="history-panel">
+      <summary>Market price history</summary>
+      <div class="disclosure-body">
+      <div class="panel-head">
         <div class="range-row" role="group" aria-label="date range">
           <button class="range-btn" data-days="30">30d</button>
           <button class="range-btn active" data-days="90">90d</button>
           <button class="range-btn" data-days="365">1y</button>
         </div>
       </div>
-      <div id="chart" class="chart" aria-label="portfolio value line chart"></div>
-    </section>
+      <p class="muted">Market prices only; spreadsheet estimates excluded.</p>
+      <div id="chart" class="chart" aria-label="market price history line chart"></div>
+      </div>
+    </details>
 
     <div class="two-col">
       <!-- Alerts -->
-      <section class="panel">
+      <details class="panel section-disclosure" id="alerts-panel">
+        <summary>Alerts <span id="alerts-unread" class="count"></span></summary>
+        <div class="disclosure-body">
         <div class="panel-head">
-          <h2>Alerts <span id="alerts-unread" class="muted"></span></h2>
           <button id="btn-read-all" class="btn btn-ghost">Mark all read</button>
         </div>
         <ul id="alerts-list" class="alerts-list"><li class="muted">Loading…</li></ul>
-      </section>
+        </div>
+      </details>
 
       <!-- Alert rules -->
-      <section class="panel">
-        <div class="panel-head"><h2>Alert rules</h2></div>
+      <details class="panel section-disclosure">
+        <summary>Price alerts</summary>
+        <div class="disclosure-body">
         <form id="rule-form" class="rule-form">
-          <select name="kind" aria-label="rule type">
+          <label>Alert when<select name="kind">
             <option value="sell_signal">Sell signal (rise %)</option>
             <option value="pct_change">Any move (±%)</option>
             <option value="price_above">Price above ($)</option>
             <option value="price_below">Price below ($)</option>
-          </select>
-          <select name="catalog_card_id" aria-label="which card">
-            <option value="">All my cards</option>
-          </select>
-          <input name="threshold" type="number" step="any" min="0" placeholder="25" required aria-label="threshold">
-          <input name="window_days" type="number" min="1" value="30" aria-label="window (days)" title="window in days (for % rules)">
+          </select></label>
+          <label>Card<select name="catalog_card_id">
+            <option value="">All cards</option>
+          </select></label>
+          <label>Amount<input name="threshold" type="number" step="any" min="0" placeholder="25" required></label>
+          <label>Days<input name="window_days" type="number" min="1" value="30" title="Time window for percentage changes"></label>
           <button type="submit" class="btn">Add</button>
         </form>
         <ul id="rules-list" class="rules-list"></ul>
-      </section>
+        </div>
+      </details>
     </div>
 
-    <!-- Inventory -->
-    <section class="panel">
+    <!-- Operator only: what each seller is owed from card payments -->
+    <section class="panel hidden" id="operator-panel">
       <div class="panel-head">
-        <h2>My cards</h2>
-        <button id="btn-promote" class="btn btn-primary">Import priced bench cards</button>
+        <h2>Seller balances</h2>
+        <button id="btn-check-refunds" class="btn" title="Ask Stripe whether any recent card sale was refunded or disputed">Check Stripe for refunds</button>
+        <button id="btn-run-payouts" class="btn" title="Send every seller with payouts set up the amount owed">Pay out now</button>
       </div>
+      <div id="refunds-due" class="hidden"></div>
+      <ul id="attention-list" class="rules-list hidden"></ul>
       <div class="table-scroll">
         <table class="inv-table">
-          <thead>
-            <tr>
-              <th></th><th>Card</th><th>Cond.</th><th class="num">Qty</th>
-              <th class="num">Price</th><th class="num">7d</th><th class="num">Value</th><th></th>
-            </tr>
-          </thead>
-          <tbody id="inv-body">
-            <tr><td colspan="8" class="muted">Loading…</td></tr>
-          </tbody>
+          <thead><tr>
+            <th>Seller</th><th class="num">Card sales, seller share</th><th class="num">Paid out</th>
+            <th class="num">Owed to seller</th><th class="num">Fees owed by seller</th><th>Payouts</th><th></th>
+          </tr></thead>
+          <tbody id="operator-body"></tbody>
         </table>
       </div>
     </section>
 
-    <!-- Sales / purchases -->
-    <section class="panel">
-      <div class="panel-head">
-        <h2>My sales &amp; purchases</h2>
-        <span id="fee-note" class="muted"></span>
-      </div>
-      <ul id="market-list" class="rules-list"><li class="muted">Nothing yet.</li></ul>
-    </section>
-
     <!-- Advanced settings (hidden until ⚙ Advanced is clicked) -->
     <section class="panel hidden" id="advanced-panel">
-      <div class="panel-head"><h2>Advanced settings</h2></div>
+      <div class="panel-head"><h2>Settings</h2></div>
       <div class="adv-section">
-        <h3>List on eBay — bring your own API keys</h3>
+        <h3>List on eBay with personal API keys</h3>
         <p class="muted">
-          Off by default. To list cards directly on <em>your</em> eBay account, create a
+          Off by default. To list cards directly on a <em>personal</em> eBay account, create a
           keyset at <a href="https://developer.ebay.com/" target="_blank" rel="noopener">developer.ebay.com</a>
           (My Account → Application Keysets), add a RuName under User Tokens, then save the
-          keys here and connect your account. Your keys are stored on this server and used
-          only for your listings.
+          keys here and connect the eBay account. The keys are stored on this server and used
+          only for this account's listings.
         </p>
         <div id="ebay-status" class="muted"></div>
         <form id="ebay-keys-form" class="rule-form">
@@ -148,13 +256,178 @@
         </form>
         <div id="ebay-connect" class="rule-form hidden">
           <a id="ebay-consent-link" class="btn" target="_blank" rel="noopener">Connect eBay account →</a>
-          <input id="ebay-redirect" placeholder="then paste the URL eBay redirected you to">
+          <input id="ebay-redirect" placeholder="then paste the URL eBay redirected to">
           <button type="button" id="ebay-authorize" class="btn">Authorize</button>
         </div>
       </div>
     </section>
   </main>
 
+  <!-- Sell on the marketplace -->
+  <dialog id="sell-dialog">
+    <form method="dialog" id="sell-form">
+      <h2 id="sell-title">List for sale</h2>
+      <div id="sell-prov" class="dialog-body"></div>
+      <label>Asking price (USD)
+        <input name="price" type="number" step="0.01" min="0.01" required>
+      </label>
+      <div id="sell-net" class="muted"></div>
+      <div class="dialog-row">
+        <button type="button" class="btn" data-close-dialog>Cancel</button>
+        <button type="submit" class="btn btn-primary" id="sell-submit">List for sale</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Record a sale made somewhere else -->
+  <dialog id="sale-dialog">
+    <form method="dialog" id="sale-form">
+      <h2 id="sale-title">Record a sale</h2>
+      <p class="muted">For cards sold off this site. The cards leave the library and show under Sold.</p>
+      <div class="form-grid">
+        <label>Sold for, each (USD)
+          <input name="price" type="number" step="0.01" min="0" required>
+        </label>
+        <label>Quantity
+          <input name="quantity" type="number" min="1" step="1" value="1" required>
+        </label>
+        <label>Where
+          <select name="channel">
+            <option value="ebay">eBay</option>
+            <option value="tcgplayer">TCGplayer</option>
+            <option value="whatnot">Whatnot</option>
+            <option value="in_person">In person</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label>Fees and shipping paid
+          <input name="fees" type="number" step="0.01" min="0" placeholder="0.00">
+        </label>
+        <label>Date sold
+          <input name="sold_on" type="date">
+        </label>
+        <label>Note
+          <input name="note" maxlength="200">
+        </label>
+      </div>
+      <div class="dialog-row">
+        <button type="button" class="btn" data-close-dialog>Cancel</button>
+        <button type="submit" class="btn btn-primary">Record sale</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Operator: record a payout to a seller -->
+  <dialog id="payout-dialog">
+    <form method="dialog" id="payout-form">
+      <h2 id="payout-title">Record a payout</h2>
+      <p class="muted">Records money already sent. No money is sent.</p>
+      <div class="form-grid">
+        <label>Amount (USD)
+          <input name="amount" type="number" step="0.01" min="0.01" required>
+        </label>
+        <label>Payment method
+          <input name="method" placeholder="Venmo, PayPal, cash" maxlength="40">
+        </label>
+        <label class="span-2">Note
+          <input name="note" maxlength="200">
+        </label>
+      </div>
+      <div class="dialog-row">
+        <button type="button" class="btn" data-close-dialog>Cancel</button>
+        <button type="submit" class="btn btn-primary">Record payout</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Cards already listed on other sites -->
+  <dialog id="listings-dialog" class="wide">
+    <h2>Import cards</h2>
+    <ul class="rules-list" id="listing-sources">
+      <li><span><strong>eBay</strong> <span id="li-ebay-note" class="muted small"></span></span>
+        <button class="btn" id="btn-li-ebay">Read listings</button></li>
+      <li title="The pricing export from the seller portal (Pricing, Export). Rows with a quantity are the listings."><span><strong>TCGplayer</strong> <span class="muted small">pricing export</span></span>
+        <span class="row-actions"><button class="btn" data-li-file="tcgplayer">Upload</button>
+          <button class="btn" data-li-drive="tcgplayer">Google Drive</button></span></li>
+      <li title="A CSV of listings with Title, Quantity, Price and SKU columns."><span><strong>Whatnot</strong> <span class="muted small">listings CSV</span></span>
+        <span class="row-actions"><button class="btn" data-li-file="whatnot">Upload</button>
+          <button class="btn" data-li-drive="whatnot">Google Drive</button></span></li>
+      <li title="Needs a Name column. Set, Number, Quantity, Condition, Rarity and price columns are used when present."><span><strong>Spreadsheet</strong> <span class="muted small">any card list</span></span>
+        <span class="row-actions"><button class="btn" data-li-file="cards">Upload</button>
+          <button class="btn" data-li-drive="cards">Google Drive</button></span></li>
+    </ul>
+    <p><button type="button" class="btn btn-ghost hidden" id="btn-drive-disconnect">Disconnect Google Drive</button></p>
+    <input id="li-file" type="file" accept=".csv,text/csv" hidden>
+    <div id="li-unmatched-wrap" class="hidden">
+      <h2 style="margin-top:14px">Needs review <span id="li-unmatched-count" class="count"></span>
+        <button class="btn btn-ghost" id="btn-li-rematch" title="Look the remaining titles up again">Try matching again</button></h2>
+      <ul class="rules-list" id="li-unmatched"></ul>
+    </div>
+    <div class="dialog-row">
+      <button type="button" class="btn" data-close-dialog>Close</button>
+    </div>
+  </dialog>
+
+  <!-- Add a card by hand -->
+  <dialog id="add-dialog">
+    <form method="dialog" id="add-form">
+      <h2 id="add-title">Add a card</h2>
+      <p class="muted" id="add-intro">Search by name, then check the set and finish.</p>
+      <div class="form-grid">
+        <label class="span-2">Card name
+          <input name="name" required list="add-suggestions" autocomplete="off">
+          <datalist id="add-suggestions"></datalist>
+        </label>
+        <div id="add-match" class="span-2 muted" role="status"></div>
+        <label>Condition
+          <select name="condition">
+            <option value="NM">Near mint (NM)</option><option value="LP">Lightly played (LP)</option><option value="MP">Moderately played (MP)</option><option value="HP">Heavily played (HP)</option><option value="DMG">Damaged (DMG)</option>
+          </select>
+        </label>
+        <input type="checkbox" name="is_holo" hidden>
+        <label>Finish<select name="printing"><option value="normal">Non-holo</option><option value="holofoil">Holo</option><option value="reverseHolofoil">Reverse holo</option><option value="unknown">Not checked</option></select></label>
+        <label>Quantity
+          <input name="quantity" type="number" min="1" max="999" step="1" value="1" required>
+        </label>
+      </div>
+      <details class="form-details" id="add-card-details">
+        <summary>Edit card details</summary>
+        <div class="form-grid disclosure-body">
+          <label>Set name<input name="set_name" placeholder="Twilight Masquerade"></label>
+          <label>Card number<input name="card_number" placeholder="130"></label>
+          <label>Set code<input name="set_code" placeholder="sv6"></label>
+        </div>
+      </details>
+      <details class="form-details" id="add-purchase-details">
+        <summary>Purchase details <span class="muted">optional</span></summary>
+        <div class="form-grid disclosure-body">
+        <label>Paid, each (USD)
+          <input name="price" type="number" step="0.01" min="0" placeholder="0.00">
+        </label>
+        <label>Bought from
+          <select name="channel">
+            <option value="manual">Not a purchase</option>
+            <option value="tcgplayer">TCGplayer</option>
+            <option value="ebay">eBay</option>
+            <option value="whatnot">Whatnot</option>
+            <option value="in_person">In person</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label>Date
+          <input name="acquired_on" type="date">
+        </label>
+        </div>
+      </details>
+      <div class="dialog-row">
+        <button type="button" class="btn" data-close-dialog>Cancel</button>
+        <button type="submit" class="btn btn-primary">Add to library</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
   <script src="{{ url_for('static', filename='portfolio.js') }}"></script>
+  <script src="{{ url_for('static', filename='drive.js') }}"></script>
 </body>
 </html>

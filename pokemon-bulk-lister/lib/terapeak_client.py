@@ -155,7 +155,7 @@ class TerapeakClient:
             return
         raise TerapeakNotLoggedIn(
             f"No Terapeak session at {self.state_path}. "
-            "Run from your terminal:\n"
+            "Run from a terminal:\n"
             "    python -m webapp.setup_terapeak\n"
             "A Chromium window will open; sign in to eBay and the script will save the session automatically."
         )

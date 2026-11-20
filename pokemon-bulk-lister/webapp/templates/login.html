@@ -3,15 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Log in — Pokémon Card Portfolio</title>
+  <title>Log in — Pokémon bulk lister</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='portfolio.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='design.css') }}">
 </head>
 <body class="auth-page">
   <main class="auth-card">
-    <h1>Card Portfolio</h1>
-    <p class="auth-sub">Track what your collection is worth — live.</p>
+    <a class="auth-brand" href="/">Pokémon <span>bulk lister</span></a>
+    <h1>Welcome back</h1>
+    <p class="auth-sub">The whole collection in one place.</p>
     {% if error %}<p class="auth-error">{{ error }}</p>{% endif %}
-    <form method="post" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+    <form method="post" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') | urlencode }}{% endif %}">
       <label>Email
         <input type="email" name="email" required autocomplete="email" autofocus>
       </label>
@@ -20,8 +22,9 @@
       </label>
       <button type="submit" class="btn btn-primary">Log in</button>
     </form>
+    <p class="auth-alt"><a href="/forgot-password">Forgot password?</a></p>
     <p class="auth-alt">No account? <a href="/register">Create one</a></p>
-    <p class="auth-alt"><a href="/">← back to the processing bench</a></p>
+    <p class="auth-alt"><a href="/">← back to Scan</a></p>
   </main>
 </body>
 </html>

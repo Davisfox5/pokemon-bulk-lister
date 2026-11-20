@@ -1,189 +1,1087 @@
-/* Portfolio dashboard: tiles, value chart, inventory, alerts, eBay actions. */
+/* Library dashboard: tiles, value chart, alerts, and the three library tabs
+   (have / sold / purchased). Helpers come from common.js. */
 "use strict";
 
-const $ = (sel) => document.querySelector(sel);
-const fmtUsd = (v) =>
-  v == null ? "—" : v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+const lib = {
+  items: [],            // current holdings
+  events: { sold: null, purchased: null, activity: null },
+  totals: null,         // ledger totals
+  tab: "have",
+  selected: new Set(),  // inventory ids ticked for bulk listing
+  listings: {},         // inventory_item_id -> active listing
+  market: null,
+};
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
-  if (res.status === 401) {
-    window.location = "/login?next=/portfolio";
-    throw new Error("login required");
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status}`);
-  return data;
-}
-
-/* ---------------- summary + inventory ---------------- */
-
-let cardOptions = []; // [{catalog_card_id, name}] for the rule form
+/* ---------------- summary + tiles ---------------- */
 
 async function loadSummary() {
   const data = await api("/api/portfolio/summary");
   const t = data.totals;
   $("#t-value").textContent = fmtUsd(t.value);
   $("#t-cards").textContent = t.card_count;
-  $("#t-cards-sub").textContent = `${t.priced_count}/${t.item_count} priced`;
+  $("#t-cards-sub").textContent = !t.item_count ? "Ready for the first card"
+    : t.priced_count === t.item_count ? "All cards priced" : `${t.item_count - t.priced_count} ${t.item_count - t.priced_count === 1 ? "price" : "prices"} missing`;
   $("#t-cost").textContent = fmtUsd(t.cost_basis);
+  const costSub = $("#t-cost-sub");
   if (t.cost_basis && t.value != null) {
     const gain = t.value - t.cost_basis;
-    const el = $("#t-cost-sub");
-    el.textContent = `${gain >= 0 ? "+" : ""}${fmtUsd(gain)} unrealized`;
-    el.className = "tile-sub " + (gain >= 0 ? "up" : "down");
+    costSub.textContent = `${gain >= 0 ? "Up " : "Down "}${fmtUsd(Math.abs(gain))}`;
+    costSub.className = "tile-sub " + (gain >= 0 ? "up" : "down");
+  } else {
+    costSub.textContent = "Only cards with a price paid";
+    costSub.className = "tile-sub";
   }
   $("#alerts-unread").textContent = t.unread_alerts ? `(${t.unread_alerts} unread)` : "";
   const sched = data.scheduler || {};
-  $("#t-value-sub").textContent = sched.last_cycle_at
-    ? `prices checked ${new Date(sched.last_cycle_at).toLocaleTimeString()}`
-    : "";
-  renderInventory(data.items);
+  $("#t-value-sub").textContent = data.items.some(it => it.provenance?.estimate)
+    ? "Includes spreadsheet estimates"
+    : sched.last_cycle_at ? `Updated ${ago(sched.last_cycle_at)}` : "Latest saved prices";
 
-  cardOptions = [];
+  lib.items = data.items;
+  for (const id of [...lib.selected]) if (!lib.items.some((i) => i.id === id)) lib.selected.delete(id);
+  $("#n-have").textContent = t.card_count;
+  $("#n-review").textContent = lib.items.filter((it) => it.provenance.flagged).length;
+  renderLibrary();
+
   const seen = new Set();
+  const opts = [];
   for (const it of data.items) {
     if (!seen.has(it.catalog_card_id)) {
       seen.add(it.catalog_card_id);
-      cardOptions.push({ id: it.catalog_card_id, name: it.name });
+      opts.push(`<option value="${it.catalog_card_id}">${esc(it.name)}</option>`);
     }
   }
-  const sel = document.querySelector('#rule-form select[name="catalog_card_id"]');
-  sel.innerHTML = '<option value="">All my cards</option>' +
-    cardOptions.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  $('#rule-form select[name="catalog_card_id"]').innerHTML =
+    '<option value="">All cards</option>' + opts.join("");
 }
 
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (m) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+async function loadLedger() {
+  const all = await api("/api/library/events");
+  lib.events.activity = all.events;
+  lib.events.sold = all.events.filter((e) => e.kind === "sold");
+  lib.events.purchased = all.events.filter((e) => e.kind === "purchased");
+  lib.totals = all.totals;
+  const t = lib.totals;
+  $("#n-sold").textContent = t.sold_cards;
+  $("#n-purchased").textContent = t.purchased_cards;
+  $("#t-balance").textContent = fmtUsd(t.sold_net);
+  $("#t-balance-sub").textContent = t.sold_cards
+    ? `${t.sold_cards} sold, after ${fmtUsd(t.sold_fees)} in fees`
+    : "nothing sold yet";
+  if (lib.tab !== "have" && lib.tab !== "review") renderLibrary();
 }
 
-function renderInventory(items) {
+/* ---------------- library tabs ---------------- */
+
+const CHANNELS = {
+  scan: "Scan", manual: "Entered", market: "Marketplace", ebay: "eBay",
+  tcgplayer: "TCGplayer", whatnot: "Whatnot", in_person: "In person", other: "Other",
+};
+
+function matches(row, q) {
+  if (!q) return true;
+  const hay = [row.name, row.set_name, row.set_code, row.card_number, row.condition]
+    .filter(Boolean).join(" ").toLowerCase();
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+// Ways to order the Library. A card with nothing to sort by goes last.
+const libVal = (it) => (it.value == null ? -1 : it.value);
+const libEach = (it) => (it.price == null ? -1 : it.price);
+const libYours = (it) => (it.your_price == null ? -1 : it.your_price);
+const libChange = (it) => it.change_7d_pct;
+const libNum = (it) => { const n = parseInt(String(it.card_number || "").replace(/^\D+/, ""), 10); return Number.isNaN(n) ? 1e9 : n; };
+const libText = (a, b) => String(a || "").localeCompare(String(b || ""), undefined, { numeric: true, sensitivity: "base" });
+const COND_RANK = { NM: 0, LP: 1, MP: 2, HP: 3, DMG: 4 };
+const libCond = (it) => COND_RANK[String(it.condition || "").toUpperCase()] ?? 9;
+const lastWith = (get, cmp) => (a, b) => {
+  const x = get(a), y = get(b);
+  if (x == null || y == null) return (x == null) - (y == null);
+  return cmp(x, y);
+};
+const LIB_SORTERS = {
+  value: (a, b) => libVal(b) - libVal(a),
+  value_low: lastWith((it) => it.value, (x, y) => x - y),
+  price: (a, b) => libEach(b) - libEach(a),
+  price_low: lastWith((it) => it.price, (x, y) => x - y),
+  yours: (a, b) => libYours(b) - libYours(a) || libVal(b) - libVal(a),
+  flagged: (a, b) => (b.provenance.flagged - a.provenance.flagged) || libVal(b) - libVal(a),
+  change: (a, b) => Math.abs(libChange(b) ?? 0) - Math.abs(libChange(a) ?? 0),
+  gain: lastWith(libChange, (x, y) => y - x),
+  drop: lastWith(libChange, (x, y) => x - y),
+  name: (a, b) => libText(a.name, b.name) || libText(a.set_name, b.set_name),
+  name_z: (a, b) => libText(b.name, a.name),
+  set: (a, b) => libText(a.set_name, b.set_name) || libNum(a) - libNum(b) || libText(a.card_number, b.card_number),
+  rarity: (a, b) => libText(a.rarity || "\uffff", b.rarity || "\uffff") || libText(a.name, b.name),
+  condition: (a, b) => libCond(a) - libCond(b) || libText(a.name, b.name),
+  quantity: (a, b) => b.quantity - a.quantity || libVal(b) - libVal(a),
+  unlisted: (a, b) => (!!lib.listings[a.id] - !!lib.listings[b.id]) || libVal(b) - libVal(a),
+  newest: (a, b) => b.id - a.id,
+  oldest: (a, b) => a.id - b.id,
+};
+
+function visibleItems() {
+  const q = $("#lib-search").value.trim().toLowerCase();
+  const flaggedOnly = $("#lib-flagged").checked || lib.tab === "review";
+  const unlistedOnly = $("#lib-unlisted").checked;
+  const rows = lib.items.filter((it) =>
+    matches(it, q)
+    && (!flaggedOnly || it.provenance.flagged)
+    && (!unlistedOnly || !lib.listings[it.id]));
+  const by = $("#lib-sort").value;
+  return rows.sort(LIB_SORTERS[by] || LIB_SORTERS.value);
+}
+
+function renderLibrary() {
+  // "Needs review" is the unsold list narrowed to prices that need review.
+  const have = lib.tab === "have" || lib.tab === "review";
+  const insights = lib.tab === "insights";
+  $("#have-table").classList.toggle("hidden", !have);
+  $("#have-controls").classList.toggle("hidden", !have);
+  $("#ledger-table").classList.toggle("hidden", have || insights);
+  $("#ledger-totals").classList.toggle("hidden", have || insights);
+  $("#insights").classList.toggle("hidden", !insights);
+  $("#lib-search").classList.toggle("hidden", insights);
+  $("#lib-flagged").closest("label").classList.toggle("hidden", lib.tab === "review");
+  $("#n-review").textContent = lib.items.filter((it) => it.provenance.flagged).length;
+  if (have) renderHave(); else if (insights) renderInsights(); else renderLedger(lib.tab);
+}
+
+/* ---------------- insights ---------------- */
+
+// Everything here is worked out from the ledger and the library already on
+// the page: no extra request. A refunded sale is not a sale.
+function renderInsights() {
+  const sold = lib.events.sold.filter((e) => !e.refunded);
+  const unsold = lib.items;
+  const qty = (rows) => rows.reduce((n, r) => n + (r.quantity || 0), 0);
+  const sum = (rows, f) => rows.reduce((n, r) => n + (f(r) || 0), 0);
+  const soldCards = qty(sold);
+  const unsoldCards = qty(unsold);
+  const gross = sum(sold, (e) => e.total);
+  const net = sum(sold, (e) => e.net);
+  const gain = sold.filter((e) => e.gain != null);
+  const unsoldValue = sum(unsold, (it) => (it.price || 0) * it.quantity);
+  const listed = qty(unsold.filter((it) => lib.listings[it.id] || (it.listed_on || []).length));
+
+  // How long a card sat before it sold: from when it entered the library.
+  const entered = {};
+  lib.events.activity.filter((e) => e.kind === "added" || e.kind === "purchased").forEach((e) => {
+    const at = Date.parse(e.occurred_at);
+    if (!(e.catalog_card_id in entered) || at < entered[e.catalog_card_id]) entered[e.catalog_card_id] = at;
+  });
+  const days = sold.map((e) => (Date.parse(e.occurred_at) - entered[e.catalog_card_id]) / 86400000)
+    .filter((d) => Number.isFinite(d) && d >= 0).sort((a, b) => a - b);
+  const median = days.length ? days[Math.floor(days.length / 2)] : null;
+
+  const group = (key) => {
+    const out = {};
+    sold.forEach((e) => {
+      const k = key(e);
+      const g = out[k] || (out[k] = { key: k, cards: 0, gross: 0, net: 0, fees: 0 });
+      g.cards += e.quantity; g.gross += e.total || 0; g.net += e.net || 0; g.fees += e.fees || 0;
+    });
+    return Object.values(out);
+  };
+  const byChannel = group((e) => CHANNELS[e.channel] || e.channel || "Other").sort((a, b) => b.net - a.net);
+  const bySet = group((e) => e.set_name || "Unknown set").sort((a, b) => b.net - a.net).slice(0, 6);
+  const byMonth = group((e) => e.occurred_at.slice(0, 7)).sort((a, b) => a.key.localeCompare(b.key)).slice(-6);
+  const bands = [["Under $1", 0, 1], ["$1 to $5", 1, 5], ["$5 to $20", 5, 20], ["$20 and up", 20, Infinity]];
+  const byBand = bands.map(([label, lo, hi]) => {
+    const rows = sold.filter((e) => (e.unit_price || 0) >= lo && (e.unit_price || 0) < hi);
+    return { key: label, cards: qty(rows), gross: sum(rows, (e) => e.total), net: sum(rows, (e) => e.net) };
+  }).filter((b) => b.cards);
+
+  const tile = (label, value, sub = "") =>
+    `<div class="insight-tile"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`;
+  const table = (title, rows, first, note = "") => {
+    if (!rows.length) return "";
+    const top = Math.max(...rows.map((r) => r.net), 0.01);
+    return `<div class="insight-block"><h3>${esc(title)}</h3><table>
+      <thead><tr><th>${esc(first)}</th><th class="num">Cards</th><th class="num">Avg. price</th><th class="num">After fees</th><th></th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${esc(r.key)}</td><td class="num">${r.cards}</td>
+        <td class="num">${fmtUsd(r.cards ? r.gross / r.cards : 0)}</td><td class="num">${fmtUsd(r.net)}</td>
+        <td><div class="insight-bar"><span style="width:${Math.max(4, Math.round((r.net / top) * 100))}%"></span></div></td></tr>`).join("")}
+      </tbody></table>${note ? `<p class="insight-note">${esc(note)}</p>` : ""}</div>`;
+  };
+
+  const total = soldCards + unsoldCards;
+  const tiles = [
+    tile("Sold", String(soldCards), soldCards ? `${fmtUsd(net)} after ${fmtUsd(gross - net)} in fees` : "nothing sold yet"),
+    tile("Unsold", String(unsoldCards), `${fmtUsd(unsoldValue)} at current prices`),
+    tile("Sell-through", total ? `${Math.round((soldCards / total) * 100)}%` : "—", `${soldCards} of ${total} cards`),
+    tile("Average sale", soldCards ? fmtUsd(gross / soldCards) : "—", "per card, before fees"),
+    tile("Days to sell", median == null ? "—" : String(Math.round(median)), median == null ? "no sales to measure" : `median, over ${days.length} sale${days.length === 1 ? "" : "s"}`),
+    tile("Listed now", String(listed), `${unsoldCards - listed} unsold cards are not listed`),
+  ];
+  if (gain.length) {
+    tiles.push(tile("Profit", fmtUsd(sum(gain, (e) => e.gain)), `on ${qty(gain)} sold cards with a known cost`));
+  }
+  $("#lib-count").textContent = "";
+  $("#insights").innerHTML = `
+    <div class="insight-tiles">${tiles.join("")}</div>
+    ${soldCards ? `<div class="insight-grid">
+      ${table("Where cards sell", byChannel, "Sold on")}
+      ${table("By month", byMonth, "Month")}
+      ${table("What sells: sets", bySet, "Set", "The six best sets by money after fees.")}
+      ${table("What sells: price", byBand, "Sale price")}
+    </div>` : `<p class="muted">Sales show up here once recorded: from the marketplace, from eBay once connected, from a Whatnot sales file, or entered by hand with “Sold elsewhere”.</p>`}`;
+}
+
+function renderHave() {
   const body = $("#inv-body");
-  if (!items.length) {
-    body.innerHTML =
-      '<tr><td colspan="8" class="muted">No cards yet — price cards on the ' +
-      '<a href="/">processing bench</a>, then click “Import priced bench cards”.</td></tr>';
+  const rows = visibleItems();
+  $("#lib-count").textContent = lib.items.length
+    ? `${rows.length} of ${lib.items.length} cards` : "";
+  if (!lib.items.length) {
+    body.innerHTML = `<tr><td colspan="9" class="empty"><strong>The collection starts here.</strong><p>Add photos or import a card list.</p><a class="btn" href="/">Scan photos</a></td></tr>`;
+  } else if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="9" class="empty"><p>No matching cards.</p><button class="btn" data-act="clear-filters">Clear filters</button></td></tr>';
+  } else {
+    body.innerHTML = rows.map(haveRow).join("");
+  }
+  syncSelection(rows);
+}
+
+// Your own price leads when you set one; the market price stays beside it
+// with where it came from.
+function priceCell(it) {
+  if (it.your_price == null) return `${fmtUsd(it.price)}${provenanceHtml(it.provenance)}`;
+  return `<strong>${fmtUsd(it.your_price)}</strong><span class="prov your-price">Set price</span>
+    <span class="prov">Market ${fmtUsd(it.price)}</span>${provenanceHtml(it.provenance)}`;
+}
+
+// What a card lists at: your own price, else the market price.
+const askPrice = (it) => (it.your_price != null ? it.your_price : it.price);
+
+function haveRow(it) {
+  const chg = it.change_7d_pct;
+  const chgTxt = chg == null ? "—" : `${chg > 0 ? "+" : ""}${chg}%`;
+  const chgCls = chg == null ? "" : chg >= 0 ? "up" : "down";
+  const listing = lib.listings[it.id];
+  const sellCell = listing
+    ? `<span class="listed">Listed ${fmtUsd(listing.price)}</span>
+       <button class="btn btn-ghost" data-act="reprice" title="Change the asking price">Edit price</button>`
+    : `<button class="btn" data-act="sell" title="List on the marketplace">List for sale</button>`;
+  const resolve = it.provenance.flagged
+    ? '<button class="btn btn-primary" data-act="resolve" title="Check the card and its price, then save">Resolve</button>' : "";
+  return `<tr data-id="${it.id}" class="${it.provenance.flagged ? "flag" : ""}">
+    <td class="sel"><input type="checkbox" data-act="select" ${lib.selected.has(it.id) ? "checked" : ""}
+        ${listing ? "disabled" : ""} aria-label="Select ${esc(it.name)}"></td>
+    <td>${thumbHtml(it)}</td>
+    <td>${cardLine(it)}${(it.listed_on || []).map((l) =>
+        `<${l.url ? `a href="${esc(l.url)}" target="_blank" rel="noopener"` : "span"} class="pill"
+          title="Listed on ${esc(l.site)}${l.price == null ? "" : ` at ${fmtUsd(l.price)}`}">${esc(l.site)}${
+          l.price == null ? "" : " " + fmtUsd(l.price)}</${l.url ? "a" : "span"}>`).join(" ")}
+      <div class="m-meta phone-only">${esc(it.condition)} · ×${it.quantity}</div></td>
+    <td>${esc(it.condition)}</td>
+    <td class="num">${it.quantity}</td>
+    <td class="num price-cell">${priceCell(it)}</td>
+    <td class="num"><span class="chg ${chgCls}">${chgTxt}</span></td>
+    <td class="num">${fmtUsd(it.value)}</td>
+    <td>
+      <div class="row-actions">
+        ${resolve}
+        ${sellCell}
+        <details class="row-more">
+          <summary class="btn btn-ghost" aria-label="More actions for ${esc(it.name)}">More</summary>
+          <div class="menu-actions">
+            ${listing ? '<button class="btn btn-ghost" data-act="unlist">Unlist</button>' : ""}
+            <button class="btn btn-ghost" data-act="yours">${it.your_price == null ? "Set price" : "Change price"}</button>
+            <button class="btn btn-ghost" data-act="sold">Record sale</button>
+            ${ebayStatus.authorized ? '<button class="btn btn-ghost" data-act="ebay">List on eBay</button>'
+              : '<button class="btn btn-ghost" data-act="ebay-connect">List on eBay…</button>'}
+            <button class="btn btn-ghost" data-act="remove">Remove from library</button>
+          </div>
+        </details>
+      </div>
+    </td>
+  </tr>`;
+}
+
+function syncSelection(rows = visibleItems()) {
+  const pickable = rows.filter((it) => !lib.listings[it.id]);
+  const picked = pickable.filter((it) => lib.selected.has(it.id)).length;
+  const all = $("#lib-select-all");
+  all.checked = pickable.length > 0 && picked === pickable.length;
+  all.indeterminate = picked > 0 && picked < pickable.length;
+  // The bar with what can be done to the ticked cards shows only when some are.
+  const n = lib.selected.size;
+  $("#bulk-bar").classList.toggle("hidden", n === 0 || (lib.tab !== "have" && lib.tab !== "review"));
+  $("#bulk-count").textContent = `${n} selected`;
+  $("#btn-select-all-m").textContent = all.checked ? "Select none" : "Select all";
+}
+
+function renderLedger(kind) {
+  const events = lib.events[kind];
+  const head = $("#ledger-head"), body = $("#ledger-body"), strip = $("#ledger-totals");
+  if (events == null) { body.innerHTML = '<tr><td class="muted">Loading…</td></tr>'; return; }
+  const q = $("#lib-search").value.trim().toLowerCase();
+  const rows = events.filter((e) => matches(e, q));
+  $("#lib-count").textContent = events.length ? `${rows.length} of ${events.length} records` : "";
+  const t = lib.totals || {};
+
+  if (kind === "activity") {
+    const WHAT = { added: "Added", purchased: "Purchased", sold: "Sold", removed: "Removed" };
+    strip.innerHTML = `
+      <span><strong>${t.added_cards}</strong> added</span>
+      <span><strong>${t.purchased_cards}</strong> purchased</span>
+      <span><strong>${t.sold_cards}</strong> sold</span>
+      <span><strong>${t.removed_cards}</strong> removed without a sale</span>`;
+    head.innerHTML = `<tr><th>Date</th><th></th><th>Card</th><th>What</th><th>Where</th>
+      <th class="num">Qty</th><th class="num">Each</th></tr>`;
+    body.innerHTML = rows.map((e) => `<tr>
+      <td>${shortDate(e.occurred_at)}</td><td>${thumbHtml(e)}</td><td>${cardLine(e)}${noteHtml(e)}</td>
+      <td>${WHAT[e.kind] || esc(e.kind)}</td><td>${CHANNELS[e.channel] || esc(e.channel)}</td>
+      <td class="num">${e.quantity}</td><td class="num">${fmtUsd(e.unit_price)}</td>
+    </tr>`).join("") || emptyRow(7, events.length ? "Nothing matches this search." : "Nothing has happened yet.");
     return;
   }
-  body.innerHTML = items.map((it) => {
-    const chg = it.change_7d_pct;
-    const chgTxt = chg == null ? "—" : `${chg > 0 ? "+" : ""}${chg}%`;
-    const chgCls = chg == null ? "" : chg >= 0 ? "up" : "down";
-    const img = it.image_url
-      ? `<img class="inv-thumb" src="${esc(it.image_url)}" alt="">`
-      : it.crop_path ? `<img class="inv-thumb" src="/${esc(it.crop_path)}" alt="">` : "";
-    return `<tr data-id="${it.id}">
-      <td>${img}</td>
-      <td>
-        <div class="inv-name">${esc(it.name)}${it.is_holo ? " ✦" : ""}</div>
-        <div class="inv-set">${esc(it.set_name || "")}${it.card_number ? " #" + esc(it.card_number) : ""}</div>
-      </td>
-      <td>${esc(it.condition)}</td>
-      <td class="num">${it.quantity}</td>
-      <td class="num">${fmtUsd(it.price)}</td>
-      <td class="num"><span class="chg ${chgCls}">${chgTxt}</span></td>
-      <td class="num">${fmtUsd(it.value)}</td>
-      <td>
-        <div class="row-actions">
-          <button class="btn act-sell" data-price="${it.price ?? ""}"
-                  title="List on the marketplace">Sell</button>
-          ${ebayStatus.authorized
-            ? `<button class="btn btn-ghost act-ebay" data-price="${it.price ?? ""}"
-                  title="List on your eBay account">eBay</button>` : ""}
-          <button class="btn btn-ghost act-del" title="Remove from library">✕</button>
-        </div>
-      </td>
-    </tr>`;
-  }).join("");
-  markListedRows();
+
+  if (kind === "sold") {
+    const gainNote = t.sold_with_cost < t.sold_cards
+      ? ` (covers ${t.sold_with_cost} of ${t.sold_cards} cards; the rest have no price paid on file)` : "";
+    strip.innerHTML = `
+      <span><strong>${t.sold_cards}</strong> cards sold</span>
+      <span>Gross <strong>${fmtUsd(t.sold_gross)}</strong></span>
+      <span>Fees <strong>${fmtUsd(t.sold_fees)}</strong></span>
+      <span>Net <strong>${fmtUsd(t.sold_net)}</strong></span>
+      <span>Realized gain <strong>${t.sold_with_cost ? fmtUsd(t.realized_gain) : "—"}</strong>${gainNote}</span>`;
+    head.innerHTML = `<tr><th>Date</th><th></th><th>Card</th><th>Cond.</th><th>Where</th>
+      <th class="num">Qty</th><th class="num">Each</th><th class="num">Fees</th>
+      <th class="num">Net</th><th class="num">Gain</th></tr>`;
+    body.innerHTML = rows.map((e) => `<tr>
+      <td>${shortDate(e.occurred_at)}</td><td>${thumbHtml(e)}</td><td>${cardLine(e)}${noteHtml(e)}</td>
+      <td>${esc(e.condition || "")}</td><td>${CHANNELS[e.channel] || esc(e.channel)}</td>
+      <td class="num">${e.quantity}</td><td class="num">${fmtUsd(e.unit_price)}</td>
+      <td class="num">${e.fees ? fmtUsd(e.fees) : "—"}</td><td class="num">${fmtUsd(e.net)}</td>
+      <td class="num">${e.refunded ? '<span class="pill">refunded</span>'
+        : e.gain == null ? '<span class="muted" title="No price paid on file">—</span>'
+        : `<span class="chg ${e.gain >= 0 ? "up" : "down"}">${e.gain >= 0 ? "+" : ""}${fmtUsd(e.gain)}</span>`}</td>
+    </tr>`).join("") || emptyRow(10, events.length
+      ? "No sales match this search."
+      : "No sales yet.");
+  } else {
+    const unpriced = t.purchased_unpriced
+      ? ` (${t.purchased_unpriced} cards have no price paid on file)` : "";
+    strip.innerHTML = `
+      <span><strong>${t.purchased_cards}</strong> cards purchased</span>
+      <span>Spent <strong>${fmtUsd(t.purchased_spend)}</strong>${unpriced}</span>`;
+    head.innerHTML = `<tr><th>Date</th><th></th><th>Card</th><th>Cond.</th><th>Where</th>
+      <th class="num">Qty</th><th class="num">Paid each</th><th class="num">Total</th>
+      <th class="num">Market now, each</th></tr>`;
+    body.innerHTML = rows.map((e) => `<tr>
+      <td>${shortDate(e.occurred_at)}</td><td>${thumbHtml(e)}</td><td>${cardLine(e)}${noteHtml(e)}</td>
+      <td>${esc(e.condition || "")}</td><td>${CHANNELS[e.channel] || esc(e.channel)}</td>
+      <td class="num">${e.quantity}</td><td class="num">${fmtUsd(e.unit_price)}</td>
+      <td class="num">${fmtUsd(e.total)}</td><td class="num">${fmtUsd(e.market_price_now)}</td>
+    </tr>`).join("") || emptyRow(9, events.length
+      ? "No purchases match this search."
+      : "No purchases yet.");
+  }
 }
 
-let activeListingByItem = {}; // inventory_item_id -> listing_id
+const emptyRow = (n, text) => `<tr><td colspan="${n}" class="empty">${text}</td></tr>`;
+const noteHtml = (e) => (e.note ? `<div class="inv-set">${esc(e.note)}</div>` : "");
 
-function markListedRows() {
-  document.querySelectorAll("#inv-body tr[data-id]").forEach((row) => {
-    const btn = row.querySelector(".act-sell");
-    if (!btn) return;
-    const lid = activeListingByItem[row.dataset.id];
-    if (lid) {
-      btn.textContent = "Listed ✓";
-      btn.disabled = true;
-    } else if (btn.textContent === "Listed ✓") {
-      btn.textContent = "Sell";
-      btn.disabled = false;
-    }
+const libraryTabs = $$("#library .tab");
+libraryTabs.forEach((tab, index) => {
+  tab.setAttribute("aria-selected", index === 0 ? "true" : "false");
+  tab.tabIndex = index === 0 ? 0 : -1;
+  tab.addEventListener("keydown", e => {
+    let next;
+    if (e.key === "ArrowRight") next = (index + 1) % libraryTabs.length;
+    if (e.key === "ArrowLeft") next = (index + libraryTabs.length - 1) % libraryTabs.length;
+    if (e.key === "Home") next = 0;
+    if (e.key === "End") next = libraryTabs.length - 1;
+    if (next !== undefined) { e.preventDefault(); libraryTabs[next].click(); libraryTabs[next].focus(); }
   });
-}
+  tab.addEventListener("click", () => {
+  libraryTabs.forEach((t) => {
+    t.classList.toggle("active", t === tab);
+    t.setAttribute("aria-selected", t === tab ? "true" : "false");
+    t.tabIndex = t === tab ? 0 : -1;
+  });
+  lib.tab = tab.dataset.tab;
+  renderLibrary();
+  });
+});
+["#lib-search", "#lib-sort", "#lib-flagged", "#lib-unlisted"].forEach((sel) =>
+  $(sel).addEventListener("input", renderLibrary));
 
-$("#inv-body").addEventListener("click", async (e) => {
-  const row = e.target.closest("tr[data-id]");
-  if (!row) return;
-  const id = row.dataset.id;
-  if (e.target.classList.contains("act-del")) {
-    if (!confirm("Remove this card from your library?")) return;
-    await api(`/api/inventory/${id}`, { method: "DELETE" });
-    refreshAll();
-  } else if (e.target.classList.contains("act-ebay")) {
-    listOnEbay(id, e.target.dataset.price, e.target);
-  } else if (e.target.classList.contains("act-sell")) {
-    const suggested = e.target.dataset.price;
-    const raw = prompt("List for how much? ($)", suggested || "");
-    if (raw === null) return;
-    const price = parseFloat(raw);
-    if (!price || price <= 0) { alert("Enter a price greater than 0."); return; }
-    e.target.disabled = true;
-    e.target.textContent = "Listing…";
-    try {
-      const res = await api(`/api/inventory/${id}/list-for-sale`, {
-        method: "POST",
-        body: JSON.stringify({ price }),
-      });
-      e.target.textContent = "Listed ✓";
-      alert(`Listed at ${fmtUsd(res.price)} — platform fee on sale: ${fmtUsd(res.fee_on_sale)} (${res.fee_pct}%).`);
-      loadMarket();
-    } catch (err) {
-      e.target.textContent = "Sell";
-      e.target.disabled = false;
-      alert(`Listing failed: ${err.message}`);
-    }
+document.addEventListener("keydown", (e) => {
+  if (e.key === "/" && !e.target.closest("input, textarea, select") && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    $("#lib-search").focus();
   }
 });
+
+/* ---------------- row actions ---------------- */
+
+const itemById = (id) => lib.items.find((i) => i.id === Number(id));
+
+$("#inv-body").addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-act]");
+  if (el?.dataset.act === "clear-filters") {
+    $("#lib-search").value = "";
+    $("#lib-flagged").checked = false;
+    $("#lib-unlisted").checked = false;
+    renderLibrary();
+    $("#lib-search").focus();
+    return;
+  }
+  const row = e.target.closest("tr[data-id]");
+  if (!el || !row) return;
+  const item = itemById(row.dataset.id);
+  if (!item) return;
+  const act = el.dataset.act;
+  const menu = el.closest("details.row-more");
+  if (menu) {
+    menu.open = false;
+    menu.querySelector("summary").focus();
+  }
+  try {
+    if (act === "select") {
+      if (el.checked) lib.selected.add(item.id); else lib.selected.delete(item.id);
+      syncSelection();
+    } else if (act === "sell") {
+      openSell(item, null);
+    } else if (act === "reprice") {
+      openSell(item, lib.listings[item.id]);
+    } else if (act === "unlist") {
+      await postJson(`/api/market/listings/${lib.listings[item.id].listing_id}/cancel`);
+      toast(`${item.name} is no longer listed.`);
+      await loadMarket();
+    } else if (act === "sold") {
+      openSale(item);
+    } else if (act === "ebay") {
+      await listOnEbay(item, el);
+    } else if (act === "ebay-connect") {
+      showEbaySetup();
+    } else if (act === "resolve") {
+      await resolveItem(item);
+    } else if (act === "yours") {
+      await setYourPrice(item);
+    } else if (act === "remove") {
+      const { ok } = await askConfirm({
+        title: "Remove from library?",
+        html: `<p><strong>${esc(item.name)}</strong> (${item.quantity}) is removed with no sale recorded.</p>`,
+        confirm: "Remove",
+      });
+      if (!ok) return;
+      await api(`/api/inventory/${item.id}`, { method: "DELETE" });
+      toast(`Removed ${item.name}.`);
+      refreshAll();
+    }
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+$("#lib-select-all").addEventListener("change", (e) => {
+  for (const it of visibleItems()) {
+    if (lib.listings[it.id]) continue;
+    if (e.target.checked) lib.selected.add(it.id); else lib.selected.delete(it.id);
+  }
+  renderHave();
+});
+
+/* ---------------- sell / reprice dialog ---------------- */
+
+let sellCtx = null;
+
+function openSell(item, listing) {
+  sellCtx = { item, listing };
+  const form = $("#sell-form");
+  $("#sell-title").textContent = listing ? `Reprice ${item.name}` : `List ${item.name} for sale`;
+  $("#sell-submit").textContent = listing ? "Update price" : "List for sale";
+  $("#sell-prov").innerHTML = `
+    <p>${item.your_price != null ? `Set price ${fmtUsd(item.your_price)} · ` : ""}Market price ${fmtUsd(item.price)}<br>${provenanceHtml(item.provenance)}</p>
+    ${item.quantity > 1 ? `<p class="muted">${item.quantity} copies in the library. A listing sells one copy.</p>` : ""}`;
+  form.price.value = (listing ? listing.price : askPrice(item)) ?? "";
+  updateSellNet();
+  openDialog($("#sell-dialog"));
+  form.price.select();
+}
+
+function updateSellNet() {
+  const price = parseFloat($("#sell-form").price.value);
+  const pct = lib.market ? lib.market.fee_pct : 0;
+  if (!(price > 0)) { $("#sell-net").textContent = ""; return; }
+  const fee = Math.round(price * pct) / 100;
+  const market = sellCtx.item.price;
+  const vs = market ? ` · ${Math.round((price - market) / market * 100)}% vs market` : "";
+  $("#sell-net").textContent =
+    `Platform fee ${pct}% = ${fmtUsd(fee)}. Payout ${fmtUsd(price - fee)} when the card sells${vs}.`;
+}
+$("#sell-form").price.addEventListener("input", updateSellNet);
+
+$("#sell-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const { item, listing } = sellCtx;
+  const price = parseFloat(e.target.price.value);
+  try {
+    if (listing) {
+      await postJson(`/api/market/listings/${listing.listing_id}`, { price }, "PATCH");
+      toast(`${item.name} now listed at ${fmtUsd(price)}.`);
+    } else {
+      const res = await postJson(`/api/inventory/${item.id}/list-for-sale`, { price });
+      toast(`Listed ${item.name} at ${fmtUsd(res.price)}. Fee on sale: ${fmtUsd(res.fee_on_sale)}.`);
+    }
+    $("#sell-dialog").close();
+    await loadMarket();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- bulk actions ---------------- */
+
+$("#btn-select-all-m").addEventListener("click", () => {
+  const all = $("#lib-select-all");
+  all.checked = !all.checked;
+  all.dispatchEvent(new Event("change"));
+});
+
+$("#btn-bulk-clear").addEventListener("click", () => {
+  lib.selected.clear();
+  renderLibrary();
+});
+
+$("#btn-bulk-remove").addEventListener("click", async () => {
+  const ids = [...lib.selected];
+  const { ok } = await askConfirm({
+    title: `Remove ${ids.length} card${ids.length === 1 ? "" : "s"}?`,
+    html: "<p>The selected cards leave the library with no sale recorded.</p>",
+    confirm: "Remove",
+  });
+  if (!ok) return;
+  let removed = 0, failed = 0;
+  for (const id of ids) {
+    try {
+      await api(`/api/inventory/${id}`, { method: "DELETE" });
+      lib.selected.delete(id);
+      removed += 1;
+    } catch (err) {
+      failed += 1;
+    }
+  }
+  toast(`Removed ${removed} card${removed === 1 ? "" : "s"}.` + (failed ? ` ${failed} could not be removed.` : ""),
+    failed ? "err" : undefined);
+  refreshAll();
+});
+
+$("#btn-bulk-list").addEventListener("click", async () => {
+  const item_ids = [...lib.selected];
+  const price = $("#bulk-price").value.trim() || null;      // one price for all, or market price each
+  try {
+    const p = await postJson("/api/inventory/list-for-sale", { item_ids, price, dry_run: true });
+    const skips = [
+      p.skipped_no_price ? `${p.skipped_no_price} with no market price` : "",
+      p.skipped_already_listed ? `${p.skipped_already_listed} already listed` : "",
+    ].filter(Boolean);
+    if (!p.to_list && !p.skipped_flagged) {
+      toast(`Nothing to list: ${skips.join(", ") || "no eligible cards"}.`, "err");
+      return;
+    }
+    const { ok, checked } = await askConfirm({
+      title: `List ${p.to_list} card${p.to_list === 1 ? "" : "s"} for sale?`,
+      html: `<p>${p.to_list} card${p.to_list === 1 ? "" : "s"} go on the marketplace at ${price
+             ? `${fmtUsd(Number(price))} each` : "the current market price"}, ${fmtUsd(p.total)} in total. The platform fee is ${p.fee_pct}% of each sale
+             (${fmtUsd(p.fee_on_sale)} if all sell).</p>
+             ${skips.length ? `<p class="muted">Skipping ${skips.join(" and ")}.</p>` : ""}
+             ${p.skipped_flagged ? `<p class="flag-note">${p.skipped_flagged} selected
+               card${p.skipped_flagged === 1 ? " has a price that needs" : "s have prices that need"} review and
+               will not be listed unless the box is ticked.</p>` : ""}`,
+      confirm: "List cards",
+      checkbox: p.skipped_flagged ? `Also list the ${p.skipped_flagged} with prices that need review` : null,
+    });
+    if (!ok) return;
+    const res = await postJson("/api/inventory/list-for-sale", { item_ids, price, include_flagged: checked });
+    $("#bulk-price").value = "";
+    toast(`Listed ${res.listed} card${res.listed === 1 ? "" : "s"} for ${fmtUsd(res.total)}.`);
+    lib.selected.clear();
+    await loadMarket();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- record a sale made elsewhere ---------------- */
+
+let saleItem = null;
+
+function openSale(item) {
+  saleItem = item;
+  const form = $("#sale-form");
+  form.reset();
+  $("#sale-title").textContent = `Record a sale: ${item.name}`;
+  form.quantity.max = item.quantity;
+  form.price.value = item.price ?? "";
+  form.sold_on.value = new Date().toISOString().slice(0, 10);
+  openDialog($("#sale-dialog"));
+}
+
+$("#sale-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try {
+    const res = await postJson(`/api/inventory/${saleItem.id}/record-sale`, f);
+    $("#sale-dialog").close();
+    toast(`Recorded: ${res.event.quantity} × ${saleItem.name} for ${fmtUsd(res.event.net)} net.`);
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- add a card by hand ---------------- */
+
+// When set, the add-card form is answering "which card is this listing?".
+let assignTarget = null;
+const ADD_INTRO = $("#add-intro").innerHTML;
+
+function openAddDialog(target = null) {
+  const form = $("#add-form");
+  form.reset();
+  suggestions = [];
+  chosenSuggestionName = null;
+  suggestRequest++;
+  clearTimeout(suggestTimer);
+  $("#add-suggestions").innerHTML = "";
+  $("#add-match").textContent = "";
+  $("#add-card-details").open = false;
+  $("#add-purchase-details").open = false;
+  $("#add-purchase-details").classList.toggle("hidden", !!target);
+  assignTarget = target;
+  $("#add-title").textContent = target ? "Choose the card" : "Add a card";
+  $("#add-intro").innerHTML = target
+    ? `<strong>${esc(target.title)}</strong><br>${esc(target.site)} listing, quantity ${target.quantity}${
+        target.price == null ? "" : `, ${fmtUsd(target.price)}`}. Start typing the card name and pick the card if offered.`
+    : ADD_INTRO;
+  for (const name of ["quantity", "price", "channel", "acquired_on"]) {
+    form[name].closest("label").classList.toggle("hidden", !!target);
+  }
+  openDialog($("#add-dialog"));
+}
+
+$("#btn-add").addEventListener("click", () => openAddDialog());
+
+let suggestTimer = null;
+let suggestions = [];
+let suggestRequest = 0;
+let chosenSuggestionName = null;
+$("#add-form").name.addEventListener("input", (e) => {
+  const q = e.target.value.trim();
+  const request = ++suggestRequest;
+  clearTimeout(suggestTimer);
+  // Picking a suggestion fills in the printing details.
+  const hit = suggestions.find((c) => suggestionLabel(c) === q);
+  if (hit) {
+    const form = $("#add-form");
+    form.name.value = hit.name;
+    form.set_name.value = hit.set_name || "";
+    form.set_code.value = hit.set_code || "";
+    form.card_number.value = hit.card_number || "";
+    form.is_holo.checked = !!hit.is_holo;
+    form.printing.value = hit.printing || (hit.is_holo ? "holofoil" : "normal");
+    chosenSuggestionName = hit.name;
+    $("#add-match").textContent = suggestionLabel(hit);
+    $("#add-card-details").open = false;
+    return;
+  }
+  $("#add-match").textContent = "";
+  if (chosenSuggestionName && q !== chosenSuggestionName) {
+    const form = $("#add-form");
+    for (const key of ["set_name", "set_code", "card_number"]) form[key].value = "";
+    form.printing.value = "unknown";
+    form.is_holo.checked = false;
+    chosenSuggestionName = null;
+  }
+  if (q.length < 2) return;
+  suggestTimer = setTimeout(async () => {
+    try {
+      const found = (await api(`/api/catalog/search?q=${encodeURIComponent(q)}`)).cards;
+      if (request !== suggestRequest) return;
+      suggestions = found;
+      $("#add-suggestions").innerHTML = suggestions
+        .map((c) => `<option value="${esc(suggestionLabel(c))}">`).join("");
+    } catch { /* suggestions are optional */ }
+  }, 200);
+});
+const suggestionLabel = (c) => {
+  const finish = { normal: "Non-holo", holofoil: "Holo", reverseHolofoil: "Reverse holo", unknown: "Finish not checked" };
+  return [c.name, c.set_name || c.set_code, c.card_number ? "#" + c.card_number : "",
+    finish[c.printing || (c.is_holo ? "holofoil" : "normal")]].filter(Boolean).join(" · ");
+};
+
+$("#add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  f.is_holo = f.printing === "holofoil";
+  f.purchased = f.channel !== "manual";
+  if (assignTarget) {
+    try {
+      const done = await postJson(`/api/listings/external/${assignTarget.id}/assign`, f);
+      $("#add-dialog").close();
+      toast(`Added ${done.quantity} × ${done.name} to the library.`);
+      loadListingImport().catch(() => {});
+      refreshAll();
+      priceCards("new");
+    } catch (err) {
+      toast(err.message, "err");
+    }
+    return;
+  }
+  try {
+    const item = await postJson("/api/inventory/add", f);
+    $("#add-dialog").close();
+    toast(item.needs_price
+      ? `Added ${item.name}. Looking up the price…`
+      : `Added ${item.name} at ${fmtUsd(item.price)} market price.`);
+    refreshAll();
+    if (item.needs_price) priceCards("new");
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- import listings from other sites ---------------- */
+
+let listingImport = { unmatched: [] };
+
+async function loadListingImport() {
+  const data = await api("/api/listings/external");
+  listingImport = data;
+  $("#btn-li-ebay").disabled = !data.ebay_connected;
+  $("#li-ebay-note").textContent = data.ebay_connected
+    ? "active listings, read from the connected account"
+    : "not connected";
+  $("#li-unmatched-wrap").classList.toggle("hidden", !data.unmatched_total);
+  $("#li-unmatched-count").textContent = data.unmatched_total || "";
+  $("#li-unmatched").innerHTML = data.unmatched.map((u) => `<li data-id="${u.id}">
+      <span><span class="pill">${esc(u.site)}</span> <strong>${esc(u.title || "(no title)")}</strong>
+        <span class="muted small">qty ${u.quantity}${u.price == null ? "" : ` · listed at ${fmtUsd(u.price)}`}
+          · ${esc(u.detail || "not identified")}</span></span>
+      <span class="row-actions">
+        <button class="btn" data-li="assign">Choose card</button>
+        <button class="btn btn-ghost" data-li="dismiss" title="Not a card, or not owned">Dismiss</button>
+      </span></li>`).join("");
+}
+
+// A card list has rows of cards you own; the other sources have listings.
+const listingNoun = (site, n) => (site === "Card list" ? "row" : "listing") + (n === 1 ? "" : "s");
+
+// What a card-list sheet was read as, and what was filled in for it.
+function cardListReadHtml(p) {
+  if (!p.columns_read) return "";
+  const read = p.columns_read.map((c) => `<li><strong>${esc(c.column)}</strong> read as ${esc(c.as)}</li>`).join("");
+  const filled = [];
+  if (p.assumed_condition) filled.push(`${p.assumed_condition} row${p.assumed_condition === 1 ? " has" : "s have"} no condition this app knows and will be recorded as NM`);
+  if (p.assumed_quantity) filled.push(`${p.assumed_quantity} row${p.assumed_quantity === 1 ? " has" : "s have"} no quantity and will be recorded as 1`);
+  const noted = p.columns_noted || [];
+  return `<p><strong>From the sheet</strong></p><ul>${read}</ul>
+    ${noted.length ? `<p>Kept word for word in each card's note: ${noted.map(esc).join(", ")}</p>` : ""}
+    ${filled.length ? `<p class="flag-note">Filled in, not from the sheet: ${filled.join("; ")}.</p>` : ""}
+    ${p.will_update ? `<p>${p.will_update} row${p.will_update === 1 ? " was" : "s were"} imported before and will be brought up to date from the sheet (quantity is left unchanged).</p>` : ""}
+    <p class="muted small">${p.with_market_price ? `${p.with_market_price} row${p.with_market_price === 1 ? " gives" : "s give"} a market price, used until a live price is found. ` : ""}Live prices are looked up right after the import.</p>`;
+}
+
+function listingPreviewHtml(site, p) {
+  return `<p>${esc(site)} has <strong>${p.listings}</strong> ${listingNoun(site, p.listings)}${p.file ? ` (${esc(p.file)})` : ""}.</p>
+    <ul>
+      <li><strong>${p.new}</strong> new (${p.new_cards} card${p.new_cards === 1 ? "" : "s"}) will be identified and added to the library</li>
+      <li>${p.already_in_library} already in the library (matched by SKU); nothing added</li>
+      <li>${p.already_imported} imported before; skipped</li>
+    </ul>
+    ${cardListReadHtml(p)}
+    <p class="muted small">Any listing that cannot be tied to exactly one card is kept under “Needs review”, not added.</p>`;
+}
+
+function listingResultText(site, r) {
+  return `${site}: added ${r.added} ${listingNoun(site, r.added)} (${r.cards} card${r.cards === 1 ? "" : "s"})`
+    + (r.linked ? `, ${r.linked} already in the library` : "")
+    + (r.unmatched ? `, ${r.unmatched} need review` : "")
+    + (r.updated ? `, ${r.updated} brought up to date` : "")
+    + (r.duplicates - (r.updated || 0) > 0 ? `, ${r.duplicates - (r.updated || 0)} unchanged` : "") + ".";
+}
+
+async function runListingImport(site, send) {
+  try {
+    const p = await send(true);
+    if (!p.new && !p.already_in_library && !p.will_update) {
+      toast(`${site}: ${p.listings} ${listingNoun(site, p.listings)} read, nothing new to import.`);
+      return;
+    }
+    const { ok } = await askConfirm({
+      title: !p.new && p.will_update
+        ? `Update ${p.will_update} card${p.will_update === 1 ? "" : "s"} from the card list?`
+        : `Import ${p.new} ${listingNoun(site, p.new)} from ${site === "Card list" ? "the card list" : site}?`,
+      html: listingPreviewHtml(site, p), confirm: "Import",
+    });
+    if (!ok) return;
+    const r = await send(false);
+    toast(listingResultText(site, r));
+    await loadListingImport();
+    refreshAll();
+    priceCards("new");
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+// A big export goes in parts (each a CSV with the header line), because a
+// hosted install caps the size of one request. The counts are added up.
+async function postListingFile(source, file, dryRun) {
+  const text = await file.text();
+  const headerEnd = text.indexOf("\n") + 1;
+  const max = 3000000;
+  const parts = [];
+  if (text.length <= max) parts.push(text);
+  else {
+    for (let start = headerEnd; start < text.length;) {
+      let end = Math.min(text.length, start + max);
+      if (end < text.length) {
+        const cut = text.lastIndexOf("\n", end);
+        if (cut > start) end = cut + 1;
+      }
+      parts.push(text.slice(0, headerEnd) + text.slice(start, end));
+      start = end;
+    }
+  }
+  const total = {};
+  for (const part of parts) {
+    const fd = new FormData();
+    fd.append("source", source);
+    fd.append("file", new Blob([part], { type: "text/csv" }), "export.csv");
+    if (dryRun) fd.append("dry_run", "1");
+    const res = await fetch("/api/listings/import", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+    for (const [key, value] of Object.entries(data)) {
+      total[key] = typeof value === "number" ? (total[key] || 0) + value : value;
+    }
+  }
+  return total;
+}
+
+$("#btn-import-listings").addEventListener("click", () => {
+  openDialog($("#listings-dialog"));
+  loadListingImport().catch((err) => toast(err.message, "err"));
+  api("/api/drive/status").then((d) => $("#btn-drive-disconnect").classList.toggle(
+    "hidden", !d.connected || d.mode === "service_account"))
+    .catch(() => {});
+});
+
+// Back from Google's consent page.
+{
+  const drive = new URLSearchParams(location.search).get("drive");
+  if (drive) {
+    history.replaceState(null, "", location.pathname);
+    const said = {
+      connected: ["Google Drive connected. Tap Google Drive to pick a spreadsheet.", "ok"],
+      declined: ["Google Drive was not connected: access was declined.", "err"],
+      failed: ["Google Drive could not be connected. Try again.", "err"],
+      "not-set-up": ["Google Drive is not set up on this install (GOOGLE_CLIENT_ID is missing).", "err"],
+    }[drive];
+    if (said) toast(said[0], said[1]);
+    if (drive === "connected") $("#btn-import-listings").click();
+  }
+}
+
+$("#btn-li-ebay").addEventListener("click", () =>
+  runListingImport("eBay", (dryRun) => postJson("/api/listings/import/ebay", { dry_run: dryRun })));
+
+$("#listing-sources").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-li-file]");
+  if (!btn) return;
+  const input = $("#li-file");
+  input.value = "";
+  input.onchange = () => {
+    const file = input.files[0];
+    if (!file) return;
+    const source = btn.dataset.liFile;
+    runListingImport(LISTING_SITES[source], (dryRun) => postListingFile(source, file, dryRun));
+  };
+  input.click();
+});
+
+const LISTING_SITES = { tcgplayer: "TCGplayer", whatnot: "Whatnot", cards: "Card list" };
+
+// A spreadsheet picked from Google Drive goes through the same preview and
+// confirmation as an uploaded file.
+$("#listing-sources").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-li-drive]");
+  if (!btn) return;
+  const source = btn.dataset.liDrive;
+  // Out of the way first: Google's sign-in and file picker open on top of
+  // the page, and a modal dialog would sit over them.
+  $("#listings-dialog").close();
+  openDrivePicker({
+    kind: "sheets", multiple: false, title: source === "cards" ? "Choose the card list spreadsheet" : `Choose the ${LISTING_SITES[source]} spreadsheet`,
+    onPick: ([file]) => runListingImport(LISTING_SITES[source],
+      (dryRun) => postJson("/api/drive/import/sheet", { file_id: file.id, source, dry_run: dryRun })),
+  });
+});
+
+$("#btn-drive-disconnect").addEventListener("click", async () => {
+  const { ok } = await askConfirm({
+    title: "Disconnect Google Drive?",
+    html: "<p>This app forgets the Google sign-in and asks Google to withdraw access. Cards already imported stay.</p>",
+    confirm: "Disconnect",
+  });
+  if (!ok) return;
+  try {
+    await postJson("/api/drive/disconnect");
+    $("#btn-drive-disconnect").classList.add("hidden");
+    toast("Google Drive disconnected.");
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+$("#btn-li-rematch").addEventListener("click", async () => {
+  const btn = $("#btn-li-rematch");
+  btn.disabled = true;
+  try {
+    const r = await postJson("/api/listings/external/rematch");
+    toast(`Identified ${r.added} more listing${r.added === 1 ? "" : "s"}. ${r.still_unmatched} still need review`
+      + (r.waiting ? ` (${r.waiting} not looked up yet; click again)` : "") + ".");
+    await loadListingImport();
+    refreshAll();
+    if (r.added) priceCards("new");
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("#li-unmatched").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-li]");
+  if (!btn) return;
+  const row = listingImport.unmatched.find((u) => u.id === Number(btn.closest("li").dataset.id));
+  if (!row) return;
+  if (btn.dataset.li === "assign") {
+    openAddDialog(row);
+    return;
+  }
+  try {
+    await postJson(`/api/listings/external/${row.id}/dismiss`);
+    await loadListingImport();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- import from the scan bench ---------------- */
+
+let scannedCardIds = [];
+async function loadScannedChoice() {
+  const btn = $("#btn-promote");
+  btn.disabled = true;
+  btn.classList.add("hidden");
+  try {
+    const data = await api("/api/cards");
+    // The server checks the complete owner-scoped history, including scans
+    // sold or removed since import; the activity panel only loads recent events.
+    scannedCardIds = data.cards.filter(c => c.name && c.final_price != null && !c.in_library && !c.sold).map(c => c.id);
+    btn.textContent = `Add ${scannedCardIds.length} scanned card${scannedCardIds.length === 1 ? "" : "s"}`;
+    btn.classList.toggle("hidden", scannedCardIds.length === 0);
+    btn.disabled = scannedCardIds.length === 0;
+  } catch {
+    // Scan may be unavailable to this account; the other add paths remain.
+    scannedCardIds = [];
+  }
+}
+
+$("#add-menu").addEventListener("toggle", () => {
+  if ($("#add-menu").open) loadScannedChoice();
+});
+$("#add-menu").addEventListener("click", e => {
+  if (!e.target.closest("button, a")) return;
+  $("#add-menu").open = false;
+  $("#add-menu > summary").focus();
+}, true);
 
 $("#btn-promote").addEventListener("click", async () => {
   const btn = $("#btn-promote");
   btn.disabled = true;
   try {
-    const res = await api("/api/inventory/promote", {
-      method: "POST",
-      body: JSON.stringify({ all_priced: true }),
-    });
-    alert(`Imported ${res.promoted} cards` +
-      (res.skipped_duplicates ? ` (${res.skipped_duplicates} already in your library)` : ""));
+    const res = await postJson("/api/inventory/promote", { card_ids: scannedCardIds });
+    toast(`Imported ${res.promoted} scanned card${res.promoted === 1 ? "" : "s"}` +
+      (res.skipped_duplicates ? ` (${res.skipped_duplicates} were already imported)` : "") + ".");
+    scannedCardIds = [];
+    btn.classList.add("hidden");
     refreshAll();
   } catch (err) {
-    alert(err.message);
+    toast(err.message === "no matching bench cards"
+      ? "Nothing to import: no scanned cards have a price yet. Scan and price cards first."
+      : err.message, "err");
   } finally {
     btn.disabled = false;
   }
 });
+
+/* Look up market prices a few cards at a time, until none are left.
+   mode "new": only cards with no price yet. Runs after every way of adding
+   cards, so new cards are priced right away and the rest of the library is
+   left alone. mode "all": the Refresh prices button. Each request prices a
+   handful, so it works where nothing can run in the background. */
+let pricingRun = null;
+function priceCards(mode = "new") {
+  if (pricingRun) return pricingRun;
+  pricingRun = (async () => {
+    let after = 0, tried = 0, priced = 0, total = null;
+    try {
+      for (;;) {
+        const r = await postJson("/api/portfolio/price-step", { mode, after });
+        if (total === null) total = r.tried + r.remaining;
+        if (!r.tried) break;
+        tried += r.tried; priced += r.priced; after = r.last_id;
+        toast(`Looking up prices: ${tried} of ${total}…`);
+        if (tried % 18 === 0) loadSummary().then(loadMarket).catch(() => {});
+        if (!r.remaining) break;
+      }
+      if (tried) {
+        const missing = tried - priced;
+        toast(`Prices looked up for ${priced} of ${tried} card${tried === 1 ? "" : "s"}.`
+          + (missing ? ` ${missing} ha${missing === 1 ? "s" : "ve"} no price yet.` : ""));
+        refreshAll();
+      }
+      return { tried, priced };
+    } catch (err) {
+      toast(`Price lookup stopped: ${err.message}`, "err");
+    } finally {
+      pricingRun = null;
+    }
+  })();
+  return pricingRun;
+}
 
 $("#btn-refresh").addEventListener("click", async () => {
   const btn = $("#btn-refresh");
   btn.disabled = true;
   btn.textContent = "Refreshing…";
   try {
-    await api("/api/portfolio/refresh-prices", { method: "POST" });
-    setTimeout(() => { refreshAll(); btn.disabled = false; btn.textContent = "Refresh prices"; }, 4000);
-  } catch (err) {
-    alert(err.message);
+    const done = await priceCards("all");
+    if (done && !done.tried) toast("No cards to price yet.");
+  } finally {
     btn.disabled = false;
     btn.textContent = "Refresh prices";
   }
 });
+
+// Sent here from the Scan link: say why, do not leave it as a silent bounce.
+if (new URLSearchParams(location.search).get("scan") === "operator-only") {
+  history.replaceState(null, "", location.pathname);
+  loadAccount().catch(() => {}).finally(() => {
+    const confirmed = !$("#verify-banner") || $("#verify-banner").classList.contains("hidden");
+    toast(confirmed
+      ? "Scan is only available on the admin account."
+      : "Scan opens once the email address is confirmed. See the banner at the top of this page.", "err");
+  });
+}
 
 /* ---------------- chart ---------------- */
 
@@ -197,7 +1095,7 @@ async function loadChart() {
 function renderChart(series) {
   const host = $("#chart");
   if (series.length < 2) {
-    host.innerHTML = '<p class="muted">Not enough price history yet — the chart fills in as the scheduler collects snapshots.</p>';
+    host.innerHTML = '<p class="muted">Not enough history yet. History fills in as prices are checked.</p>';
     return;
   }
   const css = getComputedStyle(document.documentElement);
@@ -287,13 +1185,13 @@ async function loadAlerts() {
   const data = await api("/api/alerts");
   const ul = $("#alerts-list");
   if (!data.alerts.length) {
-    ul.innerHTML = '<li class="muted">No alerts yet. They appear here when your rules fire.</li>';
+    ul.innerHTML = '<li class="muted">No alerts yet. Alerts appear here when rules fire.</li>';
     return;
   }
   ul.innerHTML = data.alerts.map((a) => `
     <li class="${a.is_read ? "" : "unread"}">
       <span>${esc(a.message)}</span>
-      <span class="alert-time">${new Date(a.created_at).toLocaleDateString()}</span>
+      <span class="alert-time">${shortDate(a.created_at)}</span>
     </li>`).join("");
 }
 
@@ -315,7 +1213,7 @@ async function loadRules() {
   const ul = $("#rules-list");
   ul.innerHTML = data.rules.map((r) => `
     <li>
-      <span>${RULE_LABELS[r.kind] ? RULE_LABELS[r.kind](r) : r.kind}
+      <span>${RULE_LABELS[r.kind] ? RULE_LABELS[r.kind](r) : esc(r.kind)}
         <span class="muted"> — ${r.card_name ? esc(r.card_name) : "all cards"}</span></span>
       <button class="btn btn-ghost rule-del" data-id="${r.id}">✕</button>
     </li>`).join("") || '<li class="muted">No rules.</li>';
@@ -344,58 +1242,86 @@ $("#rule-form").addEventListener("submit", async (e) => {
     e.target.reset();
     loadRules();
   } catch (err) {
-    alert(err.message);
+    toast(err.message, "err");
   }
 });
 
-/* ---------------- my sales & purchases ---------------- */
+/* ---------------- listings & open orders ---------------- */
 
 const ORDER_STATUS = {
-  pending_payment: '<span class="chg down">awaiting payment</span>',
-  paid: '<span class="chg up">paid</span>',
-  completed: '<span class="chg up">completed</span>',
-  cancelled: '<span class="muted">cancelled</span>',
+  pending_payment: '<span class="pill">awaiting payment</span>',
+  paid: '<span class="pill ok">paid</span>',
+  completed: '<span class="pill ok">completed</span>',
+  cancelled: '<span class="pill muted">cancelled</span>',
+  refund_due: '<span class="pill warn">refund pending</span>',
 };
 
 async function loadMarket() {
   const data = await api("/api/market/my");
-  $("#fee-note").textContent =
-    `platform fee ${data.fee_pct}% · payments: ${data.payments}`;
-  $("#t-balance").textContent = fmtUsd(data.balance);
-  $("#t-balance-sub").textContent = data.fees_recorded
-    ? `${fmtUsd(data.fees_recorded)} in platform fees` : "";
+  lib.market = data;
+  $("#fee-note").textContent = `platform fee ${data.fee_pct}% of each sale · payments: ${
+    data.payments === "stripe" ? "card (Stripe)" : "settled directly with the other person"}`;
 
-  activeListingByItem = {};
-  for (const l of data.active_listings) activeListingByItem[l.inventory_item_id] = l.listing_id;
-  markListedRows();
+  const money = $("#money-line");
+  const hasMoney = data.card_proceeds || data.paid_out || data.fees_owed;
+  money.classList.toggle("hidden", !hasMoney);
+  if (hasMoney) {
+    money.innerHTML = `
+      <span>Seller share of card sales <strong>${fmtUsd(data.card_proceeds)}</strong></span>
+      <span>Paid out <strong>${fmtUsd(data.paid_out)}</strong></span>
+      <span>Still owed to this account <strong>${fmtUsd(data.balance)}</strong></span>
+      ${data.fees_owed ? `<span>Fees owed to the site on sales settled directly <strong>${fmtUsd(data.fees_owed)}</strong></span>` : ""}`;
+  }
+  $("#operator-panel").classList.toggle("hidden", !data.is_operator);
+  if (data.is_operator) loadOperator().catch(console.error);
+
+  lib.listings = {};
+  for (const l of data.active_listings) lib.listings[l.inventory_item_id] = l;
+  for (const id of [...lib.selected]) if (lib.listings[id]) lib.selected.delete(id);
+  if (lib.tab === "have" || lib.tab === "review") renderHave();
 
   const rows = [];
   for (const l of data.active_listings) {
     rows.push(`<li>
-      <span>For sale: <strong>${esc(l.card)}</strong> at ${fmtUsd(l.price)}</span>
-      <button class="btn btn-ghost mk-cancel" data-id="${l.listing_id}">Cancel</button>
+      <span>For sale: <strong>${esc(l.card)}</strong> at ${fmtUsd(l.price)}
+        <span class="muted">market ${fmtUsd(l.market_price)} · payout ${fmtUsd(l.price - l.fee_on_sale)}</span></span>
+      <button class="btn btn-ghost mk-cancel" data-id="${l.listing_id}">Unlist</button>
     </li>`);
   }
-  for (const o of data.sales) {
-    const action = o.status === "pending_payment" && "offline" === o.payment_provider
-      ? ` <button class="btn mk-paid" data-id="${o.order_id}">Mark paid</button>` : "";
+  // Orders stay here only while someone has to act; finished ones live in
+  // the Sold and Purchased tabs.
+  for (const o of data.sales.filter((o) => o.status === "pending_payment")) {
+    const cancelBtn = `<button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}" title="The buyer never paid">Cancel order</button>`;
+    const action = o.payment_provider === "offline"
+      ? `<button class="btn mk-paid" data-id="${o.order_id}" data-card="${esc(o.card)}" data-amount="${o.amount}">Mark paid</button>${cancelBtn}`
+      : `<span class="muted">paying by card</span> ${cancelBtn}`;
     rows.push(`<li>
-      <span>Sold: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
-        <span class="muted">(you get ${fmtUsd(o.seller_proceeds)}, fee ${fmtUsd(o.platform_fee)})</span>
-        ${ORDER_STATUS[o.status] || o.status}</span>
-      <span>${action}<span class="alert-time"> ${new Date(o.created_at).toLocaleDateString()}</span></span>
+      <span>Buyer waiting: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
+        <span class="muted">payout ${fmtUsd(o.seller_proceeds)} after the ${fmtUsd(o.platform_fee)} fee</span>
+        ${ORDER_STATUS[o.status]}</span>
+      <span>${action}<span class="alert-time"> ${shortDate(o.created_at)}</span></span>
     </li>`);
   }
-  for (const o of data.purchases) {
+  for (const o of data.purchases.filter((o) => ["pending_payment", "paid"].includes(o.status))) {
     const action = o.status === "paid"
-      ? ` <button class="btn mk-complete" data-id="${o.order_id}">Card arrived</button>` : "";
+      ? `<button class="btn mk-complete" data-id="${o.order_id}">Card arrived</button>`
+      : `<button class="btn btn-ghost mk-void" data-id="${o.order_id}" data-card="${esc(o.card)}">Cancel order</button>`;
     rows.push(`<li>
-      <span>Bought: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)}
-        ${ORDER_STATUS[o.status] || o.status}</span>
-      <span>${action}<span class="alert-time"> ${new Date(o.created_at).toLocaleDateString()}</span></span>
+      <span>Buying: <strong>${esc(o.card)}</strong> for ${fmtUsd(o.amount)} ${ORDER_STATUS[o.status]}
+        ${o.status === "pending_payment" ? `<span class="muted">${o.payment_provider === "stripe"
+          ? "card checkout not finished; cancel and buy again to restart checkout"
+          : "pay the seller; the seller confirms payment"}</span>` : ""}</span>
+      <span>${action}<span class="alert-time"> ${shortDate(o.created_at)}</span></span>
     </li>`);
   }
-  $("#market-list").innerHTML = rows.join("") || '<li class="muted">Nothing yet — hit “Sell” on a card, or browse the <a href="/market">marketplace</a>.</li>';
+  $("#market-list").innerHTML = rows.join("") ||
+    '<li class="muted">No open listings or orders. <a href="/market">Browse cards for sale</a>.</li>';
+  $("#orders-count").textContent = rows.length || "";
+  const orders = $("#orders-panel");
+  if (!orders.dataset.loaded) {
+    orders.open = rows.length > 0 || !!hasMoney;
+    orders.dataset.loaded = "true";
+  }
 }
 
 $("#market-list").addEventListener("click", async (e) => {
@@ -403,16 +1329,36 @@ $("#market-list").addEventListener("click", async (e) => {
   if (!btn) return;
   try {
     if (btn.classList.contains("mk-cancel")) {
-      await api(`/api/market/listings/${btn.dataset.id}/cancel`, { method: "POST" });
+      await postJson(`/api/market/listings/${btn.dataset.id}/cancel`);
+      toast("Listing taken down.");
     } else if (btn.classList.contains("mk-paid")) {
-      if (!confirm("Confirm you received payment? The card transfers to the buyer's library.")) return;
-      await api(`/api/market/orders/${btn.dataset.id}/mark-paid`, { method: "POST" });
+      const { ok } = await askConfirm({
+        title: "Mark this order paid?",
+        html: `<p>Confirm that ${fmtUsd(Number(btn.dataset.amount))} was received for
+               <strong>${esc(btn.dataset.card)}</strong>. The card moves to the buyer's library
+               and the sale is recorded. The sale cannot be undone here.</p>`,
+        confirm: "Payment received",
+      });
+      if (!ok) return;
+      await postJson(`/api/market/orders/${btn.dataset.id}/mark-paid`);
+      toast("Sale recorded. The card is now in the buyer's library.");
+    } else if (btn.classList.contains("mk-void")) {
+      const { ok } = await askConfirm({
+        title: "Cancel this order?",
+        html: `<p>The order for <strong>${esc(btn.dataset.card)}</strong> is cancelled. No sale is recorded
+               and the card goes back on the marketplace for other buyers.</p>`,
+        confirm: "Cancel order",
+      });
+      if (!ok) return;
+      await postJson(`/api/market/orders/${btn.dataset.id}/cancel`);
+      toast("Order cancelled.");
     } else if (btn.classList.contains("mk-complete")) {
-      await api(`/api/market/orders/${btn.dataset.id}/complete`, { method: "POST" });
+      await postJson(`/api/market/orders/${btn.dataset.id}/complete`);
+      toast("Order completed.");
     }
     refreshAll();
   } catch (err) {
-    alert(err.message);
+    toast(err.message, "err");
   }
 });
 
@@ -431,10 +1377,10 @@ async function loadEbayStatus() {
     st.textContent = "No keys saved — eBay listing is off.";
   } else if (!ebayStatus.authorized) {
     st.textContent = `Keys saved (${ebayStatus.client_id_hint}, ${ebayStatus.env}). ` +
-      "Now connect your eBay account below.";
+      "Now connect the eBay account below.";
   } else {
-    st.textContent = `✓ Connected (${ebayStatus.client_id_hint}, ${ebayStatus.env}) — ` +
-      "“eBay” appears on each card in “My cards”.";
+    st.textContent = `✓ Connected (${ebayStatus.client_id_hint}, ${ebayStatus.env}). ` +
+      "“List on eBay” appears on each card in the Library.";
   }
   $("#ebay-remove").classList.toggle("hidden", !ebayStatus.configured);
   const connect = $("#ebay-connect");
@@ -452,6 +1398,7 @@ async function loadEbayStatus() {
 $("#btn-advanced").addEventListener("click", () => {
   const panel = $("#advanced-panel");
   panel.classList.toggle("hidden");
+  $("#btn-advanced").setAttribute("aria-expanded", !panel.classList.contains("hidden"));
   if (!panel.classList.contains("hidden")) {
     loadEbayStatus();
     panel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -474,12 +1421,12 @@ $("#ebay-keys-form").addEventListener("submit", async (e) => {
     e.target.reset();
     await loadEbayStatus();
   } catch (err) {
-    alert(`Could not save keys: ${err.message}`);
+    toast(`Could not save keys: ${err.message}`, "err");
   }
 });
 
 $("#ebay-remove").addEventListener("click", async () => {
-  if (!confirm("Remove your eBay keys and disconnect? Existing eBay listings are unaffected.")) return;
+  if (!confirm("Remove the eBay keys and disconnect? Existing eBay listings are unaffected.")) return;
   await api("/api/settings/ebay", { method: "DELETE" });
   await loadEbayStatus();
   loadSummary().catch(console.error);
@@ -487,7 +1434,7 @@ $("#ebay-remove").addEventListener("click", async () => {
 
 $("#ebay-authorize").addEventListener("click", async () => {
   const pasted = $("#ebay-redirect").value.trim();
-  if (!pasted) { alert("Open the consent link, approve, then paste the URL you land on."); return; }
+  if (!pasted) { toast("Open the consent link, approve, then paste the URL of the page that opens.", "err"); return; }
   try {
     await api("/api/settings/ebay/authorize", {
       method: "POST",
@@ -497,33 +1444,373 @@ $("#ebay-authorize").addEventListener("click", async () => {
     await loadEbayStatus();
     loadSummary().catch(console.error); // reveal the eBay buttons
   } catch (err) {
-    alert(`Authorization failed: ${err.message}`);
+    toast(`Authorization failed: ${err.message}`, "err");
   }
 });
 
-async function listOnEbay(itemId, suggested, btn) {
-  const raw = prompt("List on eBay for how much? ($)", suggested || "");
-  if (raw === null) return;
-  const price = parseFloat(raw);
-  if (!price || price <= 0) { alert("Enter a price greater than 0."); return; }
+const AI_NOTE = `<p class="muted">Listings go live now with a description built from the card's facts. With the box
+  ticked, each switches to an AI-written description when ready: eBay writes descriptions in batches of 10,
+  and a short batch goes within 12 hours.</p>`;
+
+async function listOnEbay(item, btn) {
+  const price = askPrice(item);
+  if (!price) { toast("This card has no price yet. Set a price or refresh prices first.", "err"); return; }
+  const { ok, checked: ai } = await askConfirm({
+    title: "List on the connected eBay account?",
+    html: `<p>Publishes 1 live eBay listing: <strong>${esc(item.name)}</strong> at ${fmtUsd(price)}${
+             item.your_price != null ? " (set price)" : ""}.</p>
+           <p>${provenanceHtml(item.provenance)}</p>${AI_NOTE}`,
+    confirm: `Publish at ${fmtUsd(price)}`,
+    checkbox: "Write the description with AI",
+  });
+  if (!ok) return;
   btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = "Listing…";
   try {
-    const res = await api("/api/settings/ebay/list-item", {
-      method: "POST",
-      body: JSON.stringify({ item_id: itemId, price }),
-    });
-    btn.textContent = "On eBay ✓";
-    alert(res.listing && res.listing.url
-      ? `Live: ${res.listing.url}`
-      : `Published (status: ${res.status}).`);
+    const res = await postJson("/api/settings/ebay/list-item", { item_id: item.id, price, ai_description: ai });
+    let said = res.listing && res.listing.url ? `Live on eBay: ${res.listing.url}` : `Published (status: ${res.status}).`;
+    if (ai) {
+      said += res.ai_description === "done" ? " The AI description is on the listing."
+        : res.ai_description ? " The AI description will replace the built one when ready."
+        : " The AI description could not be queued; the listing keeps the built one.";
+    }
+    toast(said, ai && !res.ai_description ? "err" : undefined);
   } catch (err) {
-    btn.textContent = orig;
+    toast(`eBay listing failed: ${err.message}`, "err");
+  } finally {
     btn.disabled = false;
-    alert(`eBay listing failed: ${err.message}`);
   }
 }
+
+// Where eBay is connected: Advanced settings, opened and scrolled to.
+function showEbaySetup() {
+  const form = $("#ebay-keys-form");
+  $("#advanced-panel").classList.remove("hidden");
+  $("#btn-advanced").setAttribute("aria-expanded", "true");
+  form.scrollIntoView({ behavior: "smooth", block: "center" });
+  toast(ebayStatus.configured ? "Connect the eBay account here to list on eBay."
+    : "Add eBay keys here to list on eBay.");
+}
+
+// The ticked cards, each as its own eBay listing, at your price or market.
+async function listSelectedOnEbay() {
+  if (!ebayStatus.authorized) { showEbaySetup(); return; }
+  const typed = parseFloat($("#bulk-price").value);
+  const each = typed > 0 ? Math.round(typed * 100) / 100 : null;
+  const picked = lib.items.filter((it) => lib.selected.has(it.id));
+  const ready = picked.filter((it) => (each ?? askPrice(it)) > 0 && (it.image_url || it.photo_url));
+  const noPrice = picked.filter((it) => !((each ?? askPrice(it)) > 0)).length;
+  const noPhoto = picked.filter((it) => (each ?? askPrice(it)) > 0 && !(it.image_url || it.photo_url)).length;
+  if (!ready.length) {
+    toast(noPrice ? "None of the selected cards has a price. Enter a price for each, or use Set price."
+      : "The selected cards have no photo eBay can show.", "err");
+    return;
+  }
+  const total = ready.reduce((sum, it) => sum + (each ?? askPrice(it)), 0);
+  const { ok, checked: ai } = await askConfirm({
+    title: `List ${ready.length === 1 ? "1 card" : ready.length + " cards"} on the connected eBay account?`,
+    html: `<p>Publishes <strong>${ready.length}</strong> live eBay ${ready.length === 1 ? "listing" : "listings"},
+             ${fmtUsd(total)} in total, ${each != null ? `each at ${fmtUsd(each)}` : "each at the set price, or market price where none is set"}.</p>
+           ${noPrice ? `<p class="muted">${noPrice} left out: no price.</p>` : ""}
+           ${noPhoto ? `<p class="muted">${noPhoto} left out: no photo eBay can show.</p>` : ""}${AI_NOTE}`,
+    confirm: `Publish ${ready.length} to eBay`,
+    checkbox: "Write descriptions with AI",
+  });
+  if (!ok) return;
+  const btn = $("#btn-bulk-ebay");
+  btn.disabled = true;
+  let listed = 0, firstError = "";
+  for (const [i, it] of ready.entries()) {
+    btn.textContent = `Listing ${i + 1} of ${ready.length}…`;
+    try {
+      await postJson("/api/settings/ebay/list-item", { item_id: it.id, price: each ?? askPrice(it), ai_description: ai });
+      listed += 1;
+      lib.selected.delete(it.id);
+    } catch (err) {
+      firstError = firstError || `${it.name}: ${err.message}`;
+    }
+  }
+  btn.disabled = false;
+  btn.textContent = "List on eBay";
+  const failed = ready.length - listed;
+  toast(`${listed} of ${ready.length} listed on eBay.${failed ? ` ${failed} failed. First error: ${firstError}` : ""}`,
+    failed ? "err" : undefined);
+  refreshAll();
+}
+$("#btn-bulk-ebay").addEventListener("click", listSelectedOnEbay);
+
+// Your own price for a card: what it lists at. Empty goes back to market.
+async function setYourPrice(item) {
+  const { ok } = await askConfirm({
+    title: `Price for ${item.name}`,
+    html: `<p>Market price ${fmtUsd(item.price)}. The set price is what the card lists at; the market price stays
+             shown alongside.</p>
+           <label>Set price <input id="your-price-input" type="number" min="0.01" step="0.01" inputmode="decimal"
+             value="${item.your_price ?? ""}" placeholder="Empty uses the market price"></label>`,
+    confirm: "Save price",
+  });
+  if (!ok) return;
+  const raw = $("#your-price-input").value.trim();
+  await api(`/api/inventory/${item.id}`, { method: "PATCH", body: JSON.stringify({ your_price: raw === "" ? null : raw }) });
+  toast(raw === "" ? `${item.name} uses the market price again.` : `${item.name}: set price is ${fmtUsd(parseFloat(raw))}.`);
+  refreshAll();
+}
+
+// A flagged card: the person looks at what is flagged and the prices, keeps
+// the price or types another, and saves. Saving clears the flag for good;
+// Cancel leaves the card flagged.
+async function resolveItem(item) {
+  const p = item.provenance || {};
+  const names = { tcgplayer: "TCGplayer", cardmarket: "Cardmarket", ebay_30d: "eBay" };
+  const prices = Object.keys(names).filter((k) => p.sources && p.sources[k] != null)
+    .map((k) => `${names[k]} ${fmtUsd(p.sources[k])}`).join(", ");
+  const { ok } = await askConfirm({
+    title: `Resolve ${item.name}`,
+    html: `<p class="flag-note">${esc(p.notes || "Check the price before listing.")}</p>
+           <p>${esc([item.set_name, item.card_number ? "#" + item.card_number : ""].filter(Boolean).join(" · "))}</p>
+           <p>Market price ${fmtUsd(item.price)}${prices ? ` (${esc(prices)})` : ""}.</p>
+           <label>Price <input id="resolve-price-input" type="number" min="0.01" step="0.01" inputmode="decimal"
+             value="${item.your_price ?? ""}" placeholder="Empty keeps the market price"></label>
+           <p class="muted small">Save clears the flag. Cancel leaves the card flagged.</p>`,
+    confirm: "Save",
+  });
+  if (!ok) return;
+  const raw = $("#resolve-price-input").value.trim();
+  const body = { checked: true };
+  if (raw !== "" || item.your_price != null) body.your_price = raw === "" ? null : raw;
+  await api(`/api/inventory/${item.id}`, { method: "PATCH", body: JSON.stringify(body) });
+  toast(`${item.name} is resolved.`);
+  refreshAll();
+}
+
+/* ---------------- account: email confirmation ---------------- */
+
+async function loadAccount() {
+  const acct = await api("/api/account");
+  lib.account = acct;
+  const banner = $("#verify-banner");
+  banner.classList.toggle("hidden", acct.verified);
+  if (!acct.verified) {
+    $("#verify-text").textContent =
+      (acct.mail === "smtp"
+        ? ` Open the link emailed to ${acct.email}.`
+        : ` Email is not set up on this site yet, so no link was sent to ${acct.email}.`);
+  }
+}
+
+$("#btn-resend").addEventListener("click", async () => {
+  const btn = $("#btn-resend");
+  btn.disabled = true;
+  try {
+    const res = await postJson("/api/account/resend-verification");
+    toast(res.verified ? "This address is already confirmed."
+      : res.via === "smtp" ? "Sent. Check the inbox."
+      : "Email is not set up on this site, so nothing was sent.", res.verified || res.via === "smtp" ? undefined : "err");
+    loadAccount().catch(() => {});
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ---------------- seller: automatic payouts ---------------- */
+
+async function loadPayoutAccount() {
+  const p = await api("/api/payouts/account");
+  const line = $("#payout-line");
+  line.classList.toggle("hidden", !p.available);
+  if (!p.available) return;
+  const label = { none: "Set up payouts", incomplete: "Continue payout setup" }[p.state];
+  line.innerHTML = `<span><strong>Payouts${p.state === "active" ? " are on" : ""}.</strong> ${esc(p.next)}</span>
+    ${label ? `<button class="btn btn-primary" id="btn-connect-payouts">${label}</button>` : ""}`;
+  const btn = $("#btn-connect-payouts");
+  if (btn) btn.addEventListener("click", async () => {
+    const { ok } = await askConfirm({
+      title: "Set up payouts with Stripe?",
+      html: `<p>Stripe opens next for identity details and a bank account. Stripe holds the details; this app never sees any.</p>
+             <p class="muted">After that, the seller share of each card sale is sent automatically, including anything already owed.</p>`,
+      confirm: "Continue to Stripe",
+    });
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const res = await postJson("/api/payouts/connect");
+      window.location = res.url;
+    } catch (err) {
+      btn.disabled = false;
+      toast(err.message, "err");
+    }
+  });
+}
+
+$("#attention-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest('[data-act="return-card"]');
+  if (!btn) return;
+  const { ok } = await askConfirm({
+    title: "Return this card to the seller?",
+    html: `<p><strong>${esc(btn.dataset.card)}</strong> moves from the buyer's library back to the seller's.
+           The return shows in the activity of both accounts. Confirm only once the buyer has sent the card back.</p>`,
+    confirm: "Return card",
+  });
+  if (!ok) return;
+  try {
+    await postJson(`/api/admin/orders/${btn.dataset.order}/return-card`);
+    toast("Card returned to the seller's library.");
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+$("#btn-check-refunds").addEventListener("click", async () => {
+  const btn = $("#btn-check-refunds");
+  btn.disabled = true; btn.textContent = "Checking…";
+  try {
+    const r = await postJson("/api/admin/refunds/check");
+    toast(r.errors.length ? `Checked ${r.checked} orders. ${r.errors.length} could not be read: ${r.errors[0]}`
+      : r.changes.length ? `Checked ${r.checked} orders. ${r.changes.join(". ")}.`
+      : `Checked ${r.checked} recent card orders. Nothing was refunded or disputed.`,
+      r.errors.length ? "err" : "ok");
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false; btn.textContent = "Check Stripe for refunds";
+  }
+});
+
+$("#btn-run-payouts").addEventListener("click", async () => {
+  const btn = $("#btn-run-payouts");
+  const { ok } = await askConfirm({
+    title: "Pay out now?",
+    html: `<p>Every seller who has finished payout setup is sent the amount owed from card sales, by Stripe transfer from the site account.</p>
+           <p class="muted">Sellers without payout setup are skipped. Nobody is paid twice.</p>`,
+    confirm: "Send payouts",
+  });
+  if (!ok) return;
+  btn.disabled = true;
+  try {
+    const r = await postJson("/api/admin/payouts/run");
+    toast(r.errors.length
+      ? `Sent ${fmtUsd(r.transferred)} for ${r.orders} order(s). ${r.errors.length} failed: ${r.errors[0]}`
+      : r.orders ? `Sent ${fmtUsd(r.transferred)} across ${r.orders} order(s).`
+      : "Nothing to send: nobody with payout setup is owed anything.", r.errors.length ? "err" : "ok");
+    loadMarket().catch(console.error);
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ---------------- operator: seller balances and payouts ---------------- */
+
+let payoutSeller = null;
+
+async function loadOperator() {
+  const data = await api("/api/admin/balances");
+  const due = $("#refunds-due");
+  due.classList.toggle("hidden", !data.refunds_due.length);
+  due.innerHTML = data.refunds_due.map((r) =>
+    `<p class="flag-note">Refund ${fmtUsd(r.amount)} to ${esc(r.buyer)} by hand in the Stripe dashboard
+     (order ${r.order_id}, session ${esc(r.payment_ref)}). The automatic refund was refused.</p>`).join("");
+  const attention = $("#attention-list");
+  attention.classList.toggle("hidden", !data.attention.length);
+  attention.innerHTML = data.attention.map((a) => `<li>
+      <span><strong>${esc(a.card || "Card")}</strong>, order ${a.order_id}, ${fmtUsd(a.amount)}:
+        ${a.status === "disputed"
+          ? '<span class="pill warn">disputed</span> the buyer\'s bank is deciding; the seller\'s payout is on hold'
+          : '<span class="pill">refunded</span> the money went back to the buyer'}
+        <span class="muted">buyer ${esc(a.buyer)} · seller ${esc(a.seller)}</span>
+        ${a.seller_still_holds ? `<span class="flag-note">Stripe could not take back ${fmtUsd(a.seller_still_holds)} from the seller. The seller owes the site that amount.</span>` : ""}</span>
+      ${a.card_with_buyer ? `<button class="btn" data-act="return-card" data-order="${a.order_id}" data-card="${esc(a.card || "this card")}">Return card to seller</button>` : ""}
+    </li>`).join("");
+  $("#operator-body").innerHTML = data.sellers.map((r) => `<tr data-seller="${r.seller_id}">
+      <td>${esc(r.email)}</td>
+      <td class="num">${fmtUsd(r.card_proceeds)}</td>
+      <td class="num">${fmtUsd(r.paid_out)}</td>
+      <td class="num"><strong>${r.balance < 0 ? `<span class="flag-note">owes ${fmtUsd(-r.balance)}</span>` : fmtUsd(r.balance)}</strong></td>
+      <td class="num">${r.fees_owed ? fmtUsd(r.fees_owed) : "—"}</td>
+      <td>${r.auto_payouts ? '<span class="pill ok">automatic</span>' : '<span class="pill">by hand</span>'}</td>
+      <td><div class="row-actions">${r.balance > 0
+        ? `<button class="btn" data-act="payout" data-email="${esc(r.email)}" data-balance="${r.balance}">Record payout</button>` : ""}</div></td>
+    </tr>`).join("") || emptyRow(7, "No sales have been paid for yet.");
+}
+
+$("#operator-body").addEventListener("click", (e) => {
+  const btn = e.target.closest('[data-act="payout"]');
+  if (!btn) return;
+  payoutSeller = Number(btn.closest("tr").dataset.seller);
+  const form = $("#payout-form");
+  form.reset();
+  $("#payout-title").textContent = `Record a payout to ${btn.dataset.email}`;
+  form.amount.value = btn.dataset.balance;
+  form.amount.max = btn.dataset.balance;
+  openDialog($("#payout-dialog"));
+});
+
+$("#payout-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try {
+    const res = await postJson("/api/admin/payouts", { ...f, seller_id: payoutSeller });
+    $("#payout-dialog").close();
+    toast(`Payout recorded. ${fmtUsd(res.balance)} still owed.`);
+    loadMarket().catch(console.error);
+  } catch (err) {
+    toast(err.message, "err");
+  }
+});
+
+/* ---------------- coming back from a link: email, payout setup ---------------- */
+
+(function linkOutcome() {
+  const params = new URLSearchParams(location.search);
+  const messages = {
+    verify: {
+      sent: ["Account created. Confirm the email address with the emailed link to start selling and buying.", "ok"],
+      done: ["Email confirmed. Selling, buying and payouts are open.", "ok"],
+      expired: ["That link has expired. Use “Send the link again” for a new one.", "err"],
+      invalid: ["That link is not valid any more. Use “Send the link again” for a new one.", "err"],
+      needed: ["Confirm the email address first.", "err"],
+      wrong_account: ["That link belongs to a different account. Log in to that account, then open the link again.", "err"],
+    },
+    reset: {
+      done: ["Password changed. Other browsers logged in to this account were signed out.", "ok"],
+    },
+    payouts: {
+      active: ["Payouts are set up. The seller share of card sales is sent automatically.", "ok"],
+      incomplete: ["Stripe still needs a few details before paying out. Use “Continue payout setup”.", "err"],
+      retry: ["That Stripe link expired. Use “Continue payout setup” for a new one.", "err"],
+      unknown: ["Could not reach Stripe to check the payout setup. Reload to check again.", "err"],
+    },
+  };
+  for (const [key, table] of Object.entries(messages)) {
+    const hit = table[params.get(key)];
+    if (!hit) continue;
+    if (!params.get("payment")) history.replaceState(null, "", location.pathname);
+    setTimeout(() => toast(hit[0], hit[1]), 300);
+  }
+})();
+
+/* ---------------- coming back from card checkout ---------------- */
+
+(function paymentOutcome() {
+  const params = new URLSearchParams(location.search);
+  const outcome = params.get("payment");
+  if (!outcome) return;
+  const messages = {
+    paid: ["Payment received. The card is in the library, under Purchased.", "ok"],
+    pending: ["Stripe has not confirmed the payment yet. The order stays open; this page updates when it clears.", "ok"],
+    cancelled: ["Checkout was cancelled. No charge was made.", "ok"],
+    problem: ["The payment could not be matched to the order, so the card was not transferred. If a charge was made for a card that was no longer available, the charge is refunded automatically; otherwise contact the seller.", "err"],
+    unknown: ["Could not reach Stripe to confirm the payment. The order stays open and is checked again shortly.", "err"],
+  };
+  const [text, kind] = messages[outcome] || messages.unknown;
+  history.replaceState(null, "", location.pathname);
+  // After the first paint, so the status line is not lost in the page load.
+  setTimeout(() => toast(text, kind), 300);
+})();
 
 /* ---------------- boot ---------------- */
 
@@ -531,11 +1818,26 @@ function refreshAll() {
   loadEbayStatus()
     .catch(() => {})
     .then(() => loadSummary().then(loadMarket))
-    .catch(console.error);
+    .catch((err) => toast(err.message, "err"));
+  loadAccount().catch(console.error);
+  loadPayoutAccount().catch(console.error);
+  loadLedger().catch(console.error);
   loadChart().catch(console.error);
   loadAlerts().catch(console.error);
   loadRules().catch(console.error);
 }
 
 refreshAll();
-setInterval(() => { loadSummary().then(loadMarket).catch(() => {}); loadAlerts().catch(() => {}); }, 60_000);
+// No timer: an idle open tab asks for nothing (every request wakes the
+// database). Coming back to the tab reads the library once.
+let lastLook = Date.now();
+const lookAgain = () => {
+  if (document.hidden || Date.now() - lastLook < 60_000) return;
+  if (document.querySelector("dialog[open]")) return;  // don't redraw under an open form
+  lastLook = Date.now();
+  loadSummary().then(loadMarket).catch(() => {});
+  loadLedger().catch(() => {});
+  loadAlerts().catch(() => {});
+};
+document.addEventListener("visibilitychange", lookAgain);
+window.addEventListener("focus", lookAgain);

@@ -15,7 +15,8 @@ def test_single_source_low_confidence():
     r = aggregate(1.50, None, None)
     assert r.price == 1.50
     assert r.confidence == 0.5
-    assert r.needs_review  # below 0.6 threshold
+    # One source is noted beside the price; it does not hold the card back.
+    assert not r.needs_review and r.notes == "Single pricing source."
 
 
 def test_price_is_median_not_max():
@@ -33,26 +34,23 @@ def test_ebay_max_excluded_from_aggregate():
     assert r.sources["ebay_max_30d"] == 40.0
 
 
-def test_outlier_dropped_with_three_sources():
-    # 100 is > 2.5x the median of [10, 11, 100]; drop it, median the rest.
+def test_three_sources_far_apart_use_the_middle_one_and_say_so():
     r = aggregate(10.0, 100.0, None, cardmarket_trend_usd=11.0)
-    assert r.price == 10.5
-    assert r.outlier_flag
-    assert r.needs_review
+    assert r.price == 11.0
+    assert r.outlier_flag and not r.needs_review
+    assert r.notes == "Prices vary: TCGplayer $10.00, Cardmarket $11.00, eBay $100.00."
 
 
-def test_two_sources_wild_disagreement_takes_lower():
+def test_two_sources_far_apart_use_their_average():
     r = aggregate(2.0, 40.0, None)
-    assert r.price == 2.0
-    assert r.outlier_flag
-    assert r.needs_review
+    assert r.price == 21.0
+    assert r.outlier_flag and not r.needs_review
 
 
-def test_tcg_cm_variant_mismatch_drops_smaller():
-    # >5x apart: CM larger → CM dropped, TCG kept.
+def test_tcg_and_cardmarket_far_apart_are_averaged_and_noted():
     r = aggregate(0.08, None, None, cardmarket_trend_usd=7.96)
-    assert r.price == 0.08
-    assert "variant mismatch" in r.notes
+    assert r.price == 4.02
+    assert r.notes == "Prices vary: TCGplayer $0.08, Cardmarket $7.96."
 
 
 def test_cheap_card_noise_floor_full_confidence():

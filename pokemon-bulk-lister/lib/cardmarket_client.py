@@ -43,6 +43,8 @@ from typing import Optional
 
 import requests
 
+from lib import price_notes
+
 PRICE_GUIDE_URL = "https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_6.json"
 PRODUCTS_URL = "https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_6.json"
 
@@ -154,11 +156,7 @@ class CardmarketPriceGuide:
             return round(statistics.median(values), 2), f"cardmarket name-match (n={n}, printings agree)"
         p25 = values[n // 4]
         if p25 <= BULK_CEILING_EUR:
-            return round(p25, 2), (
-                f"cardmarket bulk-floor estimate (p25 of {n} printings — conservative; "
-                "verify if this could be a special print)"
-            )
-        return None, (
-            f"cardmarket printings disagree across {n} candidates above bulk range — "
-            "name-only match too ambiguous"
-        )
+            # p25 of the printings: a conservative bulk estimate.
+            return round(p25, 2), price_notes.CM_ESTIMATE
+        # The printings disagree above bulk range: too ambiguous to use.
+        return None, f"cardmarket printings disagree across {n} candidates; name match too ambiguous"

@@ -1,0 +1,879 @@
+{
+"generated_at": "2026-11-10",
+"sets": {
+"30C": {
+"ids": [
+"me55",
+"me55c"
+],
+"name": "30th Celebration"
+},
+"AOR": {
+"ids": [
+"xy7"
+],
+"name": "Ancient Origins"
+},
+"AQ": {
+"ids": [
+"ecard2"
+],
+"name": "Aquapolis"
+},
+"AR": {
+"ids": [
+"pl4"
+],
+"name": "Arceus"
+},
+"ASC": {
+"ids": [
+"me2pt5"
+],
+"name": "Ascended Heroes"
+},
+"ASR": {
+"ids": [
+"swsh10",
+"swsh10tg"
+],
+"name": "Astral Radiance"
+},
+"B2": {
+"ids": [
+"base4"
+],
+"name": "Base Set 2"
+},
+"BCR": {
+"ids": [
+"bw7"
+],
+"name": "Boundaries Crossed"
+},
+"BKP": {
+"ids": [
+"xy9"
+],
+"name": "BREAKpoint"
+},
+"BKT": {
+"ids": [
+"xy8"
+],
+"name": "BREAKthrough"
+},
+"BLK": {
+"ids": [
+"zsv10pt5"
+],
+"name": "Black Bolt"
+},
+"BLW": {
+"ids": [
+"bw1"
+],
+"name": "Black & White"
+},
+"BP": {
+"ids": [
+"bp"
+],
+"name": "Best of Game"
+},
+"BRS": {
+"ids": [
+"swsh9",
+"swsh9tg"
+],
+"name": "Brilliant Stars"
+},
+"BS": {
+"ids": [
+"base1"
+],
+"name": "Base"
+},
+"BST": {
+"ids": [
+"swsh5"
+],
+"name": "Battle Styles"
+},
+"BUS": {
+"ids": [
+"sm3"
+],
+"name": "Burning Shadows"
+},
+"CEC": {
+"ids": [
+"sm12"
+],
+"name": "Cosmic Eclipse"
+},
+"CEL": {
+"ids": [
+"cel25",
+"cel25c"
+],
+"name": "Celebrations"
+},
+"CES": {
+"ids": [
+"sm7"
+],
+"name": "Celestial Storm"
+},
+"CG": {
+"ids": [
+"ex14"
+],
+"name": "Crystal Guardians"
+},
+"CIN": {
+"ids": [
+"sm4"
+],
+"name": "Crimson Invasion"
+},
+"CL": {
+"ids": [
+"col1"
+],
+"name": "Call of Legends"
+},
+"CPA": {
+"ids": [
+"swsh35"
+],
+"name": "Champion's Path"
+},
+"CRE": {
+"ids": [
+"swsh6"
+],
+"name": "Chilling Reign"
+},
+"CRI": {
+"ids": [
+"me4"
+],
+"name": "Chaos Rising"
+},
+"CRZ": {
+"ids": [
+"swsh12pt5",
+"swsh12pt5gg"
+],
+"name": "Crown Zenith"
+},
+"DAA": {
+"ids": [
+"swsh3"
+],
+"name": "Darkness Ablaze"
+},
+"DCR": {
+"ids": [
+"dc1"
+],
+"name": "Double Crisis"
+},
+"DET": {
+"ids": [
+"det1"
+],
+"name": "Detective Pikachu"
+},
+"DEX": {
+"ids": [
+"bw5"
+],
+"name": "Dark Explorers"
+},
+"DF": {
+"ids": [
+"ex15"
+],
+"name": "Dragon Frontiers"
+},
+"DLR": {
+"ids": [
+"me6"
+],
+"name": "Delta Reign"
+},
+"DP": {
+"ids": [
+"dp1"
+],
+"name": "Diamond & Pearl"
+},
+"DR": {
+"ids": [
+"ex3"
+],
+"name": "Dragon"
+},
+"DRI": {
+"ids": [
+"sv10"
+],
+"name": "Destined Rivals"
+},
+"DRM": {
+"ids": [
+"sm75"
+],
+"name": "Dragon Majesty"
+},
+"DRV": {
+"ids": [
+"dv1"
+],
+"name": "Dragon Vault"
+},
+"DRX": {
+"ids": [
+"bw6"
+],
+"name": "Dragons Exalted"
+},
+"DS": {
+"ids": [
+"ex11"
+],
+"name": "Delta Species"
+},
+"DX": {
+"ids": [
+"ex8"
+],
+"name": "Deoxys"
+},
+"EM": {
+"ids": [
+"ex9"
+],
+"name": "Emerald"
+},
+"EPO": {
+"ids": [
+"bw2"
+],
+"name": "Emerging Powers"
+},
+"EVO": {
+"ids": [
+"xy12"
+],
+"name": "Evolutions"
+},
+"EVS": {
+"ids": [
+"swsh7"
+],
+"name": "Evolving Skies"
+},
+"EX": {
+"ids": [
+"ecard1"
+],
+"name": "Expedition Base Set"
+},
+"FCO": {
+"ids": [
+"xy10"
+],
+"name": "Fates Collide"
+},
+"FFI": {
+"ids": [
+"xy3"
+],
+"name": "Furious Fists"
+},
+"FLF": {
+"ids": [
+"xy2"
+],
+"name": "Flashfire"
+},
+"FLI": {
+"ids": [
+"sm6"
+],
+"name": "Forbidden Light"
+},
+"FO": {
+"ids": [
+"base3"
+],
+"name": "Fossil"
+},
+"FST": {
+"ids": [
+"swsh8"
+],
+"name": "Fusion Strike"
+},
+"FUT20": {
+"ids": [
+"fut20"
+],
+"name": "Pok\u00e9mon Futsal Collection"
+},
+"G1": {
+"ids": [
+"gym1"
+],
+"name": "Gym Heroes"
+},
+"G2": {
+"ids": [
+"gym2"
+],
+"name": "Gym Challenge"
+},
+"GE": {
+"ids": [
+"dp4"
+],
+"name": "Great Encounters"
+},
+"GEN": {
+"ids": [
+"g1"
+],
+"name": "Generations"
+},
+"GRI": {
+"ids": [
+"sm2"
+],
+"name": "Guardians Rising"
+},
+"HIF": {
+"ids": [
+"sm115",
+"sma"
+],
+"name": "Hidden Fates"
+},
+"HL": {
+"ids": [
+"ex5"
+],
+"name": "Hidden Legends"
+},
+"HP": {
+"ids": [
+"ex13"
+],
+"name": "Holon Phantoms"
+},
+"HS": {
+"ids": [
+"hgss1"
+],
+"name": "HeartGold & SoulSilver"
+},
+"JTG": {
+"ids": [
+"sv9"
+],
+"name": "Journey Together"
+},
+"JU": {
+"ids": [
+"base2"
+],
+"name": "Jungle"
+},
+"KSS": {
+"ids": [
+"xy0"
+],
+"name": "Kalos Starter Set"
+},
+"LA": {
+"ids": [
+"dp6"
+],
+"name": "Legends Awakened"
+},
+"LC": {
+"ids": [
+"base6"
+],
+"name": "Legendary Collection"
+},
+"LM": {
+"ids": [
+"ex12"
+],
+"name": "Legend Maker"
+},
+"LOR": {
+"ids": [
+"swsh11",
+"swsh11tg"
+],
+"name": "Lost Origin"
+},
+"LOT": {
+"ids": [
+"sm8"
+],
+"name": "Lost Thunder"
+},
+"LTR": {
+"ids": [
+"bw11"
+],
+"name": "Legendary Treasures"
+},
+"MA": {
+"ids": [
+"ex4"
+],
+"name": "Team Magma vs Team Aqua"
+},
+"MD": {
+"ids": [
+"dp5"
+],
+"name": "Majestic Dawn"
+},
+"MEG": {
+"ids": [
+"me1"
+],
+"name": "Mega Evolution"
+},
+"MEW": {
+"ids": [
+"sv3pt5"
+],
+"name": "151"
+},
+"MT": {
+"ids": [
+"dp2"
+],
+"name": "Mysterious Treasures"
+},
+"N1": {
+"ids": [
+"neo1"
+],
+"name": "Neo Genesis"
+},
+"N2": {
+"ids": [
+"neo2"
+],
+"name": "Neo Discovery"
+},
+"N3": {
+"ids": [
+"neo3"
+],
+"name": "Neo Revelation"
+},
+"N4": {
+"ids": [
+"neo4"
+],
+"name": "Neo Destiny"
+},
+"NVI": {
+"ids": [
+"bw3"
+],
+"name": "Noble Victories"
+},
+"NXD": {
+"ids": [
+"bw4"
+],
+"name": "Next Destinies"
+},
+"OBF": {
+"ids": [
+"sv3"
+],
+"name": "Obsidian Flames"
+},
+"PAF": {
+"ids": [
+"sv4pt5"
+],
+"name": "Paldean Fates"
+},
+"PAL": {
+"ids": [
+"sv2"
+],
+"name": "Paldea Evolved"
+},
+"PAR": {
+"ids": [
+"sv4"
+],
+"name": "Paradox Rift"
+},
+"PBL": {
+"ids": [
+"me5"
+],
+"name": "Pitch Black"
+},
+"PFL": {
+"ids": [
+"me2"
+],
+"name": "Phantasmal Flames"
+},
+"PGO": {
+"ids": [
+"pgo"
+],
+"name": "Pok\u00e9mon GO"
+},
+"PHF": {
+"ids": [
+"xy4"
+],
+"name": "Phantom Forces"
+},
+"PK": {
+"ids": [
+"ex16"
+],
+"name": "Power Keepers"
+},
+"PL": {
+"ids": [
+"pl1"
+],
+"name": "Platinum"
+},
+"PLB": {
+"ids": [
+"bw10"
+],
+"name": "Plasma Blast"
+},
+"PLF": {
+"ids": [
+"bw9"
+],
+"name": "Plasma Freeze"
+},
+"PLS": {
+"ids": [
+"bw8"
+],
+"name": "Plasma Storm"
+},
+"POR": {
+"ids": [
+"me3"
+],
+"name": "Perfect Order"
+},
+"PR": {
+"ids": [
+"basep"
+],
+"name": "Wizards Black Star Promos"
+},
+"PR-BLW": {
+"ids": [
+"bwp"
+],
+"name": "BW Black Star Promos"
+},
+"PR-DPP": {
+"ids": [
+"dpp"
+],
+"name": "DP Black Star Promos"
+},
+"PR-HS": {
+"ids": [
+"hsp"
+],
+"name": "HGSS Black Star Promos"
+},
+"PR-NP": {
+"ids": [
+"np"
+],
+"name": "Nintendo Black Star Promos"
+},
+"PR-SM": {
+"ids": [
+"smp"
+],
+"name": "SM Black Star Promos"
+},
+"PR-SV": {
+"ids": [
+"svp"
+],
+"name": "Scarlet & Violet Black Star Promos"
+},
+"PR-SW": {
+"ids": [
+"swshp"
+],
+"name": "SWSH Black Star Promos"
+},
+"PR-XY": {
+"ids": [
+"xyp"
+],
+"name": "XY Black Star Promos"
+},
+"PRC": {
+"ids": [
+"xy5"
+],
+"name": "Primal Clash"
+},
+"PRE": {
+"ids": [
+"sv8pt5"
+],
+"name": "Prismatic Evolutions"
+},
+"RCL": {
+"ids": [
+"swsh2"
+],
+"name": "Rebel Clash"
+},
+"RG": {
+"ids": [
+"ex6"
+],
+"name": "FireRed & LeafGreen"
+},
+"ROS": {
+"ids": [
+"xy6"
+],
+"name": "Roaring Skies"
+},
+"RR": {
+"ids": [
+"pl2"
+],
+"name": "Rising Rivals"
+},
+"RS": {
+"ids": [
+"ex1"
+],
+"name": "Ruby & Sapphire"
+},
+"SCR": {
+"ids": [
+"sv7"
+],
+"name": "Stellar Crown"
+},
+"SF": {
+"ids": [
+"dp7"
+],
+"name": "Stormfront"
+},
+"SFA": {
+"ids": [
+"sv6pt5"
+],
+"name": "Shrouded Fable"
+},
+"SHF": {
+"ids": [
+"swsh45",
+"swsh45sv"
+],
+"name": "Shining Fates"
+},
+"SIT": {
+"ids": [
+"swsh12",
+"swsh12tg"
+],
+"name": "Silver Tempest"
+},
+"SK": {
+"ids": [
+"ecard3"
+],
+"name": "Skyridge"
+},
+"SLG": {
+"ids": [
+"sm35"
+],
+"name": "Shining Legends"
+},
+"SS": {
+"ids": [
+"ex2"
+],
+"name": "Sandstorm"
+},
+"SSH": {
+"ids": [
+"swsh1"
+],
+"name": "Sword & Shield"
+},
+"SSP": {
+"ids": [
+"sv8"
+],
+"name": "Surging Sparks"
+},
+"STS": {
+"ids": [
+"xy11"
+],
+"name": "Steam Siege"
+},
+"SUM": {
+"ids": [
+"sm1"
+],
+"name": "Sun & Moon"
+},
+"SV": {
+"ids": [
+"pl3"
+],
+"name": "Supreme Victors"
+},
+"SVE": {
+"ids": [
+"sve"
+],
+"name": "Scarlet & Violet Energies"
+},
+"SVI": {
+"ids": [
+"sv1"
+],
+"name": "Scarlet & Violet"
+},
+"SVP": {
+"ids": [
+"svp"
+],
+"name": "Scarlet & Violet Black Star Promos"
+},
+"SW": {
+"ids": [
+"dp3"
+],
+"name": "Secret Wonders"
+},
+"TEF": {
+"ids": [
+"sv5"
+],
+"name": "Temporal Forces"
+},
+"TEU": {
+"ids": [
+"sm9"
+],
+"name": "Team Up"
+},
+"TM": {
+"ids": [
+"hgss4"
+],
+"name": "HS\u2014Triumphant"
+},
+"TR": {
+"ids": [
+"base5"
+],
+"name": "Team Rocket"
+},
+"TRR": {
+"ids": [
+"ex7"
+],
+"name": "Team Rocket Returns"
+},
+"TWM": {
+"ids": [
+"sv6"
+],
+"name": "Twilight Masquerade"
+},
+"UD": {
+"ids": [
+"hgss3"
+],
+"name": "HS\u2014Undaunted"
+},
+"UF": {
+"ids": [
+"ex10"
+],
+"name": "Unseen Forces"
+},
+"UL": {
+"ids": [
+"hgss2"
+],
+"name": "HS\u2014Unleashed"
+},
+"UNB": {
+"ids": [
+"sm10"
+],
+"name": "Unbroken Bonds"
+},
+"UNM": {
+"ids": [
+"sm11"
+],
+"name": "Unified Minds"
+},
+"UPR": {
+"ids": [
+"sm5"
+],
+"name": "Ultra Prism"
+},
+"VIV": {
+"ids": [
+"swsh4"
+],
+"name": "Vivid Voltage"
+},
+"WHT": {
+"ids": [
+"rsv10pt5"
+],
+"name": "White Flare"
+},
+"XY": {
+"ids": [
+"xy1"
+],
+"name": "XY"
+}
+},
+"source": "pokemontcg.io /v2/sets (ptcgoCode)"
+}

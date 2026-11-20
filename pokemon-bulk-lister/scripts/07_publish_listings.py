@@ -139,7 +139,8 @@ def main() -> int:
     if "ebay" in sites:
         rc |= _publish_ebay(cards, cards_path, args.dry_run)
     if "tcgplayer" in sites:
-        path = _ensure_csv("tcgplayer_bulk.csv", gen.tcgplayer_rows, cards, out_dir)
+        catalog = gen._load_tcg_catalog()
+        path = _ensure_csv("tcgplayer_bulk.csv", lambda cs: gen.tcgplayer_rows(cs, catalog), cards, out_dir)
         rc |= _publish_portal("tcgplayer", path, args.dry_run)
     if "whatnot" in sites:
         path = _ensure_csv("whatnot_seller_hub.csv", gen.whatnot_rows, cards, out_dir)

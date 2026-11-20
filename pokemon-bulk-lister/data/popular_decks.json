@@ -1,0 +1,2362 @@
+{
+ "source": "Limitless TCG (play.limitlesstcg.com)",
+ "format": "STANDARD",
+ "fetched_at": "2026-11-10T23:18:22Z",
+ "tournaments": [
+  {
+   "id": "6a8723725a30714095575300",
+   "name": "CHAMPIONSHIP OF DOOM! TEN!",
+   "date": "2026-11-07",
+   "players": 494
+  },
+  {
+   "id": "6aea2850e94eae0f947467c5",
+   "name": "\ud83c\udfc6Moujii's Dojo\ud83c\udfc6 (Late Registration Available!)",
+   "date": "2026-11-09",
+   "players": 236
+  },
+  {
+   "id": "6ae901a50c463890f3049d40",
+   "name": "Sunny's Weekly #281 My Friend Rayquaza :D",
+   "date": "2026-11-09",
+   "players": 226
+  }
+ ],
+ "decks": [
+  {
+   "id": "mega-rayquaza-ex",
+   "name": "Mega Rayquaza",
+   "decks_entered": 128,
+   "share_pct": 13.8,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Mega Kangaskhan ex",
+     "set": "MEG",
+     "number": "104"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Latias ex",
+     "set": "SSP",
+     "number": "76"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Talonflame ex",
+     "set": "DLR",
+     "number": "88"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Ethan's Ho-Oh ex",
+     "set": "DRI",
+     "number": "39"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Mega Rayquaza ex",
+     "set": "DLR",
+     "number": "84"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Iron Thorns ex",
+     "set": "TWM",
+     "number": "77"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Cyrano",
+     "set": "SSP",
+     "number": "170"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Crispin",
+     "set": "SCR",
+     "number": "133"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Energy Switch",
+     "set": "MEG",
+     "number": "115"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Switch",
+     "set": "MEG",
+     "number": "130"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Unfair Stamp",
+     "set": "TWM",
+     "number": "165"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Special Red Card",
+     "set": "CRI",
+     "number": "82"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Blowtorch",
+     "set": "PFL",
+     "number": "86"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Legendary Pyroduct",
+     "set": "DLR",
+     "number": "94"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Legendary Pyroduct",
+     "set": "DLR",
+     "number": "95"
+    },
+    {
+     "section": "energy",
+     "count": 10,
+     "name": "Fire Energy",
+     "set": "MEE",
+     "number": "10"
+    },
+    {
+     "section": "energy",
+     "count": 5,
+     "name": "Lightning Energy",
+     "set": "MEE",
+     "number": "12"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "AzulGG",
+    "placing": 1,
+    "record": "14-3-0",
+    "tournament_id": "6a8723725a30714095575300",
+    "tournament": "CHAMPIONSHIP OF DOOM! TEN!",
+    "tournament_date": "2026-11-07",
+    "tournament_players": 494,
+    "url": "https://play.limitlesstcg.com/tournament/6a8723725a30714095575300/standings"
+   }
+  },
+  {
+   "id": "dragapult-ex",
+   "name": "Dragapult",
+   "decks_entered": 90,
+   "share_pct": 9.7,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Dreepy",
+     "set": "TWM",
+     "number": "128"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Drakloak",
+     "set": "TWM",
+     "number": "129"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Dragapult ex",
+     "set": "TWM",
+     "number": "130"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Munkidori",
+     "set": "TWM",
+     "number": "95"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Dunsparce",
+     "set": "JTG",
+     "number": "120"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Dudunsparce",
+     "set": "TEF",
+     "number": "129"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Yveltal",
+     "set": "MEG",
+     "number": "88"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Budew",
+     "set": "ASC",
+     "number": "16"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Crispin",
+     "set": "SCR",
+     "number": "133"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Rosa's Encouragement",
+     "set": "POR",
+     "number": "84"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Crushing Hammer",
+     "set": "POR",
+     "number": "71"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Buddy-Buddy Poffin",
+     "set": "TEF",
+     "number": "144"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Unfair Stamp",
+     "set": "TWM",
+     "number": "165"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Risky Ruins",
+     "set": "MEG",
+     "number": "127"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Fire Energy",
+     "set": "MEE",
+     "number": "10"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Psychic Energy",
+     "set": "MEE",
+     "number": "13"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Darkness Energy",
+     "set": "MEE",
+     "number": "15"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "Quijotelp",
+    "placing": 3,
+    "record": "10-3-0",
+    "tournament_id": "6aea2850e94eae0f947467c5",
+    "tournament": "\ud83c\udfc6Moujii's Dojo\ud83c\udfc6 (Late Registration Available!)",
+    "tournament_date": "2026-11-09",
+    "tournament_players": 236,
+    "url": "https://play.limitlesstcg.com/tournament/6aea2850e94eae0f947467c5/standings"
+   }
+  },
+  {
+   "id": "basic-box-m",
+   "name": "Basic Box",
+   "decks_entered": 65,
+   "share_pct": 7.0,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Mega Kangaskhan ex",
+     "set": "MEG",
+     "number": "104"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Latias ex",
+     "set": "SSP",
+     "number": "76"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Teal Mask Ogerpon ex",
+     "set": "TWM",
+     "number": "25"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Lillie's Clefairy ex",
+     "set": "JTG",
+     "number": "56"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Chien-Pao",
+     "set": "SSP",
+     "number": "56"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Raging Bolt ex",
+     "set": "TEF",
+     "number": "123"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Talonflame ex",
+     "set": "DLR",
+     "number": "88"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Iron Leaves ex",
+     "set": "TEF",
+     "number": "25"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Koraidon ex",
+     "set": "ASC",
+     "number": "121"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Iron Crown ex",
+     "set": "TEF",
+     "number": "81"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Wellspring Mask Ogerpon ex",
+     "set": "TWM",
+     "number": "64"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Crispin",
+     "set": "SCR",
+     "number": "133"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Cyrano",
+     "set": "SSP",
+     "number": "170"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Ciphermaniac's Codebreaking",
+     "set": "TEF",
+     "number": "145"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Energy Switch",
+     "set": "MEG",
+     "number": "115"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Unfair Stamp",
+     "set": "TWM",
+     "number": "165"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Glass Trumpet",
+     "set": "SCR",
+     "number": "135"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Area Zero Underdepths",
+     "set": "SCR",
+     "number": "131"
+    },
+    {
+     "section": "energy",
+     "count": 6,
+     "name": "Grass Energy",
+     "set": "MEE",
+     "number": "9"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Psychic Energy",
+     "set": "MEE",
+     "number": "13"
+    },
+    {
+     "section": "energy",
+     "count": 2,
+     "name": "Fighting Energy",
+     "set": "MEE",
+     "number": "14"
+    },
+    {
+     "section": "energy",
+     "count": 2,
+     "name": "Lightning Energy",
+     "set": "MEE",
+     "number": "12"
+    },
+    {
+     "section": "energy",
+     "count": 1,
+     "name": "Water Energy",
+     "set": "MEE",
+     "number": "11"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "mangonorrea",
+    "placing": 1,
+    "record": "12-2-0",
+    "tournament_id": "6aea2850e94eae0f947467c5",
+    "tournament": "\ud83c\udfc6Moujii's Dojo\ud83c\udfc6 (Late Registration Available!)",
+    "tournament_date": "2026-11-09",
+    "tournament_players": 236,
+    "url": "https://play.limitlesstcg.com/tournament/6aea2850e94eae0f947467c5/standings"
+   }
+  },
+  {
+   "id": "slowking-scr",
+   "name": "Slowking",
+   "decks_entered": 46,
+   "share_pct": 5.0,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Slowpoke",
+     "set": "SCR",
+     "number": "57"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Slowking",
+     "set": "SCR",
+     "number": "58"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Mega Kangaskhan ex",
+     "set": "MEG",
+     "number": "104"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Latias ex",
+     "set": "SSP",
+     "number": "76"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Kyurem",
+     "set": "SFA",
+     "number": "47"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Metagross",
+     "set": "CRI",
+     "number": "61"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Mew ex",
+     "set": "30C",
+     "number": "66"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Lillie's Clefairy ex",
+     "set": "JTG",
+     "number": "56"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Zeraora",
+     "set": "DRI",
+     "number": "78"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ciphermaniac's Codebreaking",
+     "set": "TEF",
+     "number": "145"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Wondrous Patch",
+     "set": "PFL",
+     "number": "94"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Switch",
+     "set": "MEG",
+     "number": "130"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Secret Box",
+     "set": "TWM",
+     "number": "163"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Lucky Helmet",
+     "set": "TWM",
+     "number": "158"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Academy at Night",
+     "set": "SFA",
+     "number": "54"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Telepathic Psychic Energy",
+     "set": "POR",
+     "number": "88"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Psychic Energy",
+     "set": "MEE",
+     "number": "13"
+    },
+    {
+     "section": "energy",
+     "count": 2,
+     "name": "Boomerang Energy",
+     "set": "TWM",
+     "number": "166"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "HenryGao",
+    "placing": 9,
+    "record": "11-2-1",
+    "tournament_id": "6a8723725a30714095575300",
+    "tournament": "CHAMPIONSHIP OF DOOM! TEN!",
+    "tournament_date": "2026-11-07",
+    "tournament_players": 494,
+    "url": "https://play.limitlesstcg.com/tournament/6a8723725a30714095575300/standings"
+   }
+  },
+  {
+   "id": "ogerpon-meganium-hydrapple",
+   "name": "Ogerpon Meganium Hydrapple",
+   "decks_entered": 38,
+   "share_pct": 4.1,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Teal Mask Ogerpon ex",
+     "set": "TWM",
+     "number": "25"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Chikorita",
+     "set": "ASC",
+     "number": "8"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Bayleef",
+     "set": "MEG",
+     "number": "9"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Meganium",
+     "set": "MEG",
+     "number": "10"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Applin",
+     "set": "TWM",
+     "number": "17"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Dipplin",
+     "set": "TWM",
+     "number": "18"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Hydrapple ex",
+     "set": "SCR",
+     "number": "14"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Celebi",
+     "set": "MEG",
+     "number": "12"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Tapu Bulu",
+     "set": "SFA",
+     "number": "6"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Team Rocket's Petrel",
+     "set": "DRI",
+     "number": "176"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Briar",
+     "set": "SCR",
+     "number": "132"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Lana's Aid",
+     "set": "TWM",
+     "number": "155"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Bug Catching Set",
+     "set": "TWM",
+     "number": "143"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Unfair Stamp",
+     "set": "TWM",
+     "number": "165"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Forest of Vitality",
+     "set": "MEG",
+     "number": "117"
+    },
+    {
+     "section": "energy",
+     "count": 13,
+     "name": "Grass Energy",
+     "set": "MEE",
+     "number": "9"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "TrialbyCalmBat",
+    "placing": 1,
+    "record": "8-0-0",
+    "tournament_id": "6ae901a50c463890f3049d40",
+    "tournament": "Sunny's Weekly #281 My Friend Rayquaza :D",
+    "tournament_date": "2026-11-09",
+    "tournament_players": 226,
+    "url": "https://play.limitlesstcg.com/tournament/6ae901a50c463890f3049d40/standings"
+   }
+  },
+  {
+   "id": "alakazam-dudunsparce",
+   "name": "Alakazam Dudunsparce",
+   "decks_entered": 36,
+   "share_pct": 3.9,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Abra",
+     "set": "MEG",
+     "number": "54"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Kadabra",
+     "set": "MEG",
+     "number": "55"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Alakazam",
+     "set": "MEG",
+     "number": "56"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Dunsparce",
+     "set": "JTG",
+     "number": "120"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Dudunsparce",
+     "set": "TEF",
+     "number": "129"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Lillie's Clefairy ex",
+     "set": "JTG",
+     "number": "56"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Shaymin",
+     "set": "DRI",
+     "number": "10"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Genesect",
+     "set": "SFA",
+     "number": "40"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Dawn",
+     "set": "PFL",
+     "number": "87"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Hilda",
+     "set": "WHT",
+     "number": "84"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Buddy-Buddy Poffin",
+     "set": "TEF",
+     "number": "144"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Wondrous Patch",
+     "set": "PFL",
+     "number": "94"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Rare Candy",
+     "set": "MEG",
+     "number": "125"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Special Red Card",
+     "set": "CRI",
+     "number": "82"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Sacred Ash",
+     "set": "DRI",
+     "number": "168"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Lillie's Pearl",
+     "set": "JTG",
+     "number": "151"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Battle Cage",
+     "set": "PFL",
+     "number": "85"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Telepathic Psychic Energy",
+     "set": "POR",
+     "number": "88"
+    },
+    {
+     "section": "energy",
+     "count": 2,
+     "name": "Psychic Energy",
+     "set": "MEE",
+     "number": "13"
+    },
+    {
+     "section": "energy",
+     "count": 1,
+     "name": "Mist Energy",
+     "set": "TEF",
+     "number": "161"
+    },
+    {
+     "section": "energy",
+     "count": 1,
+     "name": "Enriching Energy",
+     "set": "SSP",
+     "number": "191"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "Kako",
+    "placing": 24,
+    "record": "8-4-0",
+    "tournament_id": "6a8723725a30714095575300",
+    "tournament": "CHAMPIONSHIP OF DOOM! TEN!",
+    "tournament_date": "2026-11-07",
+    "tournament_players": 494,
+    "url": "https://play.limitlesstcg.com/tournament/6a8723725a30714095575300/standings"
+   }
+  },
+  {
+   "id": "dhelmise-pbl",
+   "name": "Dhelmise",
+   "decks_entered": 32,
+   "share_pct": 3.4,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Poltchageist",
+     "set": "PBL",
+     "number": "5"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Sinistcha",
+     "set": "PBL",
+     "number": "6"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Dhelmise",
+     "set": "PBL",
+     "number": "39"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Shuppet",
+     "set": "PBL",
+     "number": "33"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Banette",
+     "set": "PBL",
+     "number": "34"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Dunsparce",
+     "set": "JTG",
+     "number": "120"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Dudunsparce",
+     "set": "TEF",
+     "number": "129"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Lillie's Clefairy ex",
+     "set": "JTG",
+     "number": "56"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Latias ex",
+     "set": "SSP",
+     "number": "76"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Spiritomb",
+     "set": "PBL",
+     "number": "35"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Shaymin",
+     "set": "DRI",
+     "number": "10"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Bloodmoon Ursaluna ex",
+     "set": "TWM",
+     "number": "141"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Yveltal",
+     "set": "30C",
+     "number": "100"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Gwynn",
+     "set": "PBL",
+     "number": "78"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Explorer's Guidance",
+     "set": "TEF",
+     "number": "147"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Switch",
+     "set": "MEG",
+     "number": "130"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Special Red Card",
+     "set": "CRI",
+     "number": "82"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Prism Tower",
+     "set": "CRI",
+     "number": "80"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Telepathic Psychic Energy",
+     "set": "POR",
+     "number": "88"
+    },
+    {
+     "section": "energy",
+     "count": 2,
+     "name": "Psychic Energy",
+     "set": "MEE",
+     "number": "13"
+    },
+    {
+     "section": "energy",
+     "count": 1,
+     "name": "Legacy Energy",
+     "set": "TWM",
+     "number": "167"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "Mistyzoroark",
+    "placing": 44,
+    "record": "4-4-0",
+    "tournament_id": "6ae901a50c463890f3049d40",
+    "tournament": "Sunny's Weekly #281 My Friend Rayquaza :D",
+    "tournament_date": "2026-11-09",
+    "tournament_players": 226,
+    "url": "https://play.limitlesstcg.com/tournament/6ae901a50c463890f3049d40/standings"
+   }
+  },
+  {
+   "id": "n-zoroark",
+   "name": "N's Zoroark",
+   "decks_entered": 31,
+   "share_pct": 3.3,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "N's Zorua",
+     "set": "JTG",
+     "number": "97"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "N's Zoroark ex",
+     "set": "JTG",
+     "number": "98"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Munkidori",
+     "set": "TWM",
+     "number": "95"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "N's Zekrom",
+     "set": "ASC",
+     "number": "155"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Pecharunt ex",
+     "set": "SFA",
+     "number": "39"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "N's Reshiram",
+     "set": "JTG",
+     "number": "116"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Yveltal",
+     "set": "MEG",
+     "number": "88"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Budew",
+     "set": "ASC",
+     "number": "16"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Black Belt's Training",
+     "set": "JTG",
+     "number": "143"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Janine's Secret Art",
+     "set": "PRE",
+     "number": "112"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Cyrano",
+     "set": "SSP",
+     "number": "170"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Buddy-Buddy Poffin",
+     "set": "TEF",
+     "number": "144"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "N's PP Up",
+     "set": "JTG",
+     "number": "153"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Unfair Stamp",
+     "set": "TWM",
+     "number": "165"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Energy Switch",
+     "set": "MEG",
+     "number": "115"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Binding Mochi",
+     "set": "PRE",
+     "number": "95"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "N's Castle",
+     "set": "JTG",
+     "number": "152"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Team Rocket's Watchtower",
+     "set": "DRI",
+     "number": "180"
+    },
+    {
+     "section": "energy",
+     "count": 7,
+     "name": "Darkness Energy",
+     "set": "MEE",
+     "number": "15"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "xrednightmare",
+    "placing": 5,
+    "record": "9-2-1",
+    "tournament_id": "6aea2850e94eae0f947467c5",
+    "tournament": "\ud83c\udfc6Moujii's Dojo\ud83c\udfc6 (Late Registration Available!)",
+    "tournament_date": "2026-11-09",
+    "tournament_players": 236,
+    "url": "https://play.limitlesstcg.com/tournament/6aea2850e94eae0f947467c5/standings"
+   }
+  },
+  {
+   "id": "dragapult-dudunsparce",
+   "name": "Dragapult Dudunsparce",
+   "decks_entered": 30,
+   "share_pct": 3.2,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Dreepy",
+     "set": "TWM",
+     "number": "128"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Drakloak",
+     "set": "TWM",
+     "number": "129"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Dragapult ex",
+     "set": "TWM",
+     "number": "130"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Dunsparce",
+     "set": "TEF",
+     "number": "128"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Dudunsparce",
+     "set": "TEF",
+     "number": "129"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Dudunsparce ex",
+     "set": "JTG",
+     "number": "121"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Munkidori",
+     "set": "TWM",
+     "number": "95"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Budew",
+     "set": "ASC",
+     "number": "16"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Crispin",
+     "set": "SCR",
+     "number": "133"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Rosa's Encouragement",
+     "set": "POR",
+     "number": "84"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Buddy-Buddy Poffin",
+     "set": "TEF",
+     "number": "144"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Unfair Stamp",
+     "set": "TWM",
+     "number": "165"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Special Red Card",
+     "set": "CRI",
+     "number": "82"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Risky Ruins",
+     "set": "MEG",
+     "number": "127"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Psychic Energy",
+     "set": "MEE",
+     "number": "13"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Darkness Energy",
+     "set": "MEE",
+     "number": "15"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Fire Energy",
+     "set": "MEE",
+     "number": "10"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "RDBestPone",
+    "placing": 4,
+    "record": "12-4-0",
+    "tournament_id": "6a8723725a30714095575300",
+    "tournament": "CHAMPIONSHIP OF DOOM! TEN!",
+    "tournament_date": "2026-11-07",
+    "tournament_players": 494,
+    "url": "https://play.limitlesstcg.com/tournament/6a8723725a30714095575300/standings"
+   }
+  },
+  {
+   "id": "crustle-dri",
+   "name": "Crustle",
+   "decks_entered": 25,
+   "share_pct": 2.7,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Mega Kangaskhan ex",
+     "set": "MEG",
+     "number": "104"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Dwebble",
+     "set": "DRI",
+     "number": "11"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Crustle",
+     "set": "DRI",
+     "number": "12"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Azurill",
+     "set": "DLR",
+     "number": "80"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Team Rocket's Petrel",
+     "set": "DRI",
+     "number": "176"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Eri",
+     "set": "TEF",
+     "number": "146"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Hilda",
+     "set": "WHT",
+     "number": "84"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Pok\u00e9gear 3.0",
+     "set": "SVI",
+     "number": "186"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Tasty Rice Ball",
+     "set": "DLR",
+     "number": "101"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Jumbo Ice Cream",
+     "set": "PFL",
+     "number": "91"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Switch",
+     "set": "MEG",
+     "number": "130"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Buddy-Buddy Poffin",
+     "set": "TEF",
+     "number": "144"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Hero's Cape",
+     "set": "TEF",
+     "number": "152"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Handheld Fan",
+     "set": "TWM",
+     "number": "150"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Air Balloon",
+     "set": "ASC",
+     "number": "181"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Lumiose City",
+     "set": "POR",
+     "number": "77"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Prism Tower",
+     "set": "CRI",
+     "number": "80"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Team Rocket's Factory",
+     "set": "DRI",
+     "number": "173"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Growing Grass Energy",
+     "set": "POR",
+     "number": "86"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Mist Energy",
+     "set": "TEF",
+     "number": "161"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Spiky Energy",
+     "set": "JTG",
+     "number": "159"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "StratosFear",
+    "placing": 19,
+    "record": "8-3-1",
+    "tournament_id": "6a8723725a30714095575300",
+    "tournament": "CHAMPIONSHIP OF DOOM! TEN!",
+    "tournament_date": "2026-11-07",
+    "tournament_players": 494,
+    "url": "https://play.limitlesstcg.com/tournament/6a8723725a30714095575300/standings"
+   }
+  },
+  {
+   "id": "dragapult-blaziken",
+   "name": "Dragapult Blaziken",
+   "decks_entered": 23,
+   "share_pct": 2.5,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Dreepy",
+     "set": "TWM",
+     "number": "128"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Drakloak",
+     "set": "TWM",
+     "number": "129"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Dragapult ex",
+     "set": "TWM",
+     "number": "130"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Torchic",
+     "set": "DRI",
+     "number": "40"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Combusken",
+     "set": "DRI",
+     "number": "41"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Blaziken ex",
+     "set": "JTG",
+     "number": "24"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Munkidori",
+     "set": "TWM",
+     "number": "95"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Budew",
+     "set": "ASC",
+     "number": "16"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Lillie's Clefairy ex",
+     "set": "JTG",
+     "number": "56"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Lillie's Determination",
+     "set": "MEG",
+     "number": "119"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Crispin",
+     "set": "SCR",
+     "number": "133"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Dawn",
+     "set": "PFL",
+     "number": "87"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Pok\u00e9 Pad",
+     "set": "POR",
+     "number": "81"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Buddy-Buddy Poffin",
+     "set": "TEF",
+     "number": "144"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Rare Candy",
+     "set": "MEG",
+     "number": "125"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Night Stretcher",
+     "set": "ASC",
+     "number": "196"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Unfair Stamp",
+     "set": "TWM",
+     "number": "165"
+    },
+    {
+     "section": "trainer",
+     "count": 3,
+     "name": "Team Rocket's Watchtower",
+     "set": "DRI",
+     "number": "180"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Fire Energy",
+     "set": "MEE",
+     "number": "10"
+    },
+    {
+     "section": "energy",
+     "count": 3,
+     "name": "Psychic Energy",
+     "set": "MEE",
+     "number": "13"
+    },
+    {
+     "section": "energy",
+     "count": 2,
+     "name": "Darkness Energy",
+     "set": "MEE",
+     "number": "15"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "Jacobo Sande Veiga",
+    "placing": 7,
+    "record": "8-3-1",
+    "tournament_id": "6aea2850e94eae0f947467c5",
+    "tournament": "\ud83c\udfc6Moujii's Dojo\ud83c\udfc6 (Late Registration Available!)",
+    "tournament_date": "2026-11-09",
+    "tournament_players": 236,
+    "url": "https://play.limitlesstcg.com/tournament/6aea2850e94eae0f947467c5/standings"
+   }
+  },
+  {
+   "id": "talonflame-dusknoir",
+   "name": "Talonflame Dusknoir",
+   "decks_entered": 23,
+   "share_pct": 2.5,
+   "cards": [
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Duskull",
+     "set": "PRE",
+     "number": "35"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Dusclops",
+     "set": "PRE",
+     "number": "36"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Dusknoir",
+     "set": "PRE",
+     "number": "37"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Talonflame ex",
+     "set": "DLR",
+     "number": "88"
+    },
+    {
+     "section": "pokemon",
+     "count": 4,
+     "name": "Mega Kangaskhan ex",
+     "set": "MEG",
+     "number": "104"
+    },
+    {
+     "section": "pokemon",
+     "count": 3,
+     "name": "Latias ex",
+     "set": "SSP",
+     "number": "76"
+    },
+    {
+     "section": "pokemon",
+     "count": 2,
+     "name": "Meowth ex",
+     "set": "POR",
+     "number": "62"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Bloodmoon Ursaluna ex",
+     "set": "TWM",
+     "number": "141"
+    },
+    {
+     "section": "pokemon",
+     "count": 1,
+     "name": "Fezandipiti ex",
+     "set": "ASC",
+     "number": "142"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Hilda",
+     "set": "WHT",
+     "number": "84"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Boss's Orders",
+     "set": "MEG",
+     "number": "114"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Ciphermaniac's Codebreaking",
+     "set": "TEF",
+     "number": "145"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Black Belt's Training",
+     "set": "JTG",
+     "number": "143"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Cyrano",
+     "set": "SSP",
+     "number": "170"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Dawn",
+     "set": "PFL",
+     "number": "87"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Judge",
+     "set": "POR",
+     "number": "76"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Dusk Ball",
+     "set": "SSP",
+     "number": "175"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Ultra Ball",
+     "set": "MEG",
+     "number": "131"
+    },
+    {
+     "section": "trainer",
+     "count": 4,
+     "name": "Rare Candy",
+     "set": "MEG",
+     "number": "125"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Special Red Card",
+     "set": "CRI",
+     "number": "82"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Buddy-Buddy Poffin",
+     "set": "TEF",
+     "number": "144"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Switch",
+     "set": "MEG",
+     "number": "130"
+    },
+    {
+     "section": "trainer",
+     "count": 1,
+     "name": "Prime Catcher",
+     "set": "TEF",
+     "number": "157"
+    },
+    {
+     "section": "trainer",
+     "count": 2,
+     "name": "Jamming Tower",
+     "set": "TWM",
+     "number": "153"
+    },
+    {
+     "section": "energy",
+     "count": 4,
+     "name": "Ignition Energy",
+     "set": "WHT",
+     "number": "86"
+    }
+   ],
+   "total": 60,
+   "sample": {
+    "player": "REFINE | nicole",
+    "placing": 18,
+    "record": "9-4-0",
+    "tournament_id": "6a8723725a30714095575300",
+    "tournament": "CHAMPIONSHIP OF DOOM! TEN!",
+    "tournament_date": "2026-11-07",
+    "tournament_players": 494,
+    "url": "https://play.limitlesstcg.com/tournament/6a8723725a30714095575300/standings"
+   }
+  }
+ ]
+}
