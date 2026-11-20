@@ -8,7 +8,7 @@ back for review is stored with a leading "⚠ " (the code looks for it);
 A price disagreement always reads the same way, built by one function from
 the card's own source prices, whatever the stored note says:
 
-    Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06.
+    Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $4.06.
 
 Sources in a fixed order (TCGplayer, Cardmarket, eBay), each price to the
 cent, then the price the card is listed at. Older notes ("TCG/CM disagree
@@ -30,7 +30,8 @@ CHECK_ID = "Check the card against the photo."
 SET_NEEDED = "Choose the set to price this card."
 SET_UNCONFIRMED = "Set not confirmed. Check the set before listing."
 NUMBER_UNCONFIRMED = "Card number not confirmed. Check the printing."
-DISAGREE = "Prices disagree."            # stored marker when no prices are known
+DISAGREE = "Prices vary."                # stored marker when no prices are known
+SINGLE = "Single pricing source."
 NO_PRICE = "No price found."
 LOOKUP_FAILED = "The price lookup failed. Try pricing again."
 CM_ESTIMATE = "Cardmarket price estimated from similar printings."
@@ -42,7 +43,7 @@ SOURCE_ORDER = ("TCGplayer", "Cardmarket", "eBay")
 _KIND_DISAGREE = "disagree"
 # Most important first: the first one or two are what a person sees.
 _ORDER = [FINISH, SET_NEEDED, JAPANESE, CHECK_ID, _KIND_DISAGREE, SET_UNCONFIRMED, NUMBER_UNCONFIRMED,
-          NO_PRICE, LOOKUP_FAILED, CM_ESTIMATE, SET_FILLED, CLOSE]
+          NO_PRICE, LOOKUP_FAILED, CM_ESTIMATE, SET_FILLED, SINGLE, CLOSE]
 SHOWN = 2
 
 Prices = Iterable[tuple[str, Optional[float]]]
@@ -64,9 +65,9 @@ def _ordered(prices: Prices) -> list[tuple[str, float]]:
 
 def disagreement(prices: Prices, using: Optional[float] = None) -> str:
     """The one way a price disagreement is shown:
-    'Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06.'"""
+    'Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $4.06.'"""
     listed = _ordered(prices)
-    head = (f"Prices disagree: {', '.join(f'{n} {money(v)}' for n, v in listed)}."
+    head = (f"Prices vary: {', '.join(f'{n} {money(v)}' for n, v in listed)}."
             if len(listed) >= 2 else DISAGREE)
     return f"{head} Using {money(using)}." if using else head
 
@@ -99,13 +100,14 @@ _LEGACY = [
     (re.compile(r"bulk-floor estimate|estimated from similar printings", re.I), CM_ESTIMATE),
     (re.compile(r"set_code propagated|set filled in", re.I), SET_FILLED),
     (re.compile(r"close together", re.I), CLOSE),
+    (re.compile(r"single pricing source", re.I), SINGLE),
     # Notes saved in older wording, shown without pronouns.
     (re.compile(r"from your spreadsheet", re.I), "From the imported spreadsheet."),
     (re.compile(r"unattributed spreadsheet estimate removed", re.I),
      "Unattributed spreadsheet estimate removed. Re-import the sheet to restore the estimate."),
 ]
 # Any of these, in any wording, is a price disagreement.
-_DISAGREE_WORDS = re.compile(r"disagree|variant mismatch|dropped from aggregate|far above the others", re.I)
+_DISAGREE_WORDS = re.compile(r"disagree|prices vary|variant mismatch|dropped from aggregate|far above the others", re.I)
 _TECHNICAL = re.compile(r"[_=<>|]|https?:|pokemontcg|\bmatch:|\b\d+(\.\d+)?x\b|×")
 
 

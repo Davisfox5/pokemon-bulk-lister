@@ -9,7 +9,7 @@ from lib.pricing import aggregate
 
 TECHNICAL = re.compile(r"—|_|pokemontcg|\bmatch:|\b(sw|sv|swsh|sm|xy|mcd)\d|\d(\.\d)?x\b|×|variant mismatch|\bCM\b|\bTCG\b")
 # The one format: sources in a fixed order, each to the cent, then the price used.
-FORMAT = re.compile(r"^Prices disagree: (TCGplayer \$[\d,]+\.\d\d)?(, )?(Cardmarket \$[\d,]+\.\d\d)?(, )?"
+FORMAT = re.compile(r"^Prices vary: (TCGplayer \$[\d,]+\.\d\d)?(, )?(Cardmarket \$[\d,]+\.\d\d)?(, )?"
                     r"(eBay \$[\d,]+\.\d\d)?\.( Using \$[\d,]+\.\d\d\.)?$")
 
 
@@ -27,9 +27,9 @@ def test_the_note_from_the_report_reads_plainly():
               "pokemontcg.io; ⚠ name-only match to swsh45 — set_code was not provided, match may not "
               "reflect the actual printing; TCG/CM disagree 6.7x on swsh45 — variant mismatch?; match: no_set")
     assert readable(price_notes.plain(stored, prices=CARD, using=1.06)) == (
-        "Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check the set before listing.")
+        "Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check the set before listing.")
     # Without the card's prices, the ones the note spelled out are used.
-    assert price_notes.plain(stored).startswith("Prices disagree: TCGplayer $1.06, Cardmarket $7.06.")
+    assert price_notes.plain(stored).startswith("Prices vary: TCGplayer $1.06, Cardmarket $7.06.")
 
 
 # Every wording a disagreement has ever been stored in, on the same card.
@@ -44,28 +44,30 @@ DISAGREEMENTS = [
     "Prices disagree: TCGplayer $1.06, Cardmarket $7.06.",
     "⚠ Prices disagree. Check the printing.",
     "Prices disagree.",
+    "Prices vary: TCGplayer $1.06, Cardmarket $7.06.",
+    "Prices vary.",
 ]
 
 
 @pytest.mark.parametrize("stored", DISAGREEMENTS)
 def test_every_disagreement_reads_exactly_the_same(stored):
     shown = price_notes.plain(stored, prices=CARD, using=1.06)
-    assert shown == "Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06."
+    assert shown == "Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $1.06."
     assert FORMAT.match(shown)
 
 
 def test_a_flagged_card_with_no_note_still_shows_the_disagreement():
     assert price_notes.plain("", prices=CARD, using=1.06, outlier=True) == (
-        "Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06.")
+        "Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $1.06.")
     assert price_notes.plain("", prices=CARD) == ""
 
 
 def test_sources_always_in_the_same_order_with_the_price_used():
     shown = price_notes.disagreement([("eBay", 12.5), ("Cardmarket", 3), ("TCGplayer", 2.999)], using=3.0)
-    assert shown == "Prices disagree: TCGplayer $3.00, Cardmarket $3.00, eBay $12.50. Using $3.00."
+    assert shown == "Prices vary: TCGplayer $3.00, Cardmarket $3.00, eBay $12.50. Using $3.00."
     assert FORMAT.match(shown)
     assert price_notes.disagreement([("TCGplayer", 1250.0), ("Cardmarket", 980.0)], using=980.0) == (
-        "Prices disagree: TCGplayer $1,250.00, Cardmarket $980.00. Using $980.00.")
+        "Prices vary: TCGplayer $1,250.00, Cardmarket $980.00. Using $980.00.")
 
 
 @pytest.mark.parametrize("stored, shown", [
@@ -99,13 +101,14 @@ def test_at_most_two_sentences_and_the_most_important_first():
 def test_new_prices_are_noted_in_the_same_format():
     r = aggregate(tcgplayer_market=1.06, ebay_median_30d=None, ebay_max_30d=None,
                   cardmarket_trend_usd=7.06, terapeak_median_usd=None)
-    assert r.price == 1.06 and r.notes == "Prices disagree: TCGplayer $1.06, Cardmarket $7.06."
+    assert r.price == 4.06 and r.notes == "Prices vary: TCGplayer $1.06, Cardmarket $7.06."
+    assert r.outlier_flag and not r.needs_review          # noted beside the price, not held for review
     r = aggregate(tcgplayer_market=1.00, ebay_median_30d=4.00, ebay_max_30d=None,
                   cardmarket_trend_usd=None, terapeak_median_usd=None)
-    assert r.price == 1.00 and r.notes == "Prices disagree: TCGplayer $1.00, eBay $4.00."
+    assert r.price == 2.50 and r.notes == "Prices vary: TCGplayer $1.00, eBay $4.00."
     r = aggregate(tcgplayer_market=1.0, ebay_median_30d=1.1, ebay_max_30d=None,
                   cardmarket_trend_usd=1.05, terapeak_median_usd=9.0)
-    assert r.outlier_flag and r.notes == "Prices disagree: TCGplayer $1.00, Cardmarket $1.05, eBay $9.00."
+    assert r.outlier_flag and r.notes == "Prices vary: TCGplayer $1.00, Cardmarket $1.05, eBay $9.00."
     for note in (r.notes,):
         assert FORMAT.match(price_notes.plain(note, using=r.price))
     r = aggregate(tcgplayer_market=None, ebay_median_30d=None, ebay_max_30d=None,
@@ -124,7 +127,7 @@ def test_close_prices_are_averaged_not_flagged_whatever_their_ratio():
     # The same 4x on a card worth dollars is a real disagreement.
     r = aggregate(tcgplayer_market=1.00, ebay_median_30d=None, ebay_max_30d=None,
                   cardmarket_trend_usd=4.00, terapeak_median_usd=None)
-    assert r.outlier_flag and r.needs_review and r.notes.startswith("Prices disagree")
+    assert r.outlier_flag and not r.needs_review and r.notes.startswith("Prices vary")
     # Three sources: a high one only a little above the rest stays in.
     r = aggregate(tcgplayer_market=0.10, ebay_median_30d=0.12, ebay_max_30d=None,
                   cardmarket_trend_usd=0.90, terapeak_median_usd=None)

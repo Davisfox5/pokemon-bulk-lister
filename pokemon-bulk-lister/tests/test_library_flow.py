@@ -60,12 +60,13 @@ def _events(c, kind=None):
     return c.get("/api/library/events" + (f"?kind={kind}" if kind else "")).get_json()
 
 
-def _set_price(card_name, price, confidence=0.9, outlier=False):
+def _set_price(card_name, price, confidence=0.9, outlier=False, notes=None):
     s = models.get_session()
     try:
         cc = s.query(models.CatalogCard).filter_by(name=card_name).first()
         models.record_price(s, cc, {"final_price": price, "pricing_confidence": confidence,
-                                    "outlier_flag": outlier, "tcgplayer_market": price})
+                                    "outlier_flag": outlier, "tcgplayer_market": price,
+                                    "pricing_notes": notes})
         s.commit()
     finally:
         s.close()
@@ -207,7 +208,8 @@ def test_bulk_list_reports_what_it_will_do_and_skips_flagged_prices(app):
     unpriced = _add(c, name="Unpriced Card", card_number="3")
     listed = _add(c, name="Listed Card", card_number="4")
     _set_price("Good Card", 10)
-    _set_price("Shaky Card", 50, confidence=0.2)
+    # Held for a person by a warning about which card it is, not by its price.
+    _set_price("Shaky Card", 50, confidence=0.2, notes="\u26a0 Card number not confirmed. Check the printing.")
     _set_price("Listed Card", 3)
     c.post(f"/api/inventory/{listed['id']}/list-for-sale", json={})
     ids = [good["id"], flagged["id"], unpriced["id"], listed["id"]]
@@ -590,3 +592,41 @@ def item_owner(item_id):
 def _inventory(c):
     out = c.get("/api/inventory").get_json()
     return out.get("items") if isinstance(out, dict) else out
+
+
+def test_resolving_a_flagged_library_card_clears_the_flag(app):
+    c = _user(app, "a@example.com")
+    item = _add(c, name="Shaky Card", card_number="2")
+    _set_price("Shaky Card", 50, notes="⚠ Card number not confirmed. Check the printing.")
+
+    def flagged():
+        return next(i for i in c.get("/api/inventory").get_json()["items"] if i["id"] == item["id"])["provenance"]["flagged"]
+
+    assert flagged()
+    preview = c.post("/api/inventory/list-for-sale", json={"item_ids": [item["id"]], "dry_run": True}).get_json()
+    assert preview["skipped_flagged"] == 1
+    # Save in the Resolve dialog with the price left as it is.
+    assert not c.patch(f"/api/inventory/{item['id']}", json={"checked": True}).get_json()["provenance"]["flagged"]
+    assert not flagged()
+    preview = c.post("/api/inventory/list-for-sale", json={"item_ids": [item["id"]], "dry_run": True}).get_json()
+    assert (preview["to_list"], preview["skipped_flagged"]) == (1, 0)
+
+
+def test_far_apart_and_single_source_prices_are_a_note_not_a_flag(app):
+    c = _user(app, "a@example.com")
+    one = _add(c, name="One Source", card_number="5")
+    _set_price("One Source", 2, confidence=0.5)
+    wide = _add(c, name="Wide Card", card_number="6")
+    s = models.get_session()
+    try:
+        cc = s.query(models.CatalogCard).filter_by(name="Wide Card").first()
+        models.record_price(s, cc, {"final_price": 4.06, "pricing_confidence": 0.0, "outlier_flag": True,
+                                    "tcgplayer_market": 1.06, "cardmarket_trend_usd": 7.06,
+                                    "pricing_notes": "Prices vary: TCGplayer $1.06, Cardmarket $7.06."})
+        s.commit()
+    finally:
+        s.close()
+    rows = {i["id"]: i["provenance"] for i in c.get("/api/inventory").get_json()["items"]}
+    assert (rows[one["id"]]["flagged"], rows[one["id"]]["caution"]) == (False, "Single pricing source")
+    assert (rows[wide["id"]]["flagged"], rows[wide["id"]]["caution"]) == (False, "Prices vary")
+    assert rows[wide["id"]]["notes"] == "Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $4.06."

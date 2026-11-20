@@ -177,6 +177,15 @@ class InventoryPrice(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class InventoryCheck(Base):
+    """The owner looked at a flagged Library card and saved it as right. The
+    card is not flagged for them again (the shared catalog price keeps its
+    note). A table of its own because this module cannot add columns."""
+    __tablename__ = "inventory_checks"
+    inventory_item_id: Mapped[int] = mapped_column(ForeignKey("inventory_items.id", ondelete="CASCADE"), primary_key=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 Index("idx_inventory_user", InventoryItem.user_id)
 
 

@@ -55,29 +55,20 @@ def aggregate(
     cardmarket_trend_usd: Optional[float] = None,
     terapeak_median_usd: Optional[float] = None,
 ) -> PricingResult:
-    """Aggregate prices from multiple sources.
+    """One price from the sources there are.
 
-    Rule:
-      0) Prices within MIN_DISAGREEMENT_USD ($2) of each other never
-         disagree, whatever their ratio; the price is their median (the
-         average of two) and the screens show the range.
-      1) If TCGplayer and Cardmarket on the same matched card disagree by
-         >5x (and by more than $2), treat the outlier as bad upstream data (pokemontcg.io often
-         reflects a different printing's price under one of the two fields).
-         Drop the smaller source and use the other — TCGplayer market is
-         usually the more trustworthy daily-updated source for US pricing.
-      2) Price = MEDIAN of the remaining non-null sources.
-         ebay_max_30d is recorded in `sources` for display but does NOT
-         enter the aggregate: it comes from the same 30-day comp set as
-         ebay_median_30d, so counting both double-weighted eBay and biased
-         the result high.
-         - With >=3 sources, a max > 2.5x median (and more than $2 above
-           it) is dropped as an outlier and the median re-taken over the rest.
-         - With exactly 2 sources disagreeing >2.5x AND by more than the
-           absolute noise floor ($2), use the LOWER one (their median would
-           just split the difference; over-listing eats returns,
-           under-listing only eats margin).
-         Either correction sets outlier_flag and forces needs_review.
+    The price is the MEDIAN of the non-null sources (the average of two).
+    ebay_max_30d is recorded in `sources` for display but does not enter the
+    price: it comes from the same 30-day comp set as ebay_median_30d.
+
+    Nothing is dropped and nothing here holds a card for review; a person
+    accepts the price or sets their own. Two things are noted beside it:
+      * Sources more than OUTLIER_MULTIPLIER times apart AND more than
+        MIN_DISAGREEMENT_USD ($2) apart set outlier_flag, with the note
+        "Prices vary: TCGplayer $1.06, Cardmarket $7.06." Prices within $2
+        never vary, whatever their ratio; the screens show their range.
+      * One source alone is noted "Single pricing source."
+    Only a card with no price at all needs review.
 
     Cardmarket trend price should already be FX-converted to USD by caller.
     """
@@ -88,77 +79,25 @@ def aggregate(
         "cardmarket_trend_usd": cardmarket_trend_usd,
         "terapeak_median_usd": terapeak_median_usd,
     }
-
-    # Bad-data correction: TCG vs Cardmarket disagreement on the SAME card.
-    # Implausible spreads here are almost always a variant-mismatch on the
-    # pokemontcg.io side, not a real market disagreement. Drop the outlier
-    # so we don't list overpriced and eat returns.
-    data_correction_note = ""
-    tcg = tcgplayer_market
-    cm = cardmarket_trend_usd
-    if tcg and cm and tcg > 0 and cm > 0:
-        if far_apart(tcg, cm, 5.0):
-            # The note says what disagreed, in words a person reads
-            # (lib/price_notes.py); which one was dropped shows in the price.
-            data_correction_note = price_notes.disagree([("TCGplayer", tcg), ("Cardmarket", cm)])
-            if cm > tcg:
-                cardmarket_trend_usd = None
-            else:
-                tcgplayer_market = None
-
-    prices = [
-        tcgplayer_market,
-        ebay_median_30d,
-        cardmarket_trend_usd,
-        terapeak_median_usd,
-    ]
-    valid = _non_null(prices)
-    # The sources as a disagreement names them (lib/price_notes.py), the
-    # way the screens do: eBay is the year of sales when there is one.
+    valid = _non_null([tcgplayer_market, ebay_median_30d, cardmarket_trend_usd, terapeak_median_usd])
+    # The sources as a note names them (lib/price_notes.py), the way the
+    # screens do: eBay is the year of sales when there is one.
     named = [("TCGplayer", tcgplayer_market), ("Cardmarket", cardmarket_trend_usd),
              ("eBay", terapeak_median_usd or ebay_median_30d)]
 
     if not valid:
-        return PricingResult(
-            price=None,
-            sources=sources,
-            confidence=0.0,
-            outlier_flag=False,
-            needs_review=True,
-            notes=price_notes.NO_PRICE,
-        )
+        return PricingResult(price=None, sources=sources, confidence=0.0, outlier_flag=False,
+                             needs_review=True, notes=price_notes.NO_PRICE)
 
-    median = statistics.median(valid)
-    hi = max(valid)
-    lo = min(valid)
-    outlier_flag = False
-    notes = data_correction_note
-    used = valid
-
-    if len(valid) >= 3 and far_apart(median, hi, OUTLIER_MULTIPLIER):
-        used = sorted(valid)[:-1]
-        price = statistics.median(used)
-        outlier_flag = True
-        extra = price_notes.disagree(named)
-        notes = f"{notes}; {extra}" if notes else extra
-    elif len(valid) == 2 and far_apart(lo, hi, OUTLIER_MULTIPLIER):
-        used = [lo]
-        price = lo
-        outlier_flag = True
-        extra = price_notes.disagree(named)
-        notes = f"{notes}; {extra}" if notes else extra
-    else:
-        price = median
-
-    confidence = _confidence(used)
-    needs_review = confidence < LOW_CONFIDENCE_THRESHOLD or outlier_flag
-
+    outlier_flag = len(valid) >= 2 and far_apart(min(valid), max(valid), OUTLIER_MULTIPLIER)
+    notes = (price_notes.disagree(named) if outlier_flag else
+             price_notes.SINGLE if len(valid) == 1 else "")
     return PricingResult(
-        price=round(price, 2),
+        price=round(statistics.median(valid), 2),
         sources=sources,
-        confidence=round(confidence, 3),
+        confidence=round(_confidence(valid), 3),
         outlier_flag=outlier_flag,
-        needs_review=needs_review,
+        needs_review=False,
         notes=notes,
     )
 

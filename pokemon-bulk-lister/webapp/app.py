@@ -333,6 +333,15 @@ def _price_in_library(crop_paths: list, price) -> None:
         print(f"[scan] could not carry the price to the Library: {exc}", file=sys.stderr)
 
 
+def _checked_in_library(crop_paths: list) -> None:
+    """A card saved as right on Scan is not flagged in the Library either."""
+    try:
+        from webapp.catalog import sync_checked
+        sync_checked(db.owner(), crop_paths)
+    except Exception as exc:
+        print(f"[scan] could not carry the check to the Library: {exc}", file=sys.stderr)
+
+
 def _listing_fields(body: dict) -> dict:
     """The owner's own listing price and notes from a request body, checked.
     Only the keys present are returned. A blank price means "use the
@@ -447,6 +456,15 @@ def api_patch_card(card_id: int):
         patch.update(_listing_fields(patch))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    # Saving the card is a person saying it is right (or now is): the name,
+    # set and number count as checked, and the flag clears and stays clear
+    # through later pricing (db.update_card) until the card itself changes.
+    if patch.get("checked"):
+        patch["checked"] = 1
+        if (patch.get("name") or "").strip() or "name" not in patch:
+            patch["id_confidence"] = ID_VERIFIED
+    else:
+        patch.pop("checked", None)
     with db.connect(DB_PATH) as conn:
         before = db.get_card(conn, card_id)
         card = db.update_card(conn, card_id, patch)
@@ -454,6 +472,8 @@ def api_patch_card(card_id: int):
         abort(404)
     if "list_price" in patch:
         _price_in_library([card["crop_path"]], card.get("list_price"))
+    if patch.get("checked"):
+        _checked_in_library([card["crop_path"]])
     # The change made its AI description wrong (db.update_card dropped it):
     # the owner asked for one, so a new one is written.
     if before and before.get("description_source") and not card.get("ai_description"):
@@ -1222,11 +1242,8 @@ def _price_card(card: dict, terapeak=None, return_card: bool = False):
             warnings.append(price_notes.NUMBER_UNCONFIRMED)
         if japanese:
             warnings = [price_notes.JAPANESE]
-        if tcg_price and cm_usd and tcg_price > 0 and cm_usd > 0:
-            # More than 3x apart and more than $2 apart: a few cents is not a
-            # disagreement, however large the ratio.
-            if far_apart(tcg_price, cm_usd, 3.0):
-                warnings.append(price_notes.disagree([("TCGplayer", tcg_price), ("Cardmarket", cm_usd)]))
+        # Sources that are far apart are noted by aggregate() ("Prices
+        # vary: ..."), beside the price. They do not hold the card back.
 
     # eBay: listings of this exact card only (lib/ebay_client.reject_reason).
     # Sold prices count toward the price only with MIN_MATCHES or more exact

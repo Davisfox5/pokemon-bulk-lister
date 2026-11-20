@@ -193,6 +193,8 @@ def bulk_list_for_sale():
                "skipped_already_listed": 0, "skipped_flagged": 0}
         from webapp.catalog import your_prices
         yours = your_prices(s, [i.id for i in items])
+        from webapp.catalog import checked_items
+        checked = checked_items(s, [i.id for i in items])
         for item in items:
             cc = item.catalog_card
             value, provenance = item_valuation(item)
@@ -204,7 +206,8 @@ def bulk_list_for_sale():
                 out["skipped_already_listed"] += 1
             elif price is None:
                 out["skipped_no_price"] += 1
-            elif set_by_owner is None and provenance["flagged"] and not include_flagged:
+            elif (set_by_owner is None and provenance["flagged"] and item.id not in checked
+                  and not include_flagged):
                 out["skipped_flagged"] += 1
             else:
                 if not dry_run:

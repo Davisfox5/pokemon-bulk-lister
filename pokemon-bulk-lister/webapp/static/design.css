@@ -601,4 +601,10 @@ tr:hover td.thumb::after { transform: translateX(120%); transition: transform .7
 }
 
 /* The range close source prices span: the price shown is their middle. */
+/* Something to know about a price (sources far apart, only one source). Not
+   a problem to fix, so yellow and small; the red flag is for cards to resolve. */
+.caution-note { display: inline-block; margin-top: 2px; padding: 0 6px; border-radius: 6px; font-size: 11px;
+  font-weight: 600; white-space: nowrap; color: var(--ink);
+  background: color-mix(in srgb, var(--gold) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 80%, var(--ink)); }
 .price-range { display: block; font-size: 12px; color: var(--muted, inherit); font-variant-numeric: tabular-nums; }

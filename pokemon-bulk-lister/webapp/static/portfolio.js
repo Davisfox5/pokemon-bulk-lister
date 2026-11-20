@@ -263,6 +263,8 @@ function haveRow(it) {
     ? `<span class="listed">Listed ${fmtUsd(listing.price)}</span>
        <button class="btn btn-ghost" data-act="reprice" title="Change the asking price">Edit price</button>`
     : `<button class="btn" data-act="sell" title="List on the marketplace">List for sale</button>`;
+  const resolve = it.provenance.flagged
+    ? '<button class="btn btn-primary" data-act="resolve" title="Check the card and its price, then save">Resolve</button>' : "";
   return `<tr data-id="${it.id}" class="${it.provenance.flagged ? "flag" : ""}">
     <td class="sel"><input type="checkbox" data-act="select" ${lib.selected.has(it.id) ? "checked" : ""}
         ${listing ? "disabled" : ""} aria-label="Select ${esc(it.name)}"></td>
@@ -279,6 +281,7 @@ function haveRow(it) {
     <td class="num">${fmtUsd(it.value)}</td>
     <td>
       <div class="row-actions">
+        ${resolve}
         ${sellCell}
         <details class="row-more">
           <summary class="btn btn-ghost" aria-label="More actions for ${esc(it.name)}">More</summary>
@@ -455,6 +458,8 @@ $("#inv-body").addEventListener("click", async (e) => {
       await listOnEbay(item, el);
     } else if (act === "ebay-connect") {
       showEbaySetup();
+    } else if (act === "resolve") {
+      await resolveItem(item);
     } else if (act === "yours") {
       await setYourPrice(item);
     } else if (act === "remove") {
@@ -1547,6 +1552,33 @@ async function setYourPrice(item) {
   const raw = $("#your-price-input").value.trim();
   await api(`/api/inventory/${item.id}`, { method: "PATCH", body: JSON.stringify({ your_price: raw === "" ? null : raw }) });
   toast(raw === "" ? `${item.name} uses the market price again.` : `${item.name}: set price is ${fmtUsd(parseFloat(raw))}.`);
+  refreshAll();
+}
+
+// A flagged card: the person looks at what is flagged and the prices, keeps
+// the price or types another, and saves. Saving clears the flag for good;
+// Cancel leaves the card flagged.
+async function resolveItem(item) {
+  const p = item.provenance || {};
+  const names = { tcgplayer: "TCGplayer", cardmarket: "Cardmarket", ebay_30d: "eBay" };
+  const prices = Object.keys(names).filter((k) => p.sources && p.sources[k] != null)
+    .map((k) => `${names[k]} ${fmtUsd(p.sources[k])}`).join(", ");
+  const { ok } = await askConfirm({
+    title: `Resolve ${item.name}`,
+    html: `<p class="flag-note">${esc(p.notes || "Check the price before listing.")}</p>
+           <p>${esc([item.set_name, item.card_number ? "#" + item.card_number : ""].filter(Boolean).join(" · "))}</p>
+           <p>Market price ${fmtUsd(item.price)}${prices ? ` (${esc(prices)})` : ""}.</p>
+           <label>Price <input id="resolve-price-input" type="number" min="0.01" step="0.01" inputmode="decimal"
+             value="${item.your_price ?? ""}" placeholder="Empty keeps the market price"></label>
+           <p class="muted small">Save clears the flag. Cancel leaves the card flagged.</p>`,
+    confirm: "Save",
+  });
+  if (!ok) return;
+  const raw = $("#resolve-price-input").value.trim();
+  const body = { checked: true };
+  if (raw !== "" || item.your_price != null) body.your_price = raw === "" ? null : raw;
+  await api(`/api/inventory/${item.id}`, { method: "PATCH", body: JSON.stringify(body) });
+  toast(`${item.name} is resolved.`);
   refreshAll();
 }
 

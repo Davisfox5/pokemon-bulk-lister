@@ -117,22 +117,33 @@ This is a working tool for one operator, not a product surface.
   favor compact tables, sticky headers, and keyboard flow over whitespace.
 - Every price or valuation shows where it came from and how confident it is.
   A number with no provenance is a bug. Do not replace specific warnings with a generic success badge.
-- Price notes are short plain sentences from `lib/price_notes.py` ("Prices disagree:
+- Price notes are short plain sentences from `lib/price_notes.py` ("Prices vary:
   TCGplayer $1.06, Cardmarket $7.06.", "Set not confirmed. Check the set before listing.").
   Never store or show source codes, set ids, ratios, match levels, URLs or dashes in a
   note; technical detail goes to the log. Screens show at most two sentences, through
   `price_notes.plain()`, which also rewrites notes saved by older versions.
-- A price disagreement always reads exactly one way, built by
+- Sources that are far apart always read exactly one way, built by
   `price_notes.disagreement()` from the card's own source prices at display time:
-  "Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06." Sources in the
+  "Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $4.06." Sources in the
   fixed order TCGplayer, Cardmarket, eBay (the year of sales when there is one), each
-  to the cent, then the price used. Every older wording maps to it; do not write
-  another.
-- Prices within `pricing.MIN_DISAGREEMENT_USD` ($2) of each other never disagree,
-  whatever their ratio (7 cents vs 30 cents is 4x but 23 cents). Every disagreement
-  check goes through `pricing.far_apart(a, b, ratio)`. Below the gap the price is the
-  median of the sources (the average of two) and the screens show "Range $0.07 to
-  $0.30" under it; nothing is flagged.
+  to the cent, then the price used. Every older wording ("Prices disagree", ...) maps
+  to it; do not write another.
+- The price is always the median of the sources (the average of two); nothing is
+  dropped (`pricing.aggregate`). Prices within `pricing.MIN_DISAGREEMENT_USD` ($2) of
+  each other never vary, whatever their ratio; every check goes through
+  `pricing.far_apart(a, b, ratio)` and the screens show "Range $0.07 to $0.30".
+- "Prices vary" and "Single pricing source." (one source only) are a small yellow
+  note beside the price (`.caution-note`, `provenance.caution`), not a flag: the card
+  does not need review and is not held back from listing. The red flag is only for
+  something a person has to resolve: which card it is, its finish or set, no price.
+- A person resolves a flag by saving. Scan: Save in the editor (or a pick in Choose)
+  sends `checked`; `api_patch_card` marks the identity verified and `db.update_card`
+  clears `needs_review` for any card that is checked or has a price of the owner's
+  own. It stays clear through later pricing; a change to
+  the card that nobody saved (a retry from the photo) resets `cards.checked`. Library:
+  a flagged row has Resolve (`resolveItem`), which saves a price or keeps the market
+  one and records `inventory_checks` (`InventoryCheck`); the two pages carry the check
+  to each other (`catalog.sync_checked`, `_checked_on_scan`). Cancel changes nothing.
 - Outlier and low-confidence rows are visually distinct at a glance, using the
   flag tokens above, and are sortable to the top.
 - Anything that spends money or publishes a listing confirms first and says what

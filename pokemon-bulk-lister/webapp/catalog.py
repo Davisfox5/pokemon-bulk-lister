@@ -119,6 +119,9 @@ def promote():
             if card.get("list_price"):
                 s.flush()                      # the price the owner set on Scan comes with the card
                 set_your_price(s, item.id, card["list_price"])
+            if card.get("checked"):
+                s.flush()                      # so is the owner's check: not flagged in the Library either
+                set_checked(s, item.id)
             log_event(
                 s, uid, cc.id, "added", channel="scan", condition=condition,
                 image_url=card.get("image_url"), crop_path=crop,
@@ -175,12 +178,12 @@ def price_provenance(cc: CatalogCard) -> dict:
             cc.pricing_notes, prices=[("TCGplayer", cc.tcgplayer_market), ("Cardmarket", cc.cardmarket_trend_usd),
                                       ("eBay", cc.ebay_median_30d)],
             using=cc.final_price, outlier=bool(cc.outlier_flag)) or None,
-        # Same bar the bench uses for "needs a human look".
-        "flagged": bool(
-            cc.final_price is not None
-            and (cc.outlier_flag or (cc.pricing_confidence or 0) < LOW_CONFIDENCE
-                 or "\u26a0" in (cc.pricing_notes or ""))
-        ),
+        # Held for a person only by a warning about which card it is. Prices
+        # that are far apart, or from one source, are a note beside the
+        # price ("caution"), not something to resolve.
+        "flagged": bool(cc.final_price is not None and "\u26a0" in (cc.pricing_notes or "")),
+        "caution": ("Prices vary" if cc.outlier_flag and len([v for v in sources.values() if v]) >= 2
+                    else "Single pricing source" if len([v for v in sources.values() if v]) == 1 else None),
     }
 
 
@@ -212,6 +215,54 @@ def your_prices(s, item_ids: list) -> dict:
         return {}
     return {r.inventory_item_id: r.price
             for r in s.query(InventoryPrice).filter(InventoryPrice.inventory_item_id.in_(ids)).all()}
+
+
+def checked_items(s, item_ids: list) -> set:
+    """The Library cards the owner has saved as right (models.InventoryCheck)."""
+    from webapp.models import InventoryCheck
+
+    ids = [i for i in item_ids if i]
+    if not ids:
+        return set()
+    return {r.inventory_item_id
+            for r in s.query(InventoryCheck).filter(InventoryCheck.inventory_item_id.in_(ids)).all()}
+
+
+def set_checked(s, item_id: int) -> None:
+    from webapp.models import InventoryCheck
+
+    if s.get(InventoryCheck, item_id) is None:
+        s.add(InventoryCheck(inventory_item_id=item_id))
+
+
+def sync_checked(uid: Optional[int], crop_paths: list) -> int:
+    """A card saved as right on Scan is not flagged in the Library either."""
+    crops = [c for c in crop_paths if c]
+    if not uid or uid < 1 or not crops:
+        return 0
+    s = get_session()
+    try:
+        items = s.query(InventoryItem).filter(InventoryItem.user_id == uid,
+                                              InventoryItem.source_crop_path.in_(crops)).all()
+        for item in items:
+            set_checked(s, item.id)
+        s.commit()
+        return len(items)
+    finally:
+        s.close()
+
+
+def _checked_on_scan(crop_path: Optional[str]) -> None:
+    """Resolved in the Library: the Scan card it came from clears too."""
+    if not crop_path:
+        return
+    try:
+        with bench_db.connect(BENCH_DB_PATH) as conn:
+            card_id = bench_db.card_id_by_crop(conn, crop_path)
+            if card_id:
+                bench_db.update_card(conn, card_id, {"checked": 1})
+    except Exception as exc:                        # the Library change still stands
+        print(f"[library] could not mark the Scan card as checked: {exc}")
 
 
 def set_your_price(s, item_id: int, price: Optional[float]) -> None:
@@ -260,10 +311,15 @@ def _price_on_scan(crop_path: Optional[str], price: Optional[float]) -> None:
         print(f"[library] could not set the price on Scan: {exc}")
 
 
-def _item_dict(s, item: InventoryItem, yours: Optional[dict] = None) -> dict:
+def _item_dict(s, item: InventoryItem, yours: Optional[dict] = None, checked: Optional[set] = None) -> dict:
     cc = item.catalog_card
     price, provenance = item_valuation(item)
     yours = your_prices(s, [item.id]) if yours is None else yours
+    checked = checked_items(s, [item.id]) if checked is None else checked
+    # The owner's say settles a flag: a price of their own, or the card
+    # saved as right.
+    if provenance.get("flagged") and (yours.get(item.id) is not None or item.id in checked):
+        provenance = {**provenance, "flagged": False}
     week_ago = price_at(s, cc.id, utcnow() - timedelta(days=7))
     change_7d = None
     if price is not None and week_ago and not provenance.get("estimate"):
@@ -309,7 +365,8 @@ def list_inventory():
             .all()
         )
         yours = your_prices(s, [i.id for i in items])
-        payload = [_item_dict(s, i, yours) for i in items]
+        checked = checked_items(s, [i.id for i in items])
+        payload = [_item_dict(s, i, yours, checked) for i in items]
         from webapp import runtime
         runtime.add_photo_urls(payload)
         from webapp.listing_import import listed_on
@@ -378,6 +435,9 @@ def patch_inventory(item_id: int):
                 return jsonify({"error": "the set price must be more than 0"}), 400
             set_your_price(s, item.id, yours)
             _price_on_scan(item.source_crop_path, yours)
+        if patch.get("checked"):
+            set_checked(s, item.id)
+            _checked_on_scan(item.source_crop_path)
         s.commit()
         out = _item_dict(s, item)
     finally:

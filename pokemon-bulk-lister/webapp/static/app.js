@@ -65,7 +65,7 @@ function reviewWhy(notes) {
 // disagreement: the price is their middle and the range is shown with it.
 function priceRange(values, notes) {
   const v = values.filter(x => x != null && x > 0);
-  if (v.length < 2 || /Prices disagree/i.test(notes || "")) return "";
+  if (v.length < 2 || /Prices (vary|disagree)/i.test(notes || "")) return "";
   const lo = Math.min(...v), hi = Math.max(...v);
   return hi - lo >= 0.01 ? `Range ${fmt(lo)} to ${fmt(hi)}` : "";
 }
@@ -170,15 +170,20 @@ function priceBasis(card) {
   if (/Japanese/i.test(notes)) issue = "Japanese card, English price";
   else if (/finish/i.test(notes)) issue = "Check finish";
   else if (/against the photo/i.test(notes)) issue = "Check card match";
-  else if (/Prices disagree/i.test(notes)) issue = "Prices disagree";
+  else if (/choose the set/i.test(notes)) issue = "Choose set";
+  else if (/No price found/i.test(notes)) issue = "No price";
   else if (/Set not confirmed/i.test(notes)) issue = "Check set";
   else if (/number/i.test(notes)) issue = "Check card number";
   if (card.final_price == null && !card.pricing_notes) return '<span class="src">Not priced yet</span>';
+  // Not a problem to fix, only something to know about the price: a small
+  // yellow note, and the row is not flagged.
+  const caution = /Prices vary/i.test(notes) ? "Prices vary"
+    : /Single pricing source/i.test(notes) ? "Single pricing source" : "";
   const basis = sources.length ? sources.map(([name]) => name).join(" · ") : "No market source";
   const range = priceRange(sources.map(([, value]) => value), notes);
   return `<span class="price-source-line">${escapeHtml(basis)}</span>
     ${range ? `<span class="price-range">${escapeHtml(range)}</span>` : ""}
-    ${card.needs_review ? `<span class="flag-note">${escapeHtml(issue)}</span>` : ""}
+    ${card.needs_review ? `<span class="flag-note">${escapeHtml(issue)}</span>` : caution ? `<span class="caution-note">${caution}</span>` : ""}
     <details class="price-details" data-detail="price"><summary>Price details</summary><div class="price-detail-body">
       ${sources.map(([name, value]) => `<span>${escapeHtml(name)} <strong>${fmt(value)}</strong></span>`).join("")}
       <span>${Math.round((card.pricing_confidence || 0) * 100)}% price confidence</span>
@@ -267,7 +272,7 @@ function renderRow(card) {
       </td>
       <td class="actions">
         ${card.name && card.id_confidence <= 0.6 ? '<button data-act="choose" class="primary">Choose card</button>' : ""}
-        <button data-act="edit">${card.needs_review && card.id_confidence > 0.6 ? "Review" : "Edit"}</button>
+        <button data-act="edit">${card.needs_review ? "Resolve" : "Edit"}</button>
         <details class="row-menu" data-detail="actions"><summary aria-label="More actions for ${escapeHtml(card.name || 'this card')}">More</summary><div>
           <button data-act="price">Refresh price</button>
           <button data-act="delete">Delete card</button>
@@ -891,6 +896,9 @@ async function saveEdit({ priceAfter = false } = {}) {
     id_confidence: parseFloat(form.id_confidence.value) || 0,
     list_price: form.list_price.value.trim(),
     listing_notes: form.listing_notes.value,
+    // Saving is the person saying the card is right as shown: the flag
+    // clears and stays clear. Cancel leaves it as it was.
+    checked: true,
   };
   const edited = state.editing;
   try {
@@ -1134,7 +1142,7 @@ function setupChoose() {
     $("#choose-ok").disabled = true;
     try {
       const patch = { name: card.name, set_name: card.set_name || "", set_code: card.set_code || "",
-                      card_number: card.card_number || "", id_confidence: 0.97, needs_review: false };
+                      card_number: card.card_number || "", id_confidence: 0.97, needs_review: false, checked: true };
       if (card.rarity) patch.rarity = card.rarity;
       await api(`/api/cards/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
       state.libraryTried.delete(id);

@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS cards (
     printing                TEXT,
     id_read                 TEXT,
     list_price              REAL,
+    checked                 INTEGER DEFAULT 0,
     listing_notes           TEXT,
     ai_description          TEXT,
     description_source      TEXT,
@@ -130,7 +131,7 @@ CREATE INDEX IF NOT EXISTS idx_cards_name         ON cards(name);
 CARD_FIELDS = (
     "id", "grid_id", "crop_path", "row", "col",
     "name", "set_name", "set_code", "card_number", "rarity",
-    "is_holo", "printing", "id_read", "list_price", "listing_notes", "ai_description", "description_source",
+    "is_holo", "printing", "id_read", "list_price", "checked", "listing_notes", "ai_description", "description_source",
     "condition_guess", "id_confidence",
     "tcgplayer_market", "cardmarket_trend_eur", "cardmarket_trend_usd",
     "ebay_median_30d", "ebay_max_30d", "ebay_sold_count_30d",
@@ -153,6 +154,7 @@ _MIGRATIONS = (
     ("owner_id", "INTEGER"),
     ("printing", "TEXT"),
     ("id_read", "TEXT"),       # JSON: what was read off the card (printed name, total, set code)
+    ("checked", "INTEGER DEFAULT 0"),   # a person saved this card as right; pricing does not flag it again
     ("list_price", "REAL"),    # the owner's own listing price; overrides final_price when listing
     ("listing_notes", "TEXT"), # the owner's words added to the generated description
     ("ai_description", "TEXT"),       # an AI-written description, when the owner asked for one
@@ -498,13 +500,22 @@ def update_card(conn: sqlite3.Connection, card_id: int, patch: dict[str, Any],
             safe.setdefault(field, None)
         for field in ("ebay_sold_count_30d", "terapeak_sold_count_365d", "pricing_confidence", "outlier_flag"):
             safe.setdefault(field, 0)
+        # A change nobody signed off (a retry from the photo, a catalog
+        # check) is a different card from the one a person checked.
+        safe.setdefault("checked", 0)
     # Pricing agreement cannot make a doubtful identification safe to list.
     if (safe.get("printing", current.get("printing")) == "unknown" or
             safe.get("name", current.get("name")) and
             float(safe.get("id_confidence", current.get("id_confidence")) or 0) <= 0.6):
         safe["needs_review"] = 1
+    # A person's say settles it: a card they saved as right, or gave their
+    # own price, is not flagged, now or when it is priced again. (One with
+    # no price yet shows as not priced, and is left out of listing anyway.)
+    after = {**current, **safe}
+    if after.get("checked") or after.get("list_price") is not None:
+        safe["needs_review"] = 0
     # Coerce booleans.
-    for bool_field in ("is_holo", "outlier_flag", "needs_review"):
+    for bool_field in ("is_holo", "outlier_flag", "needs_review", "checked"):
         if bool_field in safe:
             safe[bool_field] = 1 if safe[bool_field] else 0
     cols = ", ".join(f"{k} = ?" for k in safe.keys())

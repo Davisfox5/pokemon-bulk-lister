@@ -299,7 +299,7 @@ def test_the_scan_list_shows_an_old_price_note_in_plain_words(bench):
                                              'needs_review': True})
     client = bench.app.test_client()
     shown = client.get('/api/cards').get_json()['cards'][0]['pricing_notes']
-    assert shown == 'Prices disagree: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check the set before listing.'
+    assert shown == 'Prices vary: TCGplayer $1.06, Cardmarket $7.06. Using $1.06. Set not confirmed. Check the set before listing.'
     assert client.get(f"/api/cards/{rows[0]['id']}").get_json()['pricing_notes'] == shown
     # The stored note is untouched: the review hold still reads its marker.
     with db.connect(bench.DB_PATH) as conn:
@@ -403,3 +403,50 @@ def test_a_price_looked_up_before_an_edit_does_not_land_on_the_edited_card(bench
     assert asked == ["unknown", "holofoil"]
     assert shown["printing"] == "holofoil" and shown["final_price"] == 7.0
     assert price_notes.FINISH not in (shown["pricing_notes"] or "") and not shown["needs_review"]
+
+
+def test_saving_a_flagged_card_resolves_it_and_it_stays_resolved(bench, monkeypatch):
+    from lib import price_notes
+
+    class TCG:                       # the price catalog only matches without the number, every time
+        def lookup_prices(self, **kw):
+            if kw.get("card_number"):
+                return {}
+            return {"card": {"id": "test-23", "set": {"id": "test"}}, "tcgplayer_market_usd": 3.0,
+                    "cardmarket_trend_eur": None}
+
+    class Ebay:
+        def card_stats(self, spec, **kw):
+            return {"sold": None, "asking": None, "query": "q"}
+
+    monkeypatch.setattr(bench, "get_tcg", TCG)
+    monkeypatch.setattr(bench, "get_ebay", Ebay)
+    monkeypatch.setattr(bench, "CARDMARKET_FALLBACK", False)
+    cards, _ = add_cards(bench, 1)
+    cid = cards[0]["id"]
+    with db.connect(bench.DB_PATH) as conn:
+        db.update_card(conn, cid, dict(name="Pikachu", set_code="test", set_name="Test", card_number="23",
+                                       printing="normal", id_confidence=0.3))
+    c = bench.app.test_client()
+    flagged = c.post(f"/api/cards/{cid}/price").get_json()
+    assert flagged["needs_review"] and flagged["final_price"] == 3.0
+
+    # Save in the editor with nothing changed: "that is fine".
+    saved = c.patch(f"/api/cards/{cid}", json=dict(name="Pikachu", set_code="test", set_name="Test",
+                                                   card_number="23", printing="normal", is_holo=False,
+                                                   id_confidence=0.3, list_price="", listing_notes="",
+                                                   checked=True)).get_json()
+    assert not saved["needs_review"] and saved["id_confidence"] == 0.97 and saved["final_price"] == 3.0
+    # Priced again later, the same warning does not flag it again.
+    again = c.post(f"/api/cards/{cid}/price").get_json()
+    assert not again["needs_review"] and again["final_price"] == 3.0
+    assert price_notes.SINGLE in again["pricing_notes"]
+    assert c.get("/api/cards").get_json()["stats"]["flagged"] in (0, None)
+
+    # A change nobody signed off (a retry from the photo) is a new card to check.
+    with db.connect(bench.DB_PATH) as conn:
+        changed = db.update_card(conn, cid, dict(name="Raichu", id_confidence=0.3))
+    assert not changed["checked"] and changed["needs_review"]
+    # A price of the person's own settles it too.
+    priced = c.patch(f"/api/cards/{cid}", json={"list_price": "4.50"}).get_json()
+    assert not priced["needs_review"]
