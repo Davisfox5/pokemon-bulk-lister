@@ -762,13 +762,42 @@ def api_price_card(card_id: int):
     if not card.get("name"):
         return jsonify({"error": "card has no name; identify the card first"}), 400
     try:
-        result = _price_card(card)
-        with db.connect(DB_PATH) as conn:
-            updated = db.update_card(conn, card_id, result)
+        # Priced again if the card was edited while the lookup ran: a price
+        # (and its note) for the card as it was must not land on the card as
+        # it is now.
+        for _ in range(3):
+            result = _price_card(card)
+            updated = _save_price(card, result)
+            if updated is not None:
+                break
+            with db.connect(DB_PATH) as conn:
+                card = db.get_card(conn, card_id)
+            if not card:
+                abort(404)
+        else:
+            updated = card
         return jsonify(_shown(updated))
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"error": str(exc)}), 500
+
+
+_PRICED_FOR = ("name", "set_name", "set_code", "card_number", "condition_guess")
+
+
+def _save_price(card: dict, patch: dict) -> Optional[dict]:
+    """Write a price worked out for `card`, unless the card was changed in the
+    meantime (another finish chosen, another card picked). None then, and
+    nothing is written: the old lookup's price and note belong to a card that
+    is no longer there. The page prices a changed card again by itself."""
+    def what(c: dict) -> tuple:
+        return tuple((c.get(k) or "") for k in _PRICED_FOR) + (card_printing(c),)
+
+    with db.connect(DB_PATH) as conn:
+        now = db.get_card(conn, int(card["id"]))
+        if not now or what(now) != what(card):
+            return None
+        return db.update_card(conn, int(card["id"]), patch)
 
 
 @app.route("/api/pricing/run-all", methods=["POST"])
@@ -849,8 +878,7 @@ def _pricing_job(use_terapeak, only_unpriced: bool = False) -> None:
             skip_terapeak = False
             try:
                 patch, tcg_card = _price_card_pass1(card)
-                with db.connect(DB_PATH) as conn:
-                    db.update_card(conn, int(card["id"]), patch)
+                _save_price(card, patch)
                 # Value gate: a confident sub-threshold price gains nothing
                 # from a slow, account-risky Terapeak scrape.
                 fp = patch.get("final_price")
@@ -1916,8 +1944,7 @@ def _main_slice(state: dict) -> None:
             if not card or not card.get("name"):
                 return
             patch, _ = _price_card_pass1(card)
-            with db.connect(DB_PATH) as conn:
-                db.update_card(conn, card_id, patch)
+            _save_price(card, patch)
         except Exception as exc:
             print(f"[pricing] id={card_id}: {exc}", file=sys.stderr)
 

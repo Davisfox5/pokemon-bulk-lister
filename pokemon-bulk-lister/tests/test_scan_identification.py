@@ -370,3 +370,36 @@ def test_a_card_with_no_set_is_not_priced_by_its_name(bench, monkeypatch):
     patch = bench._price_card(dict(name="Mewtwo", set_code="", card_number="", id_confidence=0.97, printing="normal"))
     assert patch["final_price"] is None and patch["needs_review"]
     assert price_notes.plain(patch["pricing_notes"]) == price_notes.SET_NEEDED
+
+
+def test_a_price_looked_up_before_an_edit_does_not_land_on_the_edited_card(bench, monkeypatch):
+    from lib import price_notes
+    cards, _ = add_cards(bench, 1)
+    cid = cards[0]["id"]
+    with db.connect(bench.DB_PATH) as conn:
+        db.update_card(conn, cid, dict(name="Pikachu", set_code="test", set_name="Test", card_number="23",
+                                       printing="unknown", id_confidence=0.97))
+    asked = []
+
+    class TCG:
+        def lookup_prices(self, **kw):
+            asked.append(kw.get("printing"))
+            if len(asked) == 1:
+                # The person chooses holo and saves while this lookup is still out.
+                with db.connect(bench.DB_PATH) as conn:
+                    db.update_card(conn, cid, dict(printing="holofoil", is_holo=True))
+            return {"card": {"id": "test-23", "set": {"id": "test"}}, "tcgplayer_market_usd": 7.0,
+                    "cardmarket_trend_eur": 7.0 / bench.EUR_USD_RATE}
+
+    class Ebay:
+        def card_stats(self, spec, **kw):
+            return {"sold": None, "asking": None, "query": "q"}
+
+    monkeypatch.setattr(bench, "get_tcg", TCG)
+    monkeypatch.setattr(bench, "get_ebay", Ebay)
+    monkeypatch.setattr(bench, "CARDMARKET_FALLBACK", False)
+    shown = bench.app.test_client().post(f"/api/cards/{cid}/price").get_json()
+    # Priced again as the holo card: no "Choose the finish" left on it.
+    assert asked == ["unknown", "holofoil"]
+    assert shown["printing"] == "holofoil" and shown["final_price"] == 7.0
+    assert price_notes.FINISH not in (shown["pricing_notes"] or "") and not shown["needs_review"]
